@@ -4,6 +4,7 @@ members = [
   "crates/protocol",
   "crates/server",
 ]
+exclude = ["apps/client-tauri/src-tauri"]
 resolver = "2"
 
 [workspace.package]

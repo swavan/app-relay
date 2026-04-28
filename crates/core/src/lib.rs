@@ -1,6 +1,7 @@
 //! Core service contracts for Swavan AppRelay.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use swavan_protocol::{
@@ -318,6 +319,56 @@ impl InMemoryEventSink {
 impl EventSink for InMemoryEventSink {
     fn record(&mut self, event: ServerEvent) {
         self.events.push(event);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FileEventSink {
+    path: PathBuf,
+}
+
+impl FileEventSink {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn record_event(&self, event: &ServerEvent) -> std::io::Result<()> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+        writeln!(file, "{}", format_event(event))
+    }
+}
+
+impl EventSink for FileEventSink {
+    fn record(&mut self, event: ServerEvent) {
+        let _ = self.record_event(&event);
+    }
+}
+
+fn format_event(event: &ServerEvent) -> String {
+    match event {
+        ServerEvent::ControlPlaneStarted { bind_address, port } => {
+            format!("event=control_plane_started bind_address={bind_address} port={port}")
+        }
+        ServerEvent::ControlPlaneStopped => "event=control_plane_stopped".to_string(),
+        ServerEvent::RequestAuthorized { operation } => {
+            format!("event=request_authorized operation={operation}")
+        }
+        ServerEvent::RequestRejected { operation } => {
+            format!("event=request_rejected operation={operation}")
+        }
+        ServerEvent::ConfigLoaded { path } => {
+            format!("event=config_loaded path={}", path.display())
+        }
+        ServerEvent::ConfigSaved { path } => {
+            format!("event=config_saved path={}", path.display())
+        }
     }
 }
 
@@ -1047,6 +1098,30 @@ mod tests {
                 ServerEvent::ControlPlaneStopped,
             ]
         );
+    }
+
+    #[test]
+    fn file_event_sink_writes_structured_events() {
+        let root = unique_test_dir("file-event-sink");
+        let path = root.join("server.log");
+        let mut sink = FileEventSink::new(&path);
+
+        sink.record(ServerEvent::ControlPlaneStarted {
+            bind_address: "127.0.0.1".to_string(),
+            port: 7676,
+        });
+        sink.record(ServerEvent::RequestAuthorized {
+            operation: "health".to_string(),
+        });
+
+        let contents = fs::read_to_string(&path).expect("read event log");
+        assert_eq!(
+            contents,
+            "event=control_plane_started bind_address=127.0.0.1 port=7676\n\
+event=request_authorized operation=health\n"
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

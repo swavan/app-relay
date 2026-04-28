@@ -46,7 +46,9 @@ Scope:
   layer validation and file-backed profile persistence
 - completed runtime slice: file-backed server config, structured event model,
   SSH tunnel command planning, and foreground line-based control listener
-- daemon install and lifecycle strategy for Linux, macOS, and Windows
+- completed client runtime slice: Tauri commands for Rust-owned profiles,
+  health, capabilities, and application discovery
+- completed daemon install and lifecycle strategy for Linux, macOS, and Windows
 - control API for health, capabilities, version, and application discovery
 - SSH tunnel connection contract
 - structured logs
@@ -62,8 +64,10 @@ Out of scope:
 
 Acceptance criteria:
 
-- server can run as a foreground process and daemon/service
-- client can connect through a configured SSH tunnel
+- server can run as a foreground process and has a documented daemon/service
+  lifecycle strategy
+- client can connect with a configured profile token while SSH process
+  supervision remains the next runtime gap
 - client can show server health and capabilities
 - app discovery returns real installed applications on at least one desktop OS
 - unsupported OS backends return typed unsupported errors
