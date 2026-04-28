@@ -19,6 +19,7 @@ Implemented:
 - client connection profile storage contract
 - file-backed Rust connection profile repository
 - Linux desktop-entry application discovery
+- macOS `.app` bundle application discovery
 - explicit unsupported application discovery errors for other platforms
 
 Not implemented yet:
@@ -77,9 +78,18 @@ Linux currently uses `.desktop` entries from:
 The parser includes visible `Type=Application` entries and skips hidden,
 NoDisplay, and non-application entries. Icons are not extracted yet.
 
-macOS and Windows are expected desktop server targets, but their native
-application discovery backends are not implemented in this slice. They return
-typed unsupported errors with a "not implemented yet" reason.
+macOS currently uses `.app` bundles from:
+
+- `/Applications`
+- `$HOME/Applications`
+
+The macOS parser reads `Contents/Info.plist`, preferring
+`CFBundleDisplayName`, then `CFBundleName`, and falling back to the bundle
+directory name. Icons are not extracted yet.
+
+Windows is an expected desktop server target, but its native application
+discovery backend is not implemented in this slice. It returns a typed
+unsupported error with a "not implemented yet" reason.
 
 iOS and Android are client targets for this project, so they do not expose
 desktop application discovery from the server side.

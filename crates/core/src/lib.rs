@@ -368,10 +368,10 @@ impl CapabilityService for DefaultCapabilityService {
     fn platform_capabilities(&self) -> Vec<PlatformCapability> {
         let unsupported_reason = "feature planned but not implemented in Phase 1";
         let app_discovery = match self.platform {
-            Platform::Linux => {
+            Platform::Linux | Platform::Macos => {
                 PlatformCapability::supported(self.platform, Feature::AppDiscovery)
             }
-            Platform::Macos | Platform::Windows => PlatformCapability::unsupported(
+            Platform::Windows => PlatformCapability::unsupported(
                 self.platform,
                 Feature::AppDiscovery,
                 "desktop application discovery backend is not implemented for this platform yet",
@@ -547,6 +547,105 @@ fn parse_desktop_entry(path: &Path) -> Option<ApplicationSummary> {
     })
 }
 
+#[derive(Clone, Debug)]
+pub struct MacosApplicationDiscovery {
+    roots: Vec<PathBuf>,
+}
+
+impl MacosApplicationDiscovery {
+    pub fn macos_defaults() -> Self {
+        let mut roots = vec![PathBuf::from("/Applications")];
+
+        if let Some(home) = std::env::var_os("HOME") {
+            roots.push(PathBuf::from(home).join("Applications"));
+        }
+
+        Self { roots }
+    }
+
+    pub fn new(roots: Vec<PathBuf>) -> Self {
+        Self { roots }
+    }
+
+    fn discover_root(root: &Path, applications: &mut Vec<ApplicationSummary>) {
+        let Ok(entries) = fs::read_dir(root) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("app") {
+                continue;
+            }
+
+            if let Some(application) = parse_macos_app_bundle(&path) {
+                applications.push(application);
+            }
+        }
+    }
+}
+
+impl ApplicationDiscovery for MacosApplicationDiscovery {
+    fn available_applications(&self) -> Result<Vec<ApplicationSummary>, SwavanError> {
+        let mut applications = Vec::new();
+
+        for root in &self.roots {
+            Self::discover_root(root, &mut applications);
+        }
+
+        applications.sort_by(|left, right| {
+            left.name
+                .to_lowercase()
+                .cmp(&right.name.to_lowercase())
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        applications.dedup_by(|left, right| left.id == right.id);
+
+        Ok(applications)
+    }
+}
+
+fn parse_macos_app_bundle(path: &Path) -> Option<ApplicationSummary> {
+    let info_plist = path.join("Contents/Info.plist");
+    let contents = fs::read_to_string(info_plist).ok()?;
+    let id = plist_string_value(&contents, "CFBundleIdentifier").or_else(|| {
+        path.file_stem()
+            .map(|value| value.to_string_lossy().into_owned())
+    })?;
+    let name = plist_string_value(&contents, "CFBundleDisplayName")
+        .or_else(|| plist_string_value(&contents, "CFBundleName"))
+        .or_else(|| {
+            path.file_stem()
+                .map(|value| value.to_string_lossy().into_owned())
+        })?;
+
+    if id.trim().is_empty() || name.trim().is_empty() {
+        return None;
+    }
+
+    Some(ApplicationSummary {
+        id,
+        name,
+        icon: None,
+    })
+}
+
+fn plist_string_value(contents: &str, key: &str) -> Option<String> {
+    let key_tag = format!("<key>{key}</key>");
+    let key_start = contents.find(&key_tag)?;
+    let after_key = &contents[key_start + key_tag.len()..];
+    let string_start = after_key.find("<string>")? + "<string>".len();
+    let after_string_start = &after_key[string_start..];
+    let string_end = after_string_start.find("</string>")?;
+    let value = after_string_start[..string_end].trim();
+
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,14 +662,14 @@ mod tests {
 
     #[test]
     fn default_capabilities_are_explicitly_unsupported() {
-        let service = DefaultCapabilityService::new(Platform::Macos);
+        let service = DefaultCapabilityService::new(Platform::Windows);
         let capabilities = service.platform_capabilities();
 
         assert_eq!(capabilities.len(), 7);
         assert!(capabilities.iter().all(|capability| !capability.supported));
         assert!(capabilities
             .iter()
-            .all(|capability| capability.platform == Platform::Macos));
+            .all(|capability| capability.platform == Platform::Windows));
     }
 
     #[test]
@@ -584,7 +683,17 @@ mod tests {
     }
 
     #[test]
-    fn desktop_capabilities_mark_missing_backends_as_not_implemented() {
+    fn macos_capabilities_support_application_discovery() {
+        let service = DefaultCapabilityService::new(Platform::Macos);
+        let capabilities = service.platform_capabilities();
+
+        assert!(capabilities
+            .iter()
+            .any(|capability| capability.feature == Feature::AppDiscovery && capability.supported));
+    }
+
+    #[test]
+    fn windows_capabilities_mark_missing_backend_as_not_implemented() {
         let service = DefaultCapabilityService::new(Platform::Windows);
         let capabilities = service.platform_capabilities();
         let app_discovery = capabilities
@@ -656,6 +765,79 @@ mod tests {
             vec![ApplicationSummary {
                 id: "visible".to_string(),
                 name: "Visible App".to_string(),
+                icon: None,
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_returns_app_bundles() {
+        let root = unique_test_dir("macos-app-discovery");
+        let app_contents = root.join("Visible.app/Contents");
+        fs::create_dir_all(&app_contents).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.swavan.visible</string>
+  <key>CFBundleDisplayName</key>
+  <string>Visible Mac App</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+        fs::create_dir_all(root.join("Ignored.txt")).expect("create ignored non-app directory");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.swavan.visible".to_string(),
+                name: "Visible Mac App".to_string(),
+                icon: None,
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_falls_back_to_bundle_name() {
+        let root = unique_test_dir("macos-app-fallback");
+        let app_contents = root.join("Fallback.app/Contents");
+        fs::create_dir_all(&app_contents).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>Fallback Name</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "Fallback".to_string(),
+                name: "Fallback Name".to_string(),
                 icon: None,
             }]
         );

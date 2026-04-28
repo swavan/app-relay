@@ -48,6 +48,21 @@ fn control_plane_reports_linux_app_discovery_capability() {
 }
 
 #[test]
+fn control_plane_reports_macos_app_discovery_capability() {
+    let control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Macos, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+    let capabilities = control_plane
+        .capabilities(&ControlAuth::new("correct-token"))
+        .expect("authorized capabilities response");
+
+    assert!(capabilities
+        .iter()
+        .any(|capability| capability.feature == Feature::AppDiscovery && capability.supported));
+}
+
+#[test]
 fn control_plane_maps_unsupported_application_discovery_errors() {
     let control_plane = ServerControlPlane::new(
         ServerServices::new(Platform::Windows, "integration-test"),

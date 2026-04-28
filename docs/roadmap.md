@@ -41,7 +41,7 @@ Scope:
 
 - completed initial slice: authenticated control-plane contracts, server
   config, SSH tunnel config contract, heartbeat, version, capabilities, and
-  Linux `.desktop` application discovery
+  Linux `.desktop` plus macOS `.app` application discovery
 - completed client/backend slice: frontend profile contract with Rust service
   layer validation and file-backed profile persistence
 - daemon install and lifecycle strategy for Linux, macOS, and Windows

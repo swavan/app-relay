@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use swavan_core::{
     ApplicationDiscovery, CapabilityService, DefaultCapabilityService,
-    DesktopEntryApplicationDiscovery, HealthService, ServerConfig, StaticHealthService,
-    UnsupportedApplicationDiscovery,
+    DesktopEntryApplicationDiscovery, HealthService, MacosApplicationDiscovery, ServerConfig,
+    StaticHealthService, UnsupportedApplicationDiscovery,
 };
 use swavan_protocol::{
     ApplicationSummary, ControlAuth, ControlError, ControlResult, HealthStatus, HeartbeatStatus,
@@ -58,6 +58,7 @@ impl ServerServices {
 #[derive(Clone, Debug)]
 enum ApplicationDiscoveryService {
     DesktopEntries(DesktopEntryApplicationDiscovery),
+    MacosApplications(MacosApplicationDiscovery),
     Unsupported(UnsupportedApplicationDiscovery),
 }
 
@@ -67,11 +68,8 @@ impl ApplicationDiscoveryService {
             Platform::Linux => {
                 Self::DesktopEntries(DesktopEntryApplicationDiscovery::linux_defaults())
             }
-            Platform::Macos
-            | Platform::Windows
-            | Platform::Android
-            | Platform::Ios
-            | Platform::Unknown => {
+            Platform::Macos => Self::MacosApplications(MacosApplicationDiscovery::macos_defaults()),
+            Platform::Windows | Platform::Android | Platform::Ios | Platform::Unknown => {
                 Self::Unsupported(UnsupportedApplicationDiscovery::new(platform))
             }
         }
@@ -82,6 +80,7 @@ impl ApplicationDiscovery for ApplicationDiscoveryService {
     fn available_applications(&self) -> Result<Vec<ApplicationSummary>, SwavanError> {
         match self {
             Self::DesktopEntries(discovery) => discovery.available_applications(),
+            Self::MacosApplications(discovery) => discovery.available_applications(),
             Self::Unsupported(discovery) => discovery.available_applications(),
         }
     }
