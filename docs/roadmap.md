@@ -48,6 +48,9 @@ Scope:
   SSH tunnel command planning, and foreground line-based control listener
 - completed client runtime slice: Tauri commands for Rust-owned profiles,
   health, capabilities, and application discovery
+- completed SSH tunnel lifecycle slice: validated command planning, injectable
+  process spawning, running-state checks, duplicate-start protection, and clean
+  stop behavior
 - completed daemon install and lifecycle strategy for Linux, macOS, and Windows
 - control API for health, capabilities, version, and application discovery
 - SSH tunnel connection contract
@@ -66,8 +69,8 @@ Acceptance criteria:
 
 - server can run as a foreground process and has a documented daemon/service
   lifecycle strategy
-- client can connect with a configured profile token while SSH process
-  supervision remains the next runtime gap
+- client can connect with a configured profile token and the core layer owns
+  SSH tunnel process supervision
 - client can show server health and capabilities
 - app discovery returns real installed applications on at least one desktop OS
 - unsupported OS backends return typed unsupported errors

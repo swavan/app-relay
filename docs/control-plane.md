@@ -18,6 +18,7 @@ Implemented:
 - file-backed server configuration repository
 - SSH tunnel configuration contract
 - SSH tunnel command planning
+- SSH tunnel process supervisor
 - foreground control listener
 - structured log output sink
 - client connection profile storage contract
@@ -29,7 +30,6 @@ Implemented:
 
 Not implemented yet:
 
-- SSH tunnel process management
 - packaged daemon/service installer
 
 ## Authentication
@@ -49,13 +49,15 @@ must replace or extend it with explicit pairing and authorization policy.
 - local port
 - remote port
 
-The server validates this configuration, but it does not start an SSH process
-yet. That keeps this phase testable without pretending tunnel lifecycle handling
-is complete.
+`SshTunnelCommand` validates config and produces the `ssh -N -L ...` command
+shape. `SshTunnelSupervisor` owns the process lifecycle: it starts the planned
+command through an injectable spawner, reports whether the tunnel is still
+running, rejects duplicate starts, clears exited children, and stops a running
+child cleanly.
 
-`SshTunnelCommand` builds the command plan for a future tunnel manager. The
-current implementation validates config and produces the `ssh -N -L ...` command
-shape, but does not spawn or supervise the process.
+Production runners should use `SystemSshTunnelSpawner`. Tests use an injectable
+fake child so lifecycle behavior is covered without opening a real SSH
+connection.
 
 ## Runtime Config
 
@@ -81,8 +83,8 @@ Phase 2 validation. It currently supports:
 - `heartbeat <token>`
 
 This is a foreground development listener, not the final daemon transport. It
-keeps the control-plane service boundary executable while avoiding unfinished
-daemon and SSH process lifecycle behavior.
+keeps the control-plane service boundary executable while packaged daemon
+installers are still pending.
 
 ## Events
 
