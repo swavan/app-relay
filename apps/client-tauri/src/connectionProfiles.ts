@@ -23,17 +23,7 @@ export class LocalStorageConnectionProfileStore implements ConnectionProfileStor
       return [];
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawProfiles);
-    } catch {
-      return [];
-    }
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed.filter(isConnectionProfile);
+    return decodeStoredList(rawProfiles, isConnectionProfile);
   }
 
   save(profile: ConnectionProfile): void {
@@ -91,6 +81,21 @@ function isConnectionProfile(value: unknown): value is ConnectionProfile {
     typeof profile.remotePort === "number" &&
     typeof profile.authToken === "string"
   );
+}
+
+function decodeStoredList<T>(rawValue: string, isItem: (value: unknown) => value is T): T[] {
+  let items: T[];
+  try {
+    items = JSON.parse(rawValue) as T[];
+  } catch {
+    return [];
+  }
+
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.filter(isItem);
 }
 
 function isValidPort(port: number): boolean {
