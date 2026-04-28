@@ -80,11 +80,19 @@ Acceptance criteria:
 
 ## Phase 3: Application Discovery And Window Session
 
+Status: in progress
+
 Goal: let the client choose one desktop application and create a managed window
 session for it.
 
 Scope:
 
+- completed initial session contract slice: transport-neutral create, resize,
+  close, selected-window, viewport, and session-state models
+- completed service lifecycle slice: Rust session service with allowlist policy,
+  viewport validation, active-session tracking, resize recording, and clean close
+- completed client bridge slice: Tauri commands and UI action for requesting a
+  session from the application list
 - application listing with names and icons
 - launch or attach-to-running-app flow
 - selected-window identity model

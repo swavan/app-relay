@@ -1,10 +1,16 @@
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use swavan_core::{
     ConnectionProfile, ConnectionProfileRepository, FileConnectionProfileRepository, ServerConfig,
 };
-use swavan_protocol::{ControlAuth, Feature, Platform, PlatformCapability};
+use swavan_protocol::{
+    ApplicationSession, ControlAuth, CreateSessionRequest, Feature, Platform, PlatformCapability,
+    ResizeSessionRequest, SelectedWindow, SessionState, ViewportSize,
+};
 use swavan_server::{ServerControlPlane, ServerServices};
+
+static CONTROL_PLANE: OnceLock<Mutex<ServerControlPlane>> = OnceLock::new();
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +48,44 @@ pub struct AppSummaryDto {
     pub name: String,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportSizeDto {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSessionRequestDto {
+    pub application_id: String,
+    pub viewport: ViewportSizeDto,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResizeSessionRequestDto {
+    pub session_id: String,
+    pub viewport: ViewportSizeDto,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectedWindowDto {
+    pub id: String,
+    pub title: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationSessionDto {
+    pub id: String,
+    pub application_id: String,
+    pub selected_window: SelectedWindowDto,
+    pub viewport: ViewportSizeDto,
+    pub state: String,
+}
+
 #[tauri::command]
 fn list_connection_profiles() -> Result<Vec<ConnectionProfileDto>, String> {
     profile_repository()
@@ -66,33 +110,86 @@ fn remove_connection_profile(id: String) -> Result<(), String> {
 
 #[tauri::command]
 fn server_health(auth_token: String) -> Result<HealthStatusDto, String> {
-    control_plane()
-        .health(&ControlAuth::new(auth_token))
-        .map(Into::into)
-        .map_err(|error| format!("{error:?}"))
+    with_control_plane(|control_plane| {
+        control_plane
+            .health(&ControlAuth::new(auth_token))
+            .map(Into::into)
+    })
 }
 
 #[tauri::command]
 fn server_capabilities(auth_token: String) -> Result<Vec<CapabilityDto>, String> {
-    control_plane()
-        .capabilities(&ControlAuth::new(auth_token))
-        .map(|capabilities| capabilities.into_iter().map(Into::into).collect())
-        .map_err(|error| format!("{error:?}"))
+    with_control_plane(|control_plane| {
+        control_plane
+            .capabilities(&ControlAuth::new(auth_token))
+            .map(|capabilities| capabilities.into_iter().map(Into::into).collect())
+    })
 }
 
 #[tauri::command]
 fn server_applications(auth_token: String) -> Result<Vec<AppSummaryDto>, String> {
-    control_plane()
-        .available_applications(&ControlAuth::new(auth_token))
-        .map(|applications| applications.into_iter().map(Into::into).collect())
-        .map_err(|error| format!("{error:?}"))
+    with_control_plane(|control_plane| {
+        control_plane
+            .available_applications(&ControlAuth::new(auth_token))
+            .map(|applications| applications.into_iter().map(Into::into).collect())
+    })
+}
+
+#[tauri::command]
+fn create_application_session(
+    auth_token: String,
+    request: CreateSessionRequestDto,
+) -> Result<ApplicationSessionDto, String> {
+    with_control_plane(|control_plane| {
+        control_plane
+            .create_session(&ControlAuth::new(auth_token), request.into())
+            .map(Into::into)
+    })
+}
+
+#[tauri::command]
+fn resize_application_session(
+    auth_token: String,
+    request: ResizeSessionRequestDto,
+) -> Result<ApplicationSessionDto, String> {
+    with_control_plane(|control_plane| {
+        control_plane
+            .resize_session(&ControlAuth::new(auth_token), request.into())
+            .map(Into::into)
+    })
+}
+
+#[tauri::command]
+fn close_application_session(
+    auth_token: String,
+    session_id: String,
+) -> Result<ApplicationSessionDto, String> {
+    with_control_plane(|control_plane| {
+        control_plane
+            .close_session(&ControlAuth::new(auth_token), &session_id)
+            .map(Into::into)
+    })
 }
 
 fn profile_repository() -> FileConnectionProfileRepository {
     FileConnectionProfileRepository::new(data_dir().join("connection-profiles.tsv"))
 }
 
-fn control_plane() -> ServerControlPlane {
+fn with_control_plane<T>(
+    action: impl FnOnce(&mut ServerControlPlane) -> swavan_protocol::ControlResult<T>,
+) -> Result<T, String> {
+    let mut control_plane = control_plane()
+        .lock()
+        .map_err(|_| "control plane lock poisoned".to_string())?;
+
+    action(&mut control_plane).map_err(|error| format!("{error:?}"))
+}
+
+fn control_plane() -> &'static Mutex<ServerControlPlane> {
+    CONTROL_PLANE.get_or_init(|| Mutex::new(new_control_plane()))
+}
+
+fn new_control_plane() -> ServerControlPlane {
     let auth_token =
         std::env::var("SWAVAN_APP_RELAY_TOKEN").unwrap_or_else(|_| "local-dev-token".to_string());
 
@@ -166,6 +263,68 @@ impl From<swavan_protocol::ApplicationSummary> for AppSummaryDto {
     }
 }
 
+impl From<ViewportSizeDto> for ViewportSize {
+    fn from(viewport: ViewportSizeDto) -> Self {
+        Self::new(viewport.width, viewport.height)
+    }
+}
+
+impl From<ViewportSize> for ViewportSizeDto {
+    fn from(viewport: ViewportSize) -> Self {
+        Self {
+            width: viewport.width,
+            height: viewport.height,
+        }
+    }
+}
+
+impl From<CreateSessionRequestDto> for CreateSessionRequest {
+    fn from(request: CreateSessionRequestDto) -> Self {
+        Self {
+            application_id: request.application_id,
+            viewport: request.viewport.into(),
+        }
+    }
+}
+
+impl From<ResizeSessionRequestDto> for ResizeSessionRequest {
+    fn from(request: ResizeSessionRequestDto) -> Self {
+        Self {
+            session_id: request.session_id,
+            viewport: request.viewport.into(),
+        }
+    }
+}
+
+impl From<SelectedWindow> for SelectedWindowDto {
+    fn from(window: SelectedWindow) -> Self {
+        Self {
+            id: window.id,
+            title: window.title,
+        }
+    }
+}
+
+impl From<ApplicationSession> for ApplicationSessionDto {
+    fn from(session: ApplicationSession) -> Self {
+        Self {
+            id: session.id,
+            application_id: session.application_id,
+            selected_window: session.selected_window.into(),
+            viewport: session.viewport.into(),
+            state: session_state_name(&session.state).to_string(),
+        }
+    }
+}
+
+fn session_state_name(state: &SessionState) -> &'static str {
+    match state {
+        SessionState::Starting => "starting",
+        SessionState::Ready => "ready",
+        SessionState::Closed => "closed",
+    }
+}
+
 fn platform_name(platform: Platform) -> &'static str {
     match platform {
         Platform::Android => "android",
@@ -198,7 +357,10 @@ pub fn run() {
             remove_connection_profile,
             server_health,
             server_capabilities,
-            server_applications
+            server_applications,
+            create_application_session,
+            resize_application_session,
+            close_application_session
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Swavan AppRelay client");
