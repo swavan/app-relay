@@ -32,11 +32,18 @@ Acceptance criteria:
 
 ## Phase 2: Server Control Plane
 
+Status: in progress
+
 Goal: run a local daemon that exposes authenticated control APIs through an SSH
 tunnel.
 
 Scope:
 
+- completed initial slice: authenticated control-plane contracts, server
+  config, SSH tunnel config contract, heartbeat, version, capabilities, and
+  Linux `.desktop` plus macOS `.app` application discovery
+- completed client/backend slice: frontend profile contract with Rust service
+  layer validation and file-backed profile persistence
 - daemon install and lifecycle strategy for Linux, macOS, and Windows
 - control API for health, capabilities, version, and application discovery
 - SSH tunnel connection contract
@@ -259,4 +266,3 @@ Acceptance criteria:
 - Security-sensitive changes require documentation updates in the same change.
 - CI must run formatters, linters, tests, and production dependency audits before
   release.
-

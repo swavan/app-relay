@@ -10,6 +10,7 @@ desktop applications from a mobile or desktop client.
 - `crates/server`: server composition and daemon entry point foundation
 - `apps/client-tauri`: Tauri v2 + Svelte client skeleton
 - `docs/architecture.md`: Phase 1 architecture decisions
+- `docs/control-plane.md`: Phase 2 control-plane design
 - `docs/roadmap.md`: phase-by-phase production release plan
 
 ## Current Phase
