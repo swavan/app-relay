@@ -15,7 +15,10 @@ Implemented:
 - heartbeat sequence for reconnect checks
 - application discovery through the control-plane boundary
 - server configuration contract
+- file-backed server configuration repository
 - SSH tunnel configuration contract
+- SSH tunnel command planning
+- foreground control listener
 - client connection profile storage contract
 - file-backed Rust connection profile repository
 - Linux desktop-entry application discovery
@@ -25,9 +28,8 @@ Implemented:
 Not implemented yet:
 
 - daemon/service installer
-- network listener
 - SSH tunnel process management
-- structured log sink
+- structured log output sink
 
 ## Authentication
 
@@ -49,6 +51,43 @@ must replace or extend it with explicit pairing and authorization policy.
 The server validates this configuration, but it does not start an SSH process
 yet. That keeps this phase testable without pretending tunnel lifecycle handling
 is complete.
+
+`SshTunnelCommand` builds the command plan for a future tunnel manager. The
+current implementation validates config and produces the `ssh -N -L ...` command
+shape, but does not spawn or supervise the process.
+
+## Runtime Config
+
+Server runtime config is persisted by the Rust service layer with
+`FileServerConfigRepository`. It stores:
+
+- bind address
+- control port
+- auth token
+- heartbeat interval
+- SSH tunnel settings
+
+The repository validates config before writing and reports corrupted files with
+a typed error.
+
+## Foreground Listener
+
+`ForegroundControlServer` exposes a minimal line-based TCP control listener for
+Phase 2 validation. It currently supports:
+
+- `health <token>`
+- `version <token>`
+- `heartbeat <token>`
+
+This is a foreground development listener, not the final daemon transport. It
+keeps the control-plane service boundary executable while avoiding unfinished
+daemon and SSH process lifecycle behavior.
+
+## Events
+
+The server emits structured events for control-plane start, stop, authorized
+requests, rejected requests, and config persistence operations. The current
+event sink is in-memory for tests. A production log sink is still pending.
 
 ## Client Profiles
 
