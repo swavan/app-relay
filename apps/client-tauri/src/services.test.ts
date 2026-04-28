@@ -24,7 +24,15 @@ class FakeRemoteService implements RemoteService {
     return [
       {
         id: "terminal",
-        name: "Terminal"
+        name: "Terminal",
+        icon: {
+          mimeType: "application/x-icon-theme-name",
+          source: "utilities-terminal"
+        },
+        launch: {
+          kind: "desktopCommand" as const,
+          value: "gnome-terminal"
+        }
       }
     ];
   }
@@ -93,7 +101,20 @@ describe("RemoteService contract", () => {
     const service = new FakeRemoteService();
 
     await expect(service.capabilities()).resolves.toHaveLength(1);
-    await expect(service.applications()).resolves.toEqual([{ id: "terminal", name: "Terminal" }]);
+    await expect(service.applications()).resolves.toEqual([
+      {
+        id: "terminal",
+        name: "Terminal",
+        icon: {
+          mimeType: "application/x-icon-theme-name",
+          source: "utilities-terminal"
+        },
+        launch: {
+          kind: "desktopCommand",
+          value: "gnome-terminal"
+        }
+      }
+    ]);
   });
 
   it("creates, resizes, and closes sessions", async () => {

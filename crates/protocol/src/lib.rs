@@ -116,12 +116,20 @@ pub struct ApplicationSummary {
     pub id: String,
     pub name: String,
     pub icon: Option<AppIcon>,
+    pub launch: Option<ApplicationLaunch>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppIcon {
     pub mime_type: String,
     pub bytes: Vec<u8>,
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ApplicationLaunch {
+    DesktopCommand { command: String },
+    MacosBundle { bundle_path: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

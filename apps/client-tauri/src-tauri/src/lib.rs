@@ -5,8 +5,8 @@ use swavan_core::{
     ConnectionProfile, ConnectionProfileRepository, FileConnectionProfileRepository, ServerConfig,
 };
 use swavan_protocol::{
-    ApplicationSession, ControlAuth, CreateSessionRequest, Feature, Platform, PlatformCapability,
-    ResizeSessionRequest, SelectedWindow, SessionState, ViewportSize,
+    AppIcon, ApplicationLaunch, ApplicationSession, ControlAuth, CreateSessionRequest, Feature,
+    Platform, PlatformCapability, ResizeSessionRequest, SelectedWindow, SessionState, ViewportSize,
 };
 use swavan_server::{ServerControlPlane, ServerServices};
 
@@ -46,6 +46,22 @@ pub struct CapabilityDto {
 pub struct AppSummaryDto {
     pub id: String,
     pub name: String,
+    pub icon: Option<AppIconDto>,
+    pub launch: Option<ApplicationLaunchDto>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppIconDto {
+    pub mime_type: String,
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationLaunchDto {
+    pub kind: String,
+    pub value: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -259,6 +275,32 @@ impl From<swavan_protocol::ApplicationSummary> for AppSummaryDto {
         Self {
             id: application.id,
             name: application.name,
+            icon: application.icon.map(Into::into),
+            launch: application.launch.map(Into::into),
+        }
+    }
+}
+
+impl From<AppIcon> for AppIconDto {
+    fn from(icon: AppIcon) -> Self {
+        Self {
+            mime_type: icon.mime_type,
+            source: icon.source,
+        }
+    }
+}
+
+impl From<ApplicationLaunch> for ApplicationLaunchDto {
+    fn from(launch: ApplicationLaunch) -> Self {
+        match launch {
+            ApplicationLaunch::DesktopCommand { command } => Self {
+                kind: "desktopCommand".to_string(),
+                value: command,
+            },
+            ApplicationLaunch::MacosBundle { bundle_path } => Self {
+                kind: "macosBundle".to_string(),
+                value: bundle_path,
+            },
         }
     }
 }
