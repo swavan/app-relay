@@ -42,8 +42,8 @@ Scope:
 - completed initial slice: authenticated control-plane contracts, server
   config, SSH tunnel config contract, heartbeat, version, capabilities, and
   Linux `.desktop` application discovery
-- completed client slice: validated connection profile storage for SSH tunnel
-  settings and control-plane auth token
+- completed client/backend slice: frontend profile contract with Rust service
+  layer validation and file-backed profile persistence
 - daemon install and lifecycle strategy for Linux, macOS, and Windows
 - control API for health, capabilities, version, and application discovery
 - SSH tunnel connection contract

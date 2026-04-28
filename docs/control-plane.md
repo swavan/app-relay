@@ -17,6 +17,7 @@ Implemented:
 - server configuration contract
 - SSH tunnel configuration contract
 - client connection profile storage contract
+- file-backed Rust connection profile repository
 - Linux desktop-entry application discovery
 - explicit unsupported application discovery errors for other platforms
 
@@ -50,7 +51,9 @@ is complete.
 
 ## Client Profiles
 
-The client stores connection profiles with:
+Connection profiles are owned by the Rust service layer, not frontend code. The
+frontend only talks to a service contract. The Rust repository validates and
+persists profiles with:
 
 - profile id
 - label
@@ -60,9 +63,9 @@ The client stores connection profiles with:
 - remote port
 - control-plane auth token
 
-The current implementation validates and persists profiles through browser
-storage. A later Tauri service can move this to a platform keychain or encrypted
-store without changing the UI contract.
+The current implementation uses a file-backed repository. A later Tauri service
+can move secret material to a platform keychain or encrypted store without
+changing the UI contract.
 
 ## Application Discovery
 

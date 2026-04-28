@@ -19,6 +19,237 @@ pub trait ApplicationDiscovery {
     fn available_applications(&self) -> Result<Vec<ApplicationSummary>, SwavanError>;
 }
 
+pub trait ConnectionProfileRepository {
+    fn list(&self) -> Result<Vec<ConnectionProfile>, ProfileStoreError>;
+    fn save(&self, profile: ConnectionProfile) -> Result<(), ProfileStoreError>;
+    fn remove(&self, id: &str) -> Result<(), ProfileStoreError>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConnectionProfile {
+    pub id: String,
+    pub label: String,
+    pub ssh_user: String,
+    pub ssh_host: String,
+    pub local_port: u16,
+    pub remote_port: u16,
+    pub auth_token: String,
+}
+
+impl ConnectionProfile {
+    pub fn validate(&self) -> Result<(), ProfileValidationError> {
+        if self.id.trim().is_empty() {
+            return Err(ProfileValidationError::MissingId);
+        }
+
+        if self.label.trim().is_empty() {
+            return Err(ProfileValidationError::MissingLabel);
+        }
+
+        if self.ssh_user.trim().is_empty() {
+            return Err(ProfileValidationError::MissingSshUser);
+        }
+
+        if self.ssh_host.trim().is_empty() {
+            return Err(ProfileValidationError::MissingSshHost);
+        }
+
+        if self.local_port == 0 || self.remote_port == 0 {
+            return Err(ProfileValidationError::InvalidSshPort);
+        }
+
+        if self.auth_token.trim().is_empty() {
+            return Err(ProfileValidationError::MissingAuthToken);
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProfileValidationError {
+    MissingId,
+    MissingLabel,
+    MissingSshUser,
+    MissingSshHost,
+    InvalidSshPort,
+    MissingAuthToken,
+}
+
+#[derive(Debug)]
+pub enum ProfileStoreError {
+    InvalidProfile(ProfileValidationError),
+    Io(std::io::Error),
+    CorruptedStore,
+}
+
+impl PartialEq for ProfileStoreError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::InvalidProfile(left), Self::InvalidProfile(right)) => left == right,
+            (Self::CorruptedStore, Self::CorruptedStore) => true,
+            (Self::Io(left), Self::Io(right)) => left.kind() == right.kind(),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ProfileStoreError {}
+
+impl From<std::io::Error> for ProfileStoreError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<ProfileValidationError> for ProfileStoreError {
+    fn from(error: ProfileValidationError) -> Self {
+        Self::InvalidProfile(error)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FileConnectionProfileRepository {
+    path: PathBuf,
+}
+
+impl FileConnectionProfileRepository {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    fn read_profiles(&self) -> Result<Vec<ConnectionProfile>, ProfileStoreError> {
+        let contents = match fs::read_to_string(&self.path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+
+        contents
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(decode_profile)
+            .collect()
+    }
+
+    fn write_profiles(&self, profiles: &[ConnectionProfile]) -> Result<(), ProfileStoreError> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut contents = String::new();
+        for profile in profiles {
+            contents.push_str(&encode_profile(profile));
+            contents.push('\n');
+        }
+
+        fs::write(&self.path, contents)?;
+        Ok(())
+    }
+}
+
+impl ConnectionProfileRepository for FileConnectionProfileRepository {
+    fn list(&self) -> Result<Vec<ConnectionProfile>, ProfileStoreError> {
+        let mut profiles = self.read_profiles()?;
+        profiles.sort_by(|left, right| {
+            left.label
+                .to_lowercase()
+                .cmp(&right.label.to_lowercase())
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        Ok(profiles)
+    }
+
+    fn save(&self, profile: ConnectionProfile) -> Result<(), ProfileStoreError> {
+        profile.validate()?;
+
+        let mut profiles = self.read_profiles()?;
+        profiles.retain(|existing| existing.id != profile.id);
+        profiles.push(profile);
+        profiles.sort_by(|left, right| {
+            left.label
+                .to_lowercase()
+                .cmp(&right.label.to_lowercase())
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        self.write_profiles(&profiles)
+    }
+
+    fn remove(&self, id: &str) -> Result<(), ProfileStoreError> {
+        let mut profiles = self.read_profiles()?;
+        profiles.retain(|profile| profile.id != id);
+        self.write_profiles(&profiles)
+    }
+}
+
+fn encode_profile(profile: &ConnectionProfile) -> String {
+    [
+        encode_field(&profile.id),
+        encode_field(&profile.label),
+        encode_field(&profile.ssh_user),
+        encode_field(&profile.ssh_host),
+        profile.local_port.to_string(),
+        profile.remote_port.to_string(),
+        encode_field(&profile.auth_token),
+    ]
+    .join("\t")
+}
+
+fn decode_profile(line: &str) -> Result<ConnectionProfile, ProfileStoreError> {
+    let fields = line.split('\t').collect::<Vec<_>>();
+    if fields.len() != 7 {
+        return Err(ProfileStoreError::CorruptedStore);
+    }
+
+    let profile = ConnectionProfile {
+        id: decode_field(fields[0])?,
+        label: decode_field(fields[1])?,
+        ssh_user: decode_field(fields[2])?,
+        ssh_host: decode_field(fields[3])?,
+        local_port: fields[4]
+            .parse()
+            .map_err(|_| ProfileStoreError::CorruptedStore)?,
+        remote_port: fields[5]
+            .parse()
+            .map_err(|_| ProfileStoreError::CorruptedStore)?,
+        auth_token: decode_field(fields[6])?,
+    };
+
+    profile.validate()?;
+    Ok(profile)
+}
+
+fn encode_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+fn decode_field(value: &str) -> Result<String, ProfileStoreError> {
+    let mut decoded = String::new();
+    let mut chars = value.chars();
+
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            decoded.push(character);
+            continue;
+        }
+
+        match chars.next() {
+            Some('\\') => decoded.push('\\'),
+            Some('t') => decoded.push('\t'),
+            Some('n') => decoded.push('\n'),
+            Some('r') => decoded.push('\r'),
+            _ => return Err(ProfileStoreError::CorruptedStore),
+        }
+    }
+
+    Ok(decoded)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServerConfig {
     pub bind_address: String,
@@ -403,6 +634,102 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn connection_profile_validation_rejects_missing_token() {
+        let mut profile = test_profile("local", "Local workstation");
+        profile.auth_token = " ".to_string();
+
+        assert_eq!(
+            profile.validate(),
+            Err(ProfileValidationError::MissingAuthToken)
+        );
+    }
+
+    #[test]
+    fn file_connection_profile_repository_persists_profiles() {
+        let root = unique_test_dir("connection-profile-store");
+        let repository = FileConnectionProfileRepository::new(root.join("profiles.tsv"));
+
+        repository
+            .save(test_profile("z", "Zed workstation"))
+            .expect("save zed profile");
+        repository
+            .save(test_profile("a", "Alpha workstation"))
+            .expect("save alpha profile");
+
+        let profiles = repository.list().expect("list profiles");
+        assert_eq!(
+            profiles
+                .iter()
+                .map(|profile| profile.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "z"]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_connection_profile_repository_replaces_profiles_by_id() {
+        let root = unique_test_dir("connection-profile-replace");
+        let repository = FileConnectionProfileRepository::new(root.join("profiles.tsv"));
+
+        repository
+            .save(test_profile("local", "Local workstation"))
+            .expect("save original profile");
+        repository
+            .save(test_profile("local", "Updated workstation"))
+            .expect("replace profile");
+
+        assert_eq!(
+            repository.list().expect("list profiles"),
+            vec![test_profile("local", "Updated workstation")]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_connection_profile_repository_removes_profiles_by_id() {
+        let root = unique_test_dir("connection-profile-remove");
+        let repository = FileConnectionProfileRepository::new(root.join("profiles.tsv"));
+
+        repository
+            .save(test_profile("local", "Local workstation"))
+            .expect("save profile");
+        repository.remove("local").expect("remove profile");
+
+        assert_eq!(repository.list().expect("list profiles"), Vec::new());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_connection_profile_repository_reports_corruption() {
+        let root = unique_test_dir("connection-profile-corrupt");
+        let path = root.join("profiles.tsv");
+        fs::create_dir_all(&root).expect("create profile store dir");
+        fs::write(&path, "bad data").expect("write corrupted profile store");
+
+        let repository = FileConnectionProfileRepository::new(path);
+
+        assert_eq!(repository.list(), Err(ProfileStoreError::CorruptedStore));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn test_profile(id: &str, label: &str) -> ConnectionProfile {
+        ConnectionProfile {
+            id: id.to_string(),
+            label: label.to_string(),
+            ssh_user: "biplab".to_string(),
+            ssh_host: "workstation.local".to_string(),
+            local_port: 7676,
+            remote_port: 7676,
+            auth_token: "token".to_string(),
+        }
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
