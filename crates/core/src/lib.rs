@@ -5,11 +5,11 @@ use swavan_protocol::{
 };
 
 pub trait HealthService {
-    fn health(&self) -> HealthStatus;
+    fn status(&self) -> HealthStatus;
 }
 
 pub trait CapabilityService {
-    fn capabilities(&self) -> Vec<PlatformCapability>;
+    fn platform_capabilities(&self) -> Vec<PlatformCapability>;
 }
 
 pub trait ApplicationDiscovery {
@@ -32,7 +32,7 @@ impl StaticHealthService {
 }
 
 impl HealthService for StaticHealthService {
-    fn health(&self) -> HealthStatus {
+    fn status(&self) -> HealthStatus {
         HealthStatus::healthy(self.service.clone(), self.version.clone())
     }
 }
@@ -49,7 +49,7 @@ impl DefaultCapabilityService {
 }
 
 impl CapabilityService for DefaultCapabilityService {
-    fn capabilities(&self) -> Vec<PlatformCapability> {
+    fn platform_capabilities(&self) -> Vec<PlatformCapability> {
         let unsupported_reason = "feature planned but not implemented in Phase 1";
 
         vec![
@@ -117,7 +117,7 @@ mod tests {
         let service = StaticHealthService::new("swavan-server", "0.1.0");
 
         assert_eq!(
-            service.health(),
+            service.status(),
             HealthStatus::healthy("swavan-server", "0.1.0")
         );
     }
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn default_capabilities_are_explicitly_unsupported() {
         let service = DefaultCapabilityService::new(Platform::Macos);
-        let capabilities = service.capabilities();
+        let capabilities = service.platform_capabilities();
 
         assert_eq!(capabilities.len(), 7);
         assert!(capabilities.iter().all(|capability| !capability.supported));

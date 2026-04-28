@@ -9,16 +9,16 @@ use swavan_protocol::{
 };
 
 pub struct ServerServices {
-    health: StaticHealthService,
-    capabilities: DefaultCapabilityService,
+    health_service: StaticHealthService,
+    capability_service: DefaultCapabilityService,
     application_discovery: UnsupportedApplicationDiscovery,
 }
 
 impl ServerServices {
     pub fn new(platform: Platform, version: impl Into<String>) -> Self {
         Self {
-            health: StaticHealthService::new("swavan-server", version),
-            capabilities: DefaultCapabilityService::new(platform),
+            health_service: StaticHealthService::new("swavan-server", version),
+            capability_service: DefaultCapabilityService::new(platform),
             application_discovery: UnsupportedApplicationDiscovery::new(platform),
         }
     }
@@ -28,11 +28,11 @@ impl ServerServices {
     }
 
     pub fn health(&self) -> HealthStatus {
-        self.health.health()
+        self.health_service.status()
     }
 
     pub fn capabilities(&self) -> Vec<PlatformCapability> {
-        self.capabilities.capabilities()
+        self.capability_service.platform_capabilities()
     }
 
     pub fn available_applications(&self) -> Result<Vec<ApplicationSummary>, SwavanError> {
