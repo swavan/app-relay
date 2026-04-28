@@ -1,8 +1,8 @@
 # Daemon Lifecycle Strategy
 
-Phase 2 keeps the server executable in foreground mode and defines the daemon
-contract before adding packaged installers. The same Rust server config and
-event sink are used by foreground and service runners.
+Phase 2 keeps the server executable in foreground mode and adds service manifest
+generation for daemon startup. The same Rust server config and event sink are
+used by foreground and service runners.
 
 ## Runtime Files
 
@@ -37,7 +37,8 @@ WantedBy=default.target
 
 Expected lifecycle commands:
 
-- install: write the unit file and run `systemctl --user daemon-reload`
+- install: `swavan-server install-service linux`, then run
+  `systemctl --user daemon-reload`
 - start: `systemctl --user start swavan-app-relay`
 - stop: `systemctl --user stop swavan-app-relay`
 - status: `systemctl --user status swavan-app-relay`
@@ -71,7 +72,7 @@ The macOS service target is a per-user launchd agent:
 
 Expected lifecycle commands:
 
-- install: write `~/Library/LaunchAgents/com.swavan.apprelay.server.plist`
+- install: `swavan-server install-service macos`
 - start: `launchctl bootstrap gui/$UID <plist>`
 - stop: `launchctl bootout gui/$UID <plist>`
 - status: `launchctl print gui/$UID/com.swavan.apprelay.server`
@@ -81,9 +82,10 @@ Expected lifecycle commands:
 
 Windows server support is planned after Linux and macOS discovery are stable.
 The expected service model is a native Windows service registered with `sc.exe`
-or an installer wrapper:
+through a generated PowerShell installer script:
 
-- install: register `swavan-app-relay-server.exe --config <path>`
+- install: `swavan-server install-service windows`, then run the generated
+  `install-service.ps1` as an elevated user
 - start: `sc start SwavanAppRelay`
 - stop: `sc stop SwavanAppRelay`
 - status: `sc query SwavanAppRelay`
@@ -95,7 +97,7 @@ returns a typed unsupported error.
 ## Phase 2 Boundary
 
 The current implementation validates the daemon/service lifecycle contract,
-runtime file ownership, config persistence, structured event output, and SSH
-tunnel process supervision. Packaged install/uninstall commands should be added
-when release packaging begins so the installer can own exact paths, signing, and
-permissions.
+runtime file ownership, config persistence, structured event output, SSH tunnel
+process supervision, and service manifest generation. Release packaging can
+wrap these commands later for signed installers and OS-specific permission
+prompts.

@@ -1,7 +1,9 @@
 //! Server composition for Swavan AppRelay.
 
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use swavan_core::{
@@ -243,6 +245,222 @@ impl ForegroundControlServer {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServiceInstallPlan {
+    pub platform: Platform,
+    pub manifest_path: PathBuf,
+    pub config_path: PathBuf,
+    pub log_path: PathBuf,
+    pub manifest_contents: String,
+    pub start_command: String,
+    pub stop_command: String,
+    pub status_command: String,
+    pub uninstall_command: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ServiceInstallError {
+    UnsupportedPlatform(Platform),
+    MissingHomeDirectory,
+    Io(std::io::ErrorKind),
+}
+
+impl From<std::io::Error> for ServiceInstallError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error.kind())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DaemonServiceInstaller {
+    executable_path: PathBuf,
+}
+
+impl DaemonServiceInstaller {
+    pub fn new(executable_path: impl Into<PathBuf>) -> Self {
+        Self {
+            executable_path: executable_path.into(),
+        }
+    }
+
+    pub fn plan_for_current_platform(&self) -> Result<ServiceInstallPlan, ServiceInstallError> {
+        self.plan_for_platform(Platform::current())
+    }
+
+    pub fn plan_for_platform(
+        &self,
+        platform: Platform,
+    ) -> Result<ServiceInstallPlan, ServiceInstallError> {
+        match platform {
+            Platform::Linux => self.linux_user_systemd_plan(),
+            Platform::Macos => self.macos_launch_agent_plan(),
+            Platform::Windows => self.windows_service_script_plan(),
+            Platform::Android | Platform::Ios | Platform::Unknown => {
+                Err(ServiceInstallError::UnsupportedPlatform(platform))
+            }
+        }
+    }
+
+    pub fn install_manifest(&self, plan: &ServiceInstallPlan) -> Result<(), ServiceInstallError> {
+        if let Some(parent) = plan.manifest_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::write(&plan.manifest_path, &plan.manifest_contents)?;
+        Ok(())
+    }
+
+    fn linux_user_systemd_plan(&self) -> Result<ServiceInstallPlan, ServiceInstallError> {
+        let home = home_dir()?;
+        let config_path = xdg_config_home(&home).join("swavan/app-relay/server.conf");
+        let log_path = xdg_state_home(&home).join("swavan/app-relay/server.log");
+        let manifest_path = home.join(".config/systemd/user/swavan-app-relay.service");
+        let executable_path = display_path(&self.executable_path);
+        let config_arg = display_path(&config_path);
+        let log_arg = display_path(&log_path);
+        let manifest_contents = format!(
+            "[Unit]\n\
+Description=Swavan AppRelay server\n\
+\n\
+[Service]\n\
+ExecStart={executable_path} --config {config_arg} --log {log_arg}\n\
+Restart=on-failure\n\
+RestartSec=3\n\
+\n\
+[Install]\n\
+WantedBy=default.target\n"
+        );
+
+        Ok(ServiceInstallPlan {
+            platform: Platform::Linux,
+            manifest_path,
+            config_path,
+            log_path,
+            manifest_contents,
+            start_command: "systemctl --user start swavan-app-relay.service".to_string(),
+            stop_command: "systemctl --user stop swavan-app-relay.service".to_string(),
+            status_command: "systemctl --user status swavan-app-relay.service".to_string(),
+            uninstall_command:
+                "systemctl --user disable --now swavan-app-relay.service && rm ~/.config/systemd/user/swavan-app-relay.service && systemctl --user daemon-reload"
+                    .to_string(),
+        })
+    }
+
+    fn macos_launch_agent_plan(&self) -> Result<ServiceInstallPlan, ServiceInstallError> {
+        let home = home_dir()?;
+        let config_path = home.join("Library/Application Support/Swavan/AppRelay/server.conf");
+        let log_path = home.join("Library/Logs/Swavan/AppRelay/server.log");
+        let manifest_path = home.join("Library/LaunchAgents/com.swavan.apprelay.server.plist");
+        let executable_path = xml_escape(&display_path(&self.executable_path));
+        let config_arg = xml_escape(&display_path(&config_path));
+        let log_arg = xml_escape(&display_path(&log_path));
+        let manifest_arg = display_path(&manifest_path);
+        let manifest_contents = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+  <key>Label</key>\n\
+  <string>com.swavan.apprelay.server</string>\n\
+  <key>ProgramArguments</key>\n\
+  <array>\n\
+    <string>{executable_path}</string>\n\
+    <string>--config</string>\n\
+    <string>{config_arg}</string>\n\
+    <string>--log</string>\n\
+    <string>{log_arg}</string>\n\
+  </array>\n\
+  <key>KeepAlive</key>\n\
+  <true/>\n\
+  <key>RunAtLoad</key>\n\
+  <true/>\n\
+</dict>\n\
+</plist>\n"
+        );
+
+        Ok(ServiceInstallPlan {
+            platform: Platform::Macos,
+            manifest_path,
+            config_path,
+            log_path,
+            manifest_contents,
+            start_command: format!("launchctl bootstrap gui/$UID {manifest_arg}"),
+            stop_command: "launchctl bootout gui/$UID/com.swavan.apprelay.server".to_string(),
+            status_command: "launchctl print gui/$UID/com.swavan.apprelay.server".to_string(),
+            uninstall_command: format!(
+                "launchctl bootout gui/$UID/com.swavan.apprelay.server; rm {manifest_arg}"
+            ),
+        })
+    }
+
+    fn windows_service_script_plan(&self) -> Result<ServiceInstallPlan, ServiceInstallError> {
+        let program_data = std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("C:\\ProgramData"));
+        let service_root = program_data.join("Swavan\\AppRelay");
+        let config_path = service_root.join("server.conf");
+        let log_path = service_root.join("server.log");
+        let manifest_path = service_root.join("install-service.ps1");
+        let executable_path = display_path(&self.executable_path);
+        let config_arg = display_path(&config_path);
+        let log_arg = display_path(&log_path);
+        let manifest_contents = format!(
+            "$ErrorActionPreference = 'Stop'\n\
+$serviceName = 'SwavanAppRelay'\n\
+$binaryPath = '\"{executable_path}\" --config \"{config_arg}\" --log \"{log_arg}\"'\n\
+if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {{\n\
+  sc.exe stop $serviceName | Out-Null\n\
+  sc.exe delete $serviceName | Out-Null\n\
+}}\n\
+sc.exe create $serviceName binPath= $binaryPath start= auto DisplayName= 'Swavan AppRelay Server'\n\
+sc.exe start $serviceName\n"
+        );
+
+        Ok(ServiceInstallPlan {
+            platform: Platform::Windows,
+            manifest_path,
+            config_path,
+            log_path,
+            manifest_contents,
+            start_command: "sc.exe start SwavanAppRelay".to_string(),
+            stop_command: "sc.exe stop SwavanAppRelay".to_string(),
+            status_command: "sc.exe query SwavanAppRelay".to_string(),
+            uninstall_command: "sc.exe stop SwavanAppRelay && sc.exe delete SwavanAppRelay"
+                .to_string(),
+        })
+    }
+}
+
+fn home_dir() -> Result<PathBuf, ServiceInstallError> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or(ServiceInstallError::MissingHomeDirectory)
+}
+
+fn xdg_config_home(home: &Path) -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"))
+}
+
+fn xdg_state_home(home: &Path) -> PathBuf {
+    std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".local/state"))
+}
+
+fn display_path(path: &Path) -> String {
+    path.display().to_string()
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,5 +609,74 @@ mod tests {
             "ERROR unknown-operation"
         );
         assert_eq!(events.events(), &[]);
+    }
+
+    #[test]
+    fn daemon_service_installer_builds_linux_user_systemd_plan() {
+        let installer = DaemonServiceInstaller::new("/usr/bin/swavan-server");
+        let plan = installer
+            .plan_for_platform(Platform::Linux)
+            .expect("linux service plan");
+
+        assert_eq!(plan.platform, Platform::Linux);
+        assert!(plan
+            .manifest_path
+            .ends_with(".config/systemd/user/swavan-app-relay.service"));
+        assert!(plan
+            .manifest_contents
+            .contains("ExecStart=/usr/bin/swavan-server --config"));
+        assert!(plan
+            .manifest_contents
+            .contains("Restart=on-failure\nRestartSec=3"));
+        assert_eq!(
+            plan.start_command,
+            "systemctl --user start swavan-app-relay.service"
+        );
+    }
+
+    #[test]
+    fn daemon_service_installer_builds_macos_launch_agent_plan() {
+        let installer = DaemonServiceInstaller::new("/Applications/Swavan AppRelay.app/server");
+        let plan = installer
+            .plan_for_platform(Platform::Macos)
+            .expect("macos service plan");
+
+        assert_eq!(plan.platform, Platform::Macos);
+        assert!(plan
+            .manifest_path
+            .ends_with("Library/LaunchAgents/com.swavan.apprelay.server.plist"));
+        assert!(plan
+            .manifest_contents
+            .contains("<string>com.swavan.apprelay.server</string>"));
+        assert!(plan.manifest_contents.contains("<key>KeepAlive</key>"));
+        assert!(plan.start_command.starts_with("launchctl bootstrap"));
+    }
+
+    #[test]
+    fn daemon_service_installer_builds_windows_service_script_plan() {
+        let installer = DaemonServiceInstaller::new("C:\\Program Files\\Swavan\\server.exe");
+        let plan = installer
+            .plan_for_platform(Platform::Windows)
+            .expect("windows service plan");
+
+        assert_eq!(plan.platform, Platform::Windows);
+        assert!(plan.manifest_path.ends_with("install-service.ps1"));
+        assert!(plan
+            .manifest_contents
+            .contains("$serviceName = 'SwavanAppRelay'"));
+        assert!(plan
+            .manifest_contents
+            .contains("sc.exe create $serviceName"));
+        assert_eq!(plan.status_command, "sc.exe query SwavanAppRelay");
+    }
+
+    #[test]
+    fn daemon_service_installer_rejects_client_platforms() {
+        let installer = DaemonServiceInstaller::new("/usr/bin/swavan-server");
+
+        assert_eq!(
+            installer.plan_for_platform(Platform::Ios),
+            Err(ServiceInstallError::UnsupportedPlatform(Platform::Ios))
+        );
     }
 }
