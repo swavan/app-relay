@@ -1,0 +1,16 @@
+[package]
+name = "swavan-server"
+version = "0.1.0"
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+swavan-core = { path = "../core" }
+swavan-protocol = { path = "../protocol" }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "swavan-server"
+path = "src/main.rs"

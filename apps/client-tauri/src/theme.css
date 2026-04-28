@@ -1,0 +1,134 @@
+:root {
+  --swavan-bg: #f7f8fa;
+  --swavan-panel: #ffffff;
+  --swavan-text: #172026;
+  --swavan-muted: #5b6670;
+  --swavan-border: #d8dde3;
+  --swavan-accent: #0f766e;
+  --swavan-accent-text: #ffffff;
+  --swavan-radius: 8px;
+  color: var(--swavan-text);
+  background: var(--swavan-bg);
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+}
+
+.shell {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.toolbar {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+h1,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 1.5rem;
+  line-height: 1.2;
+}
+
+.toolbar p,
+.empty {
+  color: var(--swavan-muted);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.actions button,
+.app {
+  background: var(--swavan-panel);
+  border: 1px solid var(--swavan-border);
+  border-radius: var(--swavan-radius);
+  color: var(--swavan-text);
+  cursor: pointer;
+}
+
+.actions button {
+  min-width: 64px;
+  padding: 8px 12px;
+}
+
+.actions button.active {
+  background: var(--swavan-accent);
+  border-color: var(--swavan-accent);
+  color: var(--swavan-accent-text);
+}
+
+.status {
+  align-items: center;
+  background: var(--swavan-panel);
+  border: 1px solid var(--swavan-border);
+  border-radius: var(--swavan-radius);
+  display: flex;
+  justify-content: space-between;
+  margin: 20px 0;
+  padding: 12px;
+}
+
+.grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.app {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-height: 52px;
+  padding: 10px;
+  text-align: left;
+}
+
+.icon {
+  background: var(--swavan-border);
+  border-radius: 6px;
+  display: block;
+  height: 32px;
+  width: 32px;
+}
+
+.empty {
+  background: var(--swavan-panel);
+  border: 1px dashed var(--swavan-border);
+  border-radius: var(--swavan-radius);
+  padding: 24px;
+}
+
+@media (max-width: 520px) {
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .actions button {
+    flex: 1;
+  }
+}
+

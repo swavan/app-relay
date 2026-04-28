@@ -1,0 +1,6 @@
+/target/
+/.codex
+/.codex/
+/apps/client-tauri/node_modules/
+/apps/client-tauri/dist/
+/apps/client-tauri/src-tauri/target/

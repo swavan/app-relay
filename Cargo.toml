@@ -1,0 +1,11 @@
+[workspace]
+members = [
+  "crates/core",
+  "crates/protocol",
+  "crates/server",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+repository = "https://github.com/swavan/app-relay"
