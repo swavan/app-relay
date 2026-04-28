@@ -1,21 +1,50 @@
 import { describe, expect, it } from "vitest";
-import { UnsupportedRemoteService } from "./services";
+import type { RemoteService } from "./services";
 
-describe("UnsupportedRemoteService", () => {
-  it("returns an unhealthy status before a server is configured", async () => {
-    const service = new UnsupportedRemoteService();
+class FakeRemoteService implements RemoteService {
+  async health() {
+    return {
+      service: "swavan-server",
+      healthy: true,
+      version: "test"
+    };
+  }
+
+  async capabilities() {
+    return [
+      {
+        platform: "linux",
+        feature: "appDiscovery",
+        supported: true
+      }
+    ];
+  }
+
+  async applications() {
+    return [
+      {
+        id: "terminal",
+        name: "Terminal"
+      }
+    ];
+  }
+}
+
+describe("RemoteService contract", () => {
+  it("returns server health", async () => {
+    const service = new FakeRemoteService();
 
     await expect(service.health()).resolves.toEqual({
       service: "swavan-server",
-      healthy: false,
-      version: "unconnected"
+      healthy: true,
+      version: "test"
     });
   });
 
-  it("returns no applications until discovery is implemented", async () => {
-    const service = new UnsupportedRemoteService();
+  it("returns capabilities and applications", async () => {
+    const service = new FakeRemoteService();
 
-    await expect(service.applications()).resolves.toEqual([]);
+    await expect(service.capabilities()).resolves.toHaveLength(1);
+    await expect(service.applications()).resolves.toEqual([{ id: "terminal", name: "Terminal" }]);
   });
 });
-

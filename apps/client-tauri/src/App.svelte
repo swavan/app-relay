@@ -1,16 +1,38 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { UnsupportedRemoteService, type AppSummary, type HealthStatus } from "./services";
+  import {
+    TauriConnectionProfileService,
+    type ConnectionProfile
+  } from "./connectionProfiles";
+  import { TauriRemoteService, type AppSummary, type Capability, type HealthStatus } from "./services";
 
-  const remote = new UnsupportedRemoteService();
+  const profilesService = new TauriConnectionProfileService();
 
   let health: HealthStatus | null = null;
+  let capabilities: Capability[] = [];
+  let profiles: ConnectionProfile[] = [];
+  let selectedProfile: ConnectionProfile | null = null;
   let apps: AppSummary[] = [];
   let view: "tile" | "list" = "tile";
+  let errorMessage = "";
 
   onMount(async () => {
-    health = await remote.health();
-    apps = await remote.applications();
+    try {
+      profiles = await profilesService.list();
+      selectedProfile = profiles[0] ?? null;
+
+      const remote = new TauriRemoteService(selectedProfile?.authToken);
+      health = await remote.health();
+      capabilities = await remote.capabilities();
+      apps = await remote.applications();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+      health = {
+        service: "swavan-server",
+        healthy: false,
+        version: "unconnected"
+      };
+    }
   });
 </script>
 
@@ -36,9 +58,26 @@
     <strong>{health?.version ?? "checking"}</strong>
   </section>
 
+  <section class="status" aria-label="Connection profile">
+    <span>Profile</span>
+    <strong>{selectedProfile?.label ?? "Local development"}</strong>
+  </section>
+
+  {#if errorMessage}
+    <section class="status error" aria-label="Connection error">
+      <span>Connection error</span>
+      <strong>{errorMessage}</strong>
+    </section>
+  {/if}
+
+  <section class="status" aria-label="Capabilities">
+    <span>Capabilities</span>
+    <strong>{capabilities.filter((capability) => capability.supported).length}/{capabilities.length}</strong>
+  </section>
+
   <section class:grid={view === "tile"} class:list={view === "list"} aria-label="Applications">
     {#if apps.length === 0}
-      <p class="empty">Application discovery is not implemented in Phase 1.</p>
+      <p class="empty">No applications found for this server.</p>
     {:else}
       {#each apps as app}
         <button class="app" type="button">

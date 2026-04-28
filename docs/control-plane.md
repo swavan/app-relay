@@ -19,17 +19,18 @@ Implemented:
 - SSH tunnel configuration contract
 - SSH tunnel command planning
 - foreground control listener
+- structured log output sink
 - client connection profile storage contract
 - file-backed Rust connection profile repository
+- Tauri client commands backed by Rust service-layer persistence
 - Linux desktop-entry application discovery
 - macOS `.app` bundle application discovery
 - explicit unsupported application discovery errors for other platforms
 
 Not implemented yet:
 
-- daemon/service installer
 - SSH tunnel process management
-- structured log output sink
+- packaged daemon/service installer
 
 ## Authentication
 
@@ -86,8 +87,9 @@ daemon and SSH process lifecycle behavior.
 ## Events
 
 The server emits structured events for control-plane start, stop, authorized
-requests, rejected requests, and config persistence operations. The current
-event sink is in-memory for tests. A production log sink is still pending.
+requests, rejected requests, and config persistence operations. Tests can use
+`InMemoryEventSink`; foreground and service runners can use `FileEventSink` to
+append line-oriented structured events to a log file.
 
 ## Client Profiles
 
@@ -106,6 +108,11 @@ persists profiles with:
 The current implementation uses a file-backed repository. A later Tauri service
 can move secret material to a platform keychain or encrypted store without
 changing the UI contract.
+
+The Tauri client exposes profile and server runtime commands from Rust. The UI
+does not write browser storage; it reads profiles through
+`list_connection_profiles` and uses the selected profile token for health,
+capability, and application discovery commands.
 
 ## Application Discovery
 
