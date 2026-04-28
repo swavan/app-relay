@@ -1,0 +1,98 @@
+export type ConnectionProfile = {
+  id: string;
+  label: string;
+  sshUser: string;
+  sshHost: string;
+  localPort: number;
+  remotePort: number;
+  authToken: string;
+};
+
+export interface ConnectionProfileStore {
+  list(): ConnectionProfile[];
+  save(profile: ConnectionProfile): void;
+  remove(id: string): void;
+}
+
+export class LocalStorageConnectionProfileStore implements ConnectionProfileStore {
+  constructor(private readonly storage: Storage, private readonly key = "swavan.apprelay.profiles") {}
+
+  list(): ConnectionProfile[] {
+    const rawProfiles = this.storage.getItem(this.key);
+    if (rawProfiles === null) {
+      return [];
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawProfiles);
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter(isConnectionProfile);
+  }
+
+  save(profile: ConnectionProfile): void {
+    validateConnectionProfile(profile);
+    const profiles = this.list().filter((existing) => existing.id !== profile.id);
+    profiles.push(profile);
+    profiles.sort((left, right) => left.label.localeCompare(right.label));
+    this.storage.setItem(this.key, JSON.stringify(profiles));
+  }
+
+  remove(id: string): void {
+    const profiles = this.list().filter((profile) => profile.id !== id);
+    this.storage.setItem(this.key, JSON.stringify(profiles));
+  }
+}
+
+export function validateConnectionProfile(profile: ConnectionProfile): void {
+  if (profile.id.trim() === "") {
+    throw new Error("connection profile id is required");
+  }
+
+  if (profile.label.trim() === "") {
+    throw new Error("connection profile label is required");
+  }
+
+  if (profile.sshUser.trim() === "") {
+    throw new Error("ssh user is required");
+  }
+
+  if (profile.sshHost.trim() === "") {
+    throw new Error("ssh host is required");
+  }
+
+  if (!isValidPort(profile.localPort) || !isValidPort(profile.remotePort)) {
+    throw new Error("ssh tunnel ports must be between 1 and 65535");
+  }
+
+  if (profile.authToken.trim() === "") {
+    throw new Error("auth token is required");
+  }
+}
+
+function isConnectionProfile(value: unknown): value is ConnectionProfile {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const profile = value as ConnectionProfile;
+  return (
+    typeof profile.id === "string" &&
+    typeof profile.label === "string" &&
+    typeof profile.sshUser === "string" &&
+    typeof profile.sshHost === "string" &&
+    typeof profile.localPort === "number" &&
+    typeof profile.remotePort === "number" &&
+    typeof profile.authToken === "string"
+  );
+}
+
+function isValidPort(port: number): boolean {
+  return Number.isInteger(port) && port >= 1 && port <= 65_535;
+}

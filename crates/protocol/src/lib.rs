@@ -11,6 +11,29 @@ pub struct HealthStatus {
     pub version: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServerVersion {
+    pub service: String,
+    pub version: String,
+    pub platform: Platform,
+}
+
+impl ServerVersion {
+    pub fn new(service: impl Into<String>, version: impl Into<String>, platform: Platform) -> Self {
+        Self {
+            service: service.into(),
+            version: version.into(),
+            platform,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HeartbeatStatus {
+    pub healthy: bool,
+    pub sequence: u64,
+}
+
 impl HealthStatus {
     pub fn healthy(service: impl Into<String>, version: impl Into<String>) -> Self {
         Self {
@@ -116,6 +139,46 @@ impl SwavanError {
     }
 }
 
+#[derive(Clone, Eq, PartialEq)]
+pub struct ControlAuth {
+    token: String,
+}
+
+impl std::fmt::Debug for ControlAuth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ControlAuth")
+            .field("token", &"<redacted>")
+            .finish()
+    }
+}
+
+impl ControlAuth {
+    pub fn new(token: impl Into<String>) -> Self {
+        Self {
+            token: token.into(),
+        }
+    }
+
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ControlError {
+    Unauthorized,
+    Service(SwavanError),
+}
+
+impl From<SwavanError> for ControlError {
+    fn from(error: SwavanError) -> Self {
+        Self::Service(error)
+    }
+}
+
+pub type ControlResult<T> = Result<T, ControlError>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +205,13 @@ mod tests {
             capability.reason.as_deref(),
             Some("capture backend not implemented")
         );
+    }
+
+    #[test]
+    fn control_auth_keeps_token_private() {
+        let auth = ControlAuth::new("secret");
+
+        assert_eq!(auth.token(), "secret");
+        assert_eq!(format!("{auth:?}"), "ControlAuth { token: \"<redacted>\" }");
     }
 }

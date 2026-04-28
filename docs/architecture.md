@@ -67,6 +67,8 @@ The server will run as a daemon process. It should be reachable through an SSH
 tunnel and expose a small control API. Platform-specific implementations live
 behind Rust traits so each OS backend can be tested independently.
 
+The Phase 2 control-plane contract is documented in `docs/control-plane.md`.
+
 ## Client Shape
 
 The client is a Tauri plugin-friendly Svelte application. Tauri commands should
