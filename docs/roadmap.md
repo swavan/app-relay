@@ -32,7 +32,7 @@ Acceptance criteria:
 
 ## Phase 2: Server Control Plane
 
-Status: in progress
+Status: complete
 
 Goal: run a local daemon that exposes authenticated control APIs through an SSH
 tunnel.
@@ -52,6 +52,8 @@ Scope:
   process spawning, running-state checks, duplicate-start protection, and clean
   stop behavior
 - completed daemon install and lifecycle strategy for Linux, macOS, and Windows
+- completed daemon install slice: service plan and manifest generation for
+  Linux user systemd, macOS launchd, and Windows service scripts
 - control API for health, capabilities, version, and application discovery
 - SSH tunnel connection contract
 - structured logs
@@ -67,8 +69,7 @@ Out of scope:
 
 Acceptance criteria:
 
-- server can run as a foreground process and has a documented daemon/service
-  lifecycle strategy
+- server can run as a foreground process and generate daemon/service manifests
 - client can connect with a configured profile token and the core layer owns
   SSH tunnel process supervision
 - client can show server health and capabilities

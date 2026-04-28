@@ -24,13 +24,10 @@ Implemented:
 - client connection profile storage contract
 - file-backed Rust connection profile repository
 - Tauri client commands backed by Rust service-layer persistence
+- packaged daemon/service manifest generation
 - Linux desktop-entry application discovery
 - macOS `.app` bundle application discovery
 - explicit unsupported application discovery errors for other platforms
-
-Not implemented yet:
-
-- packaged daemon/service installer
 
 ## Authentication
 
@@ -83,8 +80,21 @@ Phase 2 validation. It currently supports:
 - `heartbeat <token>`
 
 This is a foreground development listener, not the final daemon transport. It
-keeps the control-plane service boundary executable while packaged daemon
-installers are still pending.
+keeps the control-plane service boundary executable while the service manifest
+installer owns host startup behavior.
+
+## Daemon Installation
+
+The server binary supports:
+
+- `swavan-server service-plan [linux|macos|windows]`
+- `swavan-server install-service [linux|macos|windows]`
+
+`service-plan` prints the platform manifest, config path, log path, and lifecycle
+commands. `install-service` writes the manifest or installer script to the
+platform service location and prints the start/status commands. Linux uses a
+user-level systemd unit, macOS uses a launchd agent, and Windows uses a
+PowerShell script that registers the native service with `sc.exe`.
 
 ## Events
 

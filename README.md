@@ -15,10 +15,11 @@ desktop applications from a mobile or desktop client.
 
 ## Current Phase
 
-Phase 1 is a foundation only. It includes health reporting, typed capabilities,
-explicit unsupported-feature errors, a client shell, tests, and CI scaffolding.
-Application capture, SSH tunneling, media streaming, and input forwarding are
-planned but intentionally not half-implemented.
+Phase 2 is complete. It includes the authenticated server control plane,
+server config persistence, SSH tunnel command planning and process lifecycle
+supervision, Linux/macOS application discovery, Rust-owned client profile
+persistence, structured logs, and service manifest generation. Application
+sessions, media streaming, and input forwarding start in later phases.
 
 See `docs/roadmap.md` for the full path from Phase 1 to production release.
 
