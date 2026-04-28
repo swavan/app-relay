@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use swavan_protocol::{
-    ApplicationSummary, Feature, HealthStatus, Platform, PlatformCapability, SwavanError,
+    ApplicationSession, ApplicationSummary, CreateSessionRequest, Feature, HealthStatus, Platform,
+    PlatformCapability, ResizeSessionRequest, SelectedWindow, SessionState, SwavanError,
+    ViewportSize,
 };
 
 pub trait HealthService {
@@ -19,6 +21,19 @@ pub trait CapabilityService {
 
 pub trait ApplicationDiscovery {
     fn available_applications(&self) -> Result<Vec<ApplicationSummary>, SwavanError>;
+}
+
+pub trait ApplicationSessionService {
+    fn create_session(
+        &mut self,
+        request: CreateSessionRequest,
+    ) -> Result<ApplicationSession, SwavanError>;
+    fn resize_session(
+        &mut self,
+        request: ResizeSessionRequest,
+    ) -> Result<ApplicationSession, SwavanError>;
+    fn close_session(&mut self, session_id: &str) -> Result<ApplicationSession, SwavanError>;
+    fn active_sessions(&self) -> Vec<ApplicationSession>;
 }
 
 pub trait ConnectionProfileRepository {
@@ -34,6 +49,73 @@ pub trait ServerConfigRepository {
 
 pub trait EventSink {
     fn record(&mut self, event: ServerEvent);
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionPolicy {
+    allowed_application_ids: Vec<String>,
+    min_viewport_width: u32,
+    min_viewport_height: u32,
+    max_viewport_width: u32,
+    max_viewport_height: u32,
+}
+
+impl SessionPolicy {
+    pub fn allow_all() -> Self {
+        Self {
+            allowed_application_ids: Vec::new(),
+            min_viewport_width: 320,
+            min_viewport_height: 240,
+            max_viewport_width: 7680,
+            max_viewport_height: 4320,
+        }
+    }
+
+    pub fn allow_applications(allowed_application_ids: Vec<String>) -> Self {
+        Self {
+            allowed_application_ids,
+            ..Self::allow_all()
+        }
+    }
+
+    pub fn validate_application(&self, application_id: &str) -> Result<(), SwavanError> {
+        if application_id.trim().is_empty() {
+            return Err(SwavanError::InvalidRequest(
+                "application id is required".to_string(),
+            ));
+        }
+
+        if self.allowed_application_ids.is_empty()
+            || self
+                .allowed_application_ids
+                .iter()
+                .any(|allowed_id| allowed_id == application_id)
+        {
+            Ok(())
+        } else {
+            Err(SwavanError::PermissionDenied(format!(
+                "application {application_id} is not allowed"
+            )))
+        }
+    }
+
+    pub fn validate_viewport(&self, viewport: &ViewportSize) -> Result<(), SwavanError> {
+        if viewport.width < self.min_viewport_width || viewport.height < self.min_viewport_height {
+            return Err(SwavanError::InvalidRequest(format!(
+                "viewport must be at least {}x{}",
+                self.min_viewport_width, self.min_viewport_height
+            )));
+        }
+
+        if viewport.width > self.max_viewport_width || viewport.height > self.max_viewport_height {
+            return Err(SwavanError::InvalidRequest(format!(
+                "viewport must be at most {}x{}",
+                self.max_viewport_width, self.max_viewport_height
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -519,6 +601,99 @@ fn format_event(event: &ServerEvent) -> String {
         ServerEvent::ConfigSaved { path } => {
             format!("event=config_saved path={}", path.display())
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InMemoryApplicationSessionService {
+    policy: SessionPolicy,
+    sessions: Vec<ApplicationSession>,
+    next_session_sequence: u64,
+}
+
+impl InMemoryApplicationSessionService {
+    pub fn new(policy: SessionPolicy) -> Self {
+        Self {
+            policy,
+            sessions: Vec::new(),
+            next_session_sequence: 1,
+        }
+    }
+
+    fn next_session_id(&mut self) -> String {
+        let id = format!("session-{}", self.next_session_sequence);
+        self.next_session_sequence += 1;
+        id
+    }
+}
+
+impl Default for InMemoryApplicationSessionService {
+    fn default() -> Self {
+        Self::new(SessionPolicy::allow_all())
+    }
+}
+
+impl ApplicationSessionService for InMemoryApplicationSessionService {
+    fn create_session(
+        &mut self,
+        request: CreateSessionRequest,
+    ) -> Result<ApplicationSession, SwavanError> {
+        self.policy
+            .validate_application(&request.application_id)
+            .and_then(|_| self.policy.validate_viewport(&request.viewport))?;
+
+        let session_id = self.next_session_id();
+        let session = ApplicationSession {
+            id: session_id.clone(),
+            application_id: request.application_id.clone(),
+            selected_window: SelectedWindow {
+                id: format!("window-{session_id}"),
+                title: request.application_id,
+            },
+            viewport: request.viewport,
+            state: SessionState::Ready,
+        };
+        self.sessions.push(session.clone());
+
+        Ok(session)
+    }
+
+    fn resize_session(
+        &mut self,
+        request: ResizeSessionRequest,
+    ) -> Result<ApplicationSession, SwavanError> {
+        self.policy.validate_viewport(&request.viewport)?;
+        let session = self
+            .sessions
+            .iter_mut()
+            .find(|session| {
+                session.id == request.session_id && session.state != SessionState::Closed
+            })
+            .ok_or_else(|| {
+                SwavanError::NotFound(format!("session {} was not found", request.session_id))
+            })?;
+
+        session.viewport = request.viewport;
+        Ok(session.clone())
+    }
+
+    fn close_session(&mut self, session_id: &str) -> Result<ApplicationSession, SwavanError> {
+        let session = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id && session.state != SessionState::Closed)
+            .ok_or_else(|| SwavanError::NotFound(format!("session {session_id} was not found")))?;
+
+        session.state = SessionState::Closed;
+        Ok(session.clone())
+    }
+
+    fn active_sessions(&self) -> Vec<ApplicationSession> {
+        self.sessions
+            .iter()
+            .filter(|session| session.state != SessionState::Closed)
+            .cloned()
+            .collect()
     }
 }
 
@@ -1344,6 +1519,107 @@ event=request_authorized operation=health\n"
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_service_creates_session_for_allowed_application() {
+        let mut service =
+            InMemoryApplicationSessionService::new(SessionPolicy::allow_applications(vec![
+                "terminal".to_string(),
+            ]));
+
+        let session = service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+
+        assert_eq!(session.id, "session-1");
+        assert_eq!(session.application_id, "terminal");
+        assert_eq!(session.state, SessionState::Ready);
+        assert_eq!(
+            service.active_sessions(),
+            vec![ApplicationSession {
+                id: "session-1".to_string(),
+                application_id: "terminal".to_string(),
+                selected_window: SelectedWindow {
+                    id: "window-session-1".to_string(),
+                    title: "terminal".to_string(),
+                },
+                viewport: ViewportSize::new(1280, 720),
+                state: SessionState::Ready,
+            }]
+        );
+    }
+
+    #[test]
+    fn session_service_rejects_denied_application() {
+        let mut service =
+            InMemoryApplicationSessionService::new(SessionPolicy::allow_applications(vec![
+                "terminal".to_string(),
+            ]));
+
+        assert_eq!(
+            service.create_session(CreateSessionRequest {
+                application_id: "browser".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            }),
+            Err(SwavanError::PermissionDenied(
+                "application browser is not allowed".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn session_service_validates_resize_and_records_viewport() {
+        let mut service = InMemoryApplicationSessionService::default();
+        let session = service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+
+        let resized = service
+            .resize_session(ResizeSessionRequest {
+                session_id: session.id,
+                viewport: ViewportSize::new(1440, 900),
+            })
+            .expect("resize session");
+
+        assert_eq!(resized.viewport, ViewportSize::new(1440, 900));
+    }
+
+    #[test]
+    fn session_service_closes_session_cleanly() {
+        let mut service = InMemoryApplicationSessionService::default();
+        let session = service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+
+        let closed = service.close_session(&session.id).expect("close session");
+
+        assert_eq!(closed.state, SessionState::Closed);
+        assert_eq!(service.active_sessions(), Vec::new());
+    }
+
+    #[test]
+    fn session_service_rejects_invalid_viewport() {
+        let mut service = InMemoryApplicationSessionService::default();
+
+        assert_eq!(
+            service.create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(100, 100),
+            }),
+            Err(SwavanError::InvalidRequest(
+                "viewport must be at least 320x240".to_string()
+            ))
+        );
     }
 
     #[derive(Clone, Debug, Default)]

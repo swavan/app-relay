@@ -125,12 +125,61 @@ pub struct AppIcon {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ViewportSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl ViewportSize {
+    pub fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateSessionRequest {
+    pub application_id: String,
+    pub viewport: ViewportSize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResizeSessionRequest {
+    pub session_id: String,
+    pub viewport: ViewportSize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplicationSession {
+    pub id: String,
+    pub application_id: String,
+    pub selected_window: SelectedWindow,
+    pub viewport: ViewportSize,
+    pub state: SessionState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectedWindow {
+    pub id: String,
+    pub title: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SessionState {
+    Starting,
+    Ready,
+    Closed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SwavanError {
     UnsupportedPlatform {
         platform: Platform,
         feature: Feature,
     },
     ServiceUnavailable(String),
+    InvalidRequest(String),
+    PermissionDenied(String),
+    NotFound(String),
 }
 
 impl SwavanError {
@@ -213,5 +262,16 @@ mod tests {
 
         assert_eq!(auth.token(), "secret");
         assert_eq!(format!("{auth:?}"), "ControlAuth { token: \"<redacted>\" }");
+    }
+
+    #[test]
+    fn viewport_size_keeps_requested_dimensions() {
+        assert_eq!(
+            ViewportSize::new(1280, 720),
+            ViewportSize {
+                width: 1280,
+                height: 720,
+            }
+        );
     }
 }

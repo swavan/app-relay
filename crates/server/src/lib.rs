@@ -7,13 +7,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use swavan_core::{
-    ApplicationDiscovery, CapabilityService, DefaultCapabilityService,
-    DesktopEntryApplicationDiscovery, EventSink, HealthService, MacosApplicationDiscovery,
-    ServerConfig, ServerEvent, StaticHealthService, UnsupportedApplicationDiscovery,
+    ApplicationDiscovery, ApplicationSessionService, CapabilityService, DefaultCapabilityService,
+    DesktopEntryApplicationDiscovery, EventSink, HealthService, InMemoryApplicationSessionService,
+    MacosApplicationDiscovery, ServerConfig, ServerEvent, SessionPolicy, StaticHealthService,
+    UnsupportedApplicationDiscovery,
 };
 use swavan_protocol::{
-    ApplicationSummary, ControlAuth, ControlError, ControlResult, HealthStatus, HeartbeatStatus,
-    Platform, PlatformCapability, ServerVersion, SwavanError,
+    ApplicationSession, ApplicationSummary, ControlAuth, ControlError, ControlResult,
+    CreateSessionRequest, HealthStatus, HeartbeatStatus, Platform, PlatformCapability,
+    ResizeSessionRequest, ServerVersion, SwavanError,
 };
 
 #[derive(Debug)]
@@ -21,6 +23,7 @@ pub struct ServerServices {
     health_service: StaticHealthService,
     capability_service: DefaultCapabilityService,
     application_discovery: ApplicationDiscoveryService,
+    session_service: InMemoryApplicationSessionService,
     platform: Platform,
     version: String,
 }
@@ -33,6 +36,7 @@ impl ServerServices {
             health_service: StaticHealthService::new("swavan-server", version.clone()),
             capability_service: DefaultCapabilityService::new(platform),
             application_discovery: ApplicationDiscoveryService::for_platform(platform),
+            session_service: InMemoryApplicationSessionService::new(SessionPolicy::allow_all()),
             platform,
             version,
         }
@@ -52,6 +56,28 @@ impl ServerServices {
 
     pub fn available_applications(&self) -> Result<Vec<ApplicationSummary>, SwavanError> {
         self.application_discovery.available_applications()
+    }
+
+    pub fn create_session(
+        &mut self,
+        request: CreateSessionRequest,
+    ) -> Result<ApplicationSession, SwavanError> {
+        self.session_service.create_session(request)
+    }
+
+    pub fn resize_session(
+        &mut self,
+        request: ResizeSessionRequest,
+    ) -> Result<ApplicationSession, SwavanError> {
+        self.session_service.resize_session(request)
+    }
+
+    pub fn close_session(&mut self, session_id: &str) -> Result<ApplicationSession, SwavanError> {
+        self.session_service.close_session(session_id)
+    }
+
+    pub fn active_sessions(&self) -> Vec<ApplicationSession> {
+        self.session_service.active_sessions()
     }
 
     pub fn version(&self) -> ServerVersion {
@@ -131,6 +157,38 @@ impl ServerControlPlane {
     ) -> ControlResult<Vec<ApplicationSummary>> {
         self.authorize(auth)?;
         self.services.available_applications().map_err(Into::into)
+    }
+
+    pub fn create_session(
+        &mut self,
+        auth: &ControlAuth,
+        request: CreateSessionRequest,
+    ) -> ControlResult<ApplicationSession> {
+        self.authorize(auth)?;
+        self.services.create_session(request).map_err(Into::into)
+    }
+
+    pub fn resize_session(
+        &mut self,
+        auth: &ControlAuth,
+        request: ResizeSessionRequest,
+    ) -> ControlResult<ApplicationSession> {
+        self.authorize(auth)?;
+        self.services.resize_session(request).map_err(Into::into)
+    }
+
+    pub fn close_session(
+        &mut self,
+        auth: &ControlAuth,
+        session_id: &str,
+    ) -> ControlResult<ApplicationSession> {
+        self.authorize(auth)?;
+        self.services.close_session(session_id).map_err(Into::into)
+    }
+
+    pub fn active_sessions(&self, auth: &ControlAuth) -> ControlResult<Vec<ApplicationSession>> {
+        self.authorize(auth)?;
+        Ok(self.services.active_sessions())
     }
 
     pub fn heartbeat(&self, auth: &ControlAuth) -> ControlResult<HeartbeatStatus> {
@@ -553,6 +611,85 @@ mod tests {
                 healthy: true,
                 sequence: 2
             })
+        );
+    }
+
+    #[test]
+    fn control_plane_creates_and_tracks_sessions() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        );
+        let auth = ControlAuth::new("correct-token");
+
+        let session = control_plane
+            .create_session(
+                &auth,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: swavan_protocol::ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create session");
+
+        assert_eq!(session.application_id, "terminal");
+        assert_eq!(control_plane.active_sessions(&auth), Ok(vec![session]));
+    }
+
+    #[test]
+    fn control_plane_resizes_and_closes_sessions() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        );
+        let auth = ControlAuth::new("correct-token");
+        let session = control_plane
+            .create_session(
+                &auth,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: swavan_protocol::ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create session");
+
+        let resized = control_plane
+            .resize_session(
+                &auth,
+                ResizeSessionRequest {
+                    session_id: session.id.clone(),
+                    viewport: swavan_protocol::ViewportSize::new(1440, 900),
+                },
+            )
+            .expect("resize session");
+        let closed = control_plane
+            .close_session(&auth, &session.id)
+            .expect("close session");
+
+        assert_eq!(
+            resized.viewport,
+            swavan_protocol::ViewportSize::new(1440, 900)
+        );
+        assert_eq!(closed.state, swavan_protocol::SessionState::Closed);
+        assert_eq!(control_plane.active_sessions(&auth), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn control_plane_rejects_unauthorized_session_requests() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        );
+
+        assert_eq!(
+            control_plane.create_session(
+                &ControlAuth::new("wrong-token"),
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: swavan_protocol::ViewportSize::new(1280, 720),
+                },
+            ),
+            Err(ControlError::Unauthorized)
         );
     }
 

@@ -19,10 +19,29 @@ export type AppSummary = {
   iconUrl?: string;
 };
 
+export type ViewportSize = {
+  width: number;
+  height: number;
+};
+
+export type ApplicationSession = {
+  id: string;
+  applicationId: string;
+  selectedWindow: {
+    id: string;
+    title: string;
+  };
+  viewport: ViewportSize;
+  state: "starting" | "ready" | "closed";
+};
+
 export interface RemoteService {
   health(): Promise<HealthStatus>;
   capabilities(): Promise<Capability[]>;
   applications(): Promise<AppSummary[]>;
+  createSession(applicationId: string, viewport: ViewportSize): Promise<ApplicationSession>;
+  resizeSession(sessionId: string, viewport: ViewportSize): Promise<ApplicationSession>;
+  closeSession(sessionId: string): Promise<ApplicationSession>;
 }
 
 export class TauriRemoteService implements RemoteService {
@@ -42,5 +61,29 @@ export class TauriRemoteService implements RemoteService {
 
   async applications(): Promise<AppSummary[]> {
     return invoke<AppSummary[]>("server_applications", { authToken: this.authToken });
+  }
+
+  async createSession(
+    applicationId: string,
+    viewport: ViewportSize
+  ): Promise<ApplicationSession> {
+    return invoke<ApplicationSession>("create_application_session", {
+      authToken: this.authToken,
+      request: { applicationId, viewport }
+    });
+  }
+
+  async resizeSession(sessionId: string, viewport: ViewportSize): Promise<ApplicationSession> {
+    return invoke<ApplicationSession>("resize_application_session", {
+      authToken: this.authToken,
+      request: { sessionId, viewport }
+    });
+  }
+
+  async closeSession(sessionId: string): Promise<ApplicationSession> {
+    return invoke<ApplicationSession>("close_application_session", {
+      authToken: this.authToken,
+      sessionId
+    });
   }
 }

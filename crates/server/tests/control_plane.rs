@@ -1,5 +1,8 @@
 use swavan_core::ServerConfig;
-use swavan_protocol::{ControlAuth, ControlError, Feature, Platform, ServerVersion, SwavanError};
+use swavan_protocol::{
+    ControlAuth, ControlError, CreateSessionRequest, Feature, Platform, ResizeSessionRequest,
+    ServerVersion, SessionState, SwavanError, ViewportSize,
+};
 use swavan_server::{ServerControlPlane, ServerServices};
 
 #[test]
@@ -96,4 +99,39 @@ fn control_plane_heartbeat_supports_reconnect_checks() {
     assert!(first.healthy);
     assert!(second.healthy);
     assert_eq!(first.sequence + 1, second.sequence);
+}
+
+#[test]
+fn control_plane_manages_application_session_lifecycle() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+    let auth = ControlAuth::new("correct-token");
+
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let resized = control_plane
+        .resize_session(
+            &auth,
+            ResizeSessionRequest {
+                session_id: session.id.clone(),
+                viewport: ViewportSize::new(1440, 900),
+            },
+        )
+        .expect("resize session");
+    let closed = control_plane
+        .close_session(&auth, &session.id)
+        .expect("close session");
+
+    assert_eq!(resized.viewport, ViewportSize::new(1440, 900));
+    assert_eq!(closed.state, SessionState::Closed);
+    assert_eq!(control_plane.active_sessions(&auth), Ok(Vec::new()));
 }

@@ -4,24 +4,33 @@
     TauriConnectionProfileService,
     type ConnectionProfile
   } from "./connectionProfiles";
-  import { TauriRemoteService, type AppSummary, type Capability, type HealthStatus } from "./services";
+  import {
+    TauriRemoteService,
+    type AppSummary,
+    type ApplicationSession,
+    type Capability,
+    type HealthStatus
+  } from "./services";
 
   const profilesService = new TauriConnectionProfileService();
+  let remote = new TauriRemoteService();
 
   let health: HealthStatus | null = null;
   let capabilities: Capability[] = [];
   let profiles: ConnectionProfile[] = [];
   let selectedProfile: ConnectionProfile | null = null;
+  let activeSession: ApplicationSession | null = null;
   let apps: AppSummary[] = [];
   let view: "tile" | "list" = "tile";
   let errorMessage = "";
+  let sessionMessage = "";
 
   onMount(async () => {
     try {
       profiles = await profilesService.list();
       selectedProfile = profiles[0] ?? null;
 
-      const remote = new TauriRemoteService(selectedProfile?.authToken);
+      remote = new TauriRemoteService(selectedProfile?.authToken);
       health = await remote.health();
       capabilities = await remote.capabilities();
       apps = await remote.applications();
@@ -34,6 +43,29 @@
       };
     }
   });
+
+  async function createSession(app: AppSummary) {
+    try {
+      sessionMessage = "";
+      activeSession = await remote.createSession(app.id, { width: 1280, height: 720 });
+    } catch (error) {
+      sessionMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function closeSession() {
+    if (!activeSession) {
+      return;
+    }
+
+    try {
+      sessionMessage = "";
+      await remote.closeSession(activeSession.id);
+      activeSession = null;
+    } catch (error) {
+      sessionMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
 </script>
 
 <main class="shell">
@@ -75,12 +107,26 @@
     <strong>{capabilities.filter((capability) => capability.supported).length}/{capabilities.length}</strong>
   </section>
 
+  {#if activeSession}
+    <section class="status" aria-label="Application session">
+      <span>{activeSession.selectedWindow.title}</span>
+      <button on:click={closeSession} type="button">Close</button>
+    </section>
+  {/if}
+
+  {#if sessionMessage}
+    <section class="status error" aria-label="Session error">
+      <span>Session error</span>
+      <strong>{sessionMessage}</strong>
+    </section>
+  {/if}
+
   <section class:grid={view === "tile"} class:list={view === "list"} aria-label="Applications">
     {#if apps.length === 0}
       <p class="empty">No applications found for this server.</p>
     {:else}
       {#each apps as app}
-        <button class="app" type="button">
+        <button class="app" on:click={() => createSession(app)} type="button">
           <span class="icon" aria-hidden="true"></span>
           <span>{app.name}</span>
         </button>
