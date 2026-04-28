@@ -25,6 +25,15 @@ pub trait ConnectionProfileRepository {
     fn remove(&self, id: &str) -> Result<(), ProfileStoreError>;
 }
 
+pub trait ServerConfigRepository {
+    fn load(&self) -> Result<ServerConfig, ConfigStoreError>;
+    fn save(&self, config: &ServerConfig) -> Result<(), ConfigStoreError>;
+}
+
+pub trait EventSink {
+    fn record(&mut self, event: ServerEvent);
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConnectionProfile {
     pub id: String,
@@ -229,6 +238,10 @@ fn encode_field(value: &str) -> String {
 }
 
 fn decode_field(value: &str) -> Result<String, ProfileStoreError> {
+    decode_escaped_field(value).map_err(|_| ProfileStoreError::CorruptedStore)
+}
+
+fn decode_escaped_field(value: &str) -> Result<String, ()> {
     let mut decoded = String::new();
     let mut chars = value.chars();
 
@@ -243,7 +256,7 @@ fn decode_field(value: &str) -> Result<String, ProfileStoreError> {
             Some('t') => decoded.push('\t'),
             Some('n') => decoded.push('\n'),
             Some('r') => decoded.push('\r'),
-            _ => return Err(ProfileStoreError::CorruptedStore),
+            _ => return Err(()),
         }
     }
 
@@ -257,6 +270,55 @@ pub struct ServerConfig {
     pub auth_token: String,
     pub heartbeat_interval_millis: u64,
     pub ssh_tunnel: SshTunnelConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SshTunnelCommand {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+impl SshTunnelCommand {
+    pub fn from_config(config: &SshTunnelConfig) -> Result<Self, ConfigError> {
+        config.validate()?;
+
+        Ok(Self {
+            program: "ssh".to_string(),
+            args: vec![
+                "-N".to_string(),
+                "-L".to_string(),
+                format!("{}:127.0.0.1:{}", config.local_port, config.remote_port),
+                format!("{}@{}", config.user, config.host),
+            ],
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ServerEvent {
+    ControlPlaneStarted { bind_address: String, port: u16 },
+    ControlPlaneStopped,
+    RequestAuthorized { operation: String },
+    RequestRejected { operation: String },
+    ConfigLoaded { path: PathBuf },
+    ConfigSaved { path: PathBuf },
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct InMemoryEventSink {
+    events: Vec<ServerEvent>,
+}
+
+impl InMemoryEventSink {
+    pub fn events(&self) -> &[ServerEvent] {
+        &self.events
+    }
+}
+
+impl EventSink for InMemoryEventSink {
+    fn record(&mut self, event: ServerEvent) {
+        self.events.push(event);
+    }
 }
 
 impl ServerConfig {
@@ -330,6 +392,148 @@ pub enum ConfigError {
     MissingSshUser,
     MissingSshHost,
     InvalidSshPort,
+}
+
+#[derive(Debug)]
+pub enum ConfigStoreError {
+    InvalidConfig(ConfigError),
+    Io(std::io::Error),
+    CorruptedStore,
+}
+
+impl PartialEq for ConfigStoreError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::InvalidConfig(left), Self::InvalidConfig(right)) => left == right,
+            (Self::CorruptedStore, Self::CorruptedStore) => true,
+            (Self::Io(left), Self::Io(right)) => left.kind() == right.kind(),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ConfigStoreError {}
+
+impl From<std::io::Error> for ConfigStoreError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<ConfigError> for ConfigStoreError {
+    fn from(error: ConfigError) -> Self {
+        Self::InvalidConfig(error)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FileServerConfigRepository {
+    path: PathBuf,
+}
+
+impl FileServerConfigRepository {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+}
+
+impl ServerConfigRepository for FileServerConfigRepository {
+    fn load(&self) -> Result<ServerConfig, ConfigStoreError> {
+        let contents = fs::read_to_string(&self.path)?;
+        let config = decode_server_config(&contents)?;
+
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn save(&self, config: &ServerConfig) -> Result<(), ConfigStoreError> {
+        config.validate()?;
+
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::write(&self.path, encode_server_config(config))?;
+        Ok(())
+    }
+}
+
+fn encode_server_config(config: &ServerConfig) -> String {
+    [
+        format!("bind_address={}", encode_field(&config.bind_address)),
+        format!("control_port={}", config.control_port),
+        format!("auth_token={}", encode_field(&config.auth_token)),
+        format!(
+            "heartbeat_interval_millis={}",
+            config.heartbeat_interval_millis
+        ),
+        format!("ssh_user={}", encode_field(&config.ssh_tunnel.user)),
+        format!("ssh_host={}", encode_field(&config.ssh_tunnel.host)),
+        format!("ssh_local_port={}", config.ssh_tunnel.local_port),
+        format!("ssh_remote_port={}", config.ssh_tunnel.remote_port),
+    ]
+    .join("\n")
+        + "\n"
+}
+
+fn decode_server_config(contents: &str) -> Result<ServerConfig, ConfigStoreError> {
+    let mut bind_address = None;
+    let mut control_port = None;
+    let mut auth_token = None;
+    let mut heartbeat_interval_millis = None;
+    let mut ssh_user = None;
+    let mut ssh_host = None;
+    let mut ssh_local_port = None;
+    let mut ssh_remote_port = None;
+
+    for line in contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(ConfigStoreError::CorruptedStore);
+        };
+
+        match key {
+            "bind_address" => bind_address = Some(decode_config_field(value)?),
+            "control_port" => control_port = Some(parse_config_number(value)?),
+            "auth_token" => auth_token = Some(decode_config_field(value)?),
+            "heartbeat_interval_millis" => {
+                heartbeat_interval_millis = Some(parse_config_number(value)?)
+            }
+            "ssh_user" => ssh_user = Some(decode_config_field(value)?),
+            "ssh_host" => ssh_host = Some(decode_config_field(value)?),
+            "ssh_local_port" => ssh_local_port = Some(parse_config_number(value)?),
+            "ssh_remote_port" => ssh_remote_port = Some(parse_config_number(value)?),
+            _ => return Err(ConfigStoreError::CorruptedStore),
+        }
+    }
+
+    Ok(ServerConfig {
+        bind_address: bind_address.ok_or(ConfigStoreError::CorruptedStore)?,
+        control_port: control_port.ok_or(ConfigStoreError::CorruptedStore)?,
+        auth_token: auth_token.ok_or(ConfigStoreError::CorruptedStore)?,
+        heartbeat_interval_millis: heartbeat_interval_millis
+            .ok_or(ConfigStoreError::CorruptedStore)?,
+        ssh_tunnel: SshTunnelConfig {
+            user: ssh_user.ok_or(ConfigStoreError::CorruptedStore)?,
+            host: ssh_host.ok_or(ConfigStoreError::CorruptedStore)?,
+            local_port: ssh_local_port.ok_or(ConfigStoreError::CorruptedStore)?,
+            remote_port: ssh_remote_port.ok_or(ConfigStoreError::CorruptedStore)?,
+        },
+    })
+}
+
+fn parse_config_number<T>(value: &str) -> Result<T, ConfigStoreError>
+where
+    T: std::str::FromStr,
+{
+    value.parse().map_err(|_| ConfigStoreError::CorruptedStore)
+}
+
+fn decode_config_field(value: &str) -> Result<String, ConfigStoreError> {
+    decode_escaped_field(value).map_err(|_| ConfigStoreError::CorruptedStore)
 }
 
 #[derive(Clone, Debug)]
@@ -733,6 +937,116 @@ mod tests {
         let config = ServerConfig::local("test-token");
 
         assert_eq!(config.validate(), Ok(()));
+    }
+
+    #[test]
+    fn file_server_config_repository_persists_config() {
+        let root = unique_test_dir("server-config-store");
+        let repository = FileServerConfigRepository::new(root.join("server.conf"));
+        let mut config = ServerConfig::local("test-token");
+        config.bind_address = "127.0.0.2".to_string();
+        config.control_port = 7878;
+        config.heartbeat_interval_millis = 2_500;
+        config.ssh_tunnel.user = "biplab".to_string();
+        config.ssh_tunnel.host = "workstation.local".to_string();
+        config.ssh_tunnel.local_port = 8787;
+        config.ssh_tunnel.remote_port = 9797;
+
+        repository.save(&config).expect("save server config");
+
+        assert_eq!(repository.load().expect("load server config"), config);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_server_config_repository_rejects_invalid_config() {
+        let root = unique_test_dir("server-config-invalid");
+        let repository = FileServerConfigRepository::new(root.join("server.conf"));
+        let config = ServerConfig::local(" ");
+
+        assert_eq!(
+            repository.save(&config),
+            Err(ConfigStoreError::InvalidConfig(
+                ConfigError::MissingAuthToken
+            ))
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_server_config_repository_reports_corruption() {
+        let root = unique_test_dir("server-config-corrupt");
+        let path = root.join("server.conf");
+        fs::create_dir_all(&root).expect("create config store dir");
+        fs::write(&path, "bad config").expect("write corrupted config");
+
+        let repository = FileServerConfigRepository::new(path);
+
+        assert_eq!(repository.load(), Err(ConfigStoreError::CorruptedStore));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ssh_tunnel_command_uses_validated_config() {
+        let config = SshTunnelConfig {
+            user: "biplab".to_string(),
+            host: "workstation.local".to_string(),
+            local_port: 7676,
+            remote_port: 7677,
+        };
+
+        assert_eq!(
+            SshTunnelCommand::from_config(&config),
+            Ok(SshTunnelCommand {
+                program: "ssh".to_string(),
+                args: vec![
+                    "-N".to_string(),
+                    "-L".to_string(),
+                    "7676:127.0.0.1:7677".to_string(),
+                    "biplab@workstation.local".to_string(),
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn ssh_tunnel_command_rejects_invalid_config() {
+        let config = SshTunnelConfig {
+            user: " ".to_string(),
+            host: "workstation.local".to_string(),
+            local_port: 7676,
+            remote_port: 7677,
+        };
+
+        assert_eq!(
+            SshTunnelCommand::from_config(&config),
+            Err(ConfigError::MissingSshUser)
+        );
+    }
+
+    #[test]
+    fn in_memory_event_sink_records_events() {
+        let mut sink = InMemoryEventSink::default();
+
+        sink.record(ServerEvent::ControlPlaneStarted {
+            bind_address: "127.0.0.1".to_string(),
+            port: 7676,
+        });
+        sink.record(ServerEvent::ControlPlaneStopped);
+
+        assert_eq!(
+            sink.events(),
+            &[
+                ServerEvent::ControlPlaneStarted {
+                    bind_address: "127.0.0.1".to_string(),
+                    port: 7676,
+                },
+                ServerEvent::ControlPlaneStopped,
+            ]
+        );
     }
 
     #[test]

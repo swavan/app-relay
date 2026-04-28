@@ -44,6 +44,8 @@ Scope:
   Linux `.desktop` plus macOS `.app` application discovery
 - completed client/backend slice: frontend profile contract with Rust service
   layer validation and file-backed profile persistence
+- completed runtime slice: file-backed server config, structured event model,
+  SSH tunnel command planning, and foreground line-based control listener
 - daemon install and lifecycle strategy for Linux, macOS, and Windows
 - control API for health, capabilities, version, and application discovery
 - SSH tunnel connection contract
