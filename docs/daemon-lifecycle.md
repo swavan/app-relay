@@ -95,6 +95,7 @@ returns a typed unsupported error.
 ## Phase 2 Boundary
 
 The current implementation validates the daemon/service lifecycle contract,
-runtime file ownership, config persistence, and structured event output. Packaged
-install/uninstall commands should be added when release packaging begins so the
-installer can own exact paths, signing, and permissions.
+runtime file ownership, config persistence, structured event output, and SSH
+tunnel process supervision. Packaged install/uninstall commands should be added
+when release packaging begins so the installer can own exact paths, signing, and
+permissions.

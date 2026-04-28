@@ -3,6 +3,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 
 use swavan_protocol::{
     ApplicationSummary, Feature, HealthStatus, Platform, PlatformCapability, SwavanError,
@@ -295,10 +296,152 @@ impl SshTunnelCommand {
     }
 }
 
+pub trait ManagedSshTunnel {
+    fn id(&self) -> u32;
+    fn try_wait(&mut self) -> std::io::Result<Option<i32>>;
+    fn kill(&mut self) -> std::io::Result<()>;
+    fn wait(&mut self) -> std::io::Result<i32>;
+}
+
+pub trait SshTunnelSpawner {
+    type Tunnel: ManagedSshTunnel;
+
+    fn spawn(&self, command: &SshTunnelCommand) -> std::io::Result<Self::Tunnel>;
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SystemSshTunnelSpawner;
+
+impl SshTunnelSpawner for SystemSshTunnelSpawner {
+    type Tunnel = Child;
+
+    fn spawn(&self, command: &SshTunnelCommand) -> std::io::Result<Self::Tunnel> {
+        Command::new(&command.program)
+            .args(&command.args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    }
+}
+
+impl ManagedSshTunnel for Child {
+    fn id(&self) -> u32 {
+        Child::id(self)
+    }
+
+    fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+        Child::try_wait(self).map(|status| status.map(|status| status.code().unwrap_or_default()))
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        Child::kill(self)
+    }
+
+    fn wait(&mut self) -> std::io::Result<i32> {
+        Child::wait(self).map(|status| status.code().unwrap_or_default())
+    }
+}
+
+#[derive(Debug)]
+pub struct SshTunnelSupervisor<S>
+where
+    S: SshTunnelSpawner,
+{
+    spawner: S,
+    tunnel: Option<S::Tunnel>,
+}
+
+impl<S> SshTunnelSupervisor<S>
+where
+    S: SshTunnelSpawner,
+{
+    pub fn new(spawner: S) -> Self {
+        Self {
+            spawner,
+            tunnel: None,
+        }
+    }
+
+    pub fn start(&mut self, config: &SshTunnelConfig) -> Result<u32, SshTunnelProcessError> {
+        if self.is_running()? {
+            return Err(SshTunnelProcessError::AlreadyRunning);
+        }
+
+        let command =
+            SshTunnelCommand::from_config(config).map_err(SshTunnelProcessError::InvalidConfig)?;
+        let tunnel = self
+            .spawner
+            .spawn(&command)
+            .map_err(SshTunnelProcessError::Io)?;
+        let process_id = tunnel.id();
+        self.tunnel = Some(tunnel);
+
+        Ok(process_id)
+    }
+
+    pub fn stop(&mut self) -> Result<(), SshTunnelProcessError> {
+        let Some(mut tunnel) = self.tunnel.take() else {
+            return Err(SshTunnelProcessError::NotRunning);
+        };
+
+        if tunnel
+            .try_wait()
+            .map_err(SshTunnelProcessError::Io)?
+            .is_some()
+        {
+            return Err(SshTunnelProcessError::NotRunning);
+        }
+
+        tunnel.kill().map_err(SshTunnelProcessError::Io)?;
+        tunnel.wait().map_err(SshTunnelProcessError::Io)?;
+        Ok(())
+    }
+
+    pub fn is_running(&mut self) -> Result<bool, SshTunnelProcessError> {
+        let Some(tunnel) = &mut self.tunnel else {
+            return Ok(false);
+        };
+
+        match tunnel.try_wait().map_err(SshTunnelProcessError::Io)? {
+            Some(_) => {
+                self.tunnel = None;
+                Ok(false)
+            }
+            None => Ok(true),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum SshTunnelProcessError {
+    InvalidConfig(ConfigError),
+    Io(std::io::Error),
+    AlreadyRunning,
+    NotRunning,
+}
+
+impl PartialEq for SshTunnelProcessError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::InvalidConfig(left), Self::InvalidConfig(right)) => left == right,
+            (Self::AlreadyRunning, Self::AlreadyRunning) => true,
+            (Self::NotRunning, Self::NotRunning) => true,
+            (Self::Io(left), Self::Io(right)) => left.kind() == right.kind(),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for SshTunnelProcessError {}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ServerEvent {
     ControlPlaneStarted { bind_address: String, port: u16 },
     ControlPlaneStopped,
+    SshTunnelStarted { process_id: u32 },
+    SshTunnelStopped,
+    SshTunnelFailed { reason: String },
     RequestAuthorized { operation: String },
     RequestRejected { operation: String },
     ConfigLoaded { path: PathBuf },
@@ -357,6 +500,13 @@ fn format_event(event: &ServerEvent) -> String {
             format!("event=control_plane_started bind_address={bind_address} port={port}")
         }
         ServerEvent::ControlPlaneStopped => "event=control_plane_stopped".to_string(),
+        ServerEvent::SshTunnelStarted { process_id } => {
+            format!("event=ssh_tunnel_started process_id={process_id}")
+        }
+        ServerEvent::SshTunnelStopped => "event=ssh_tunnel_stopped".to_string(),
+        ServerEvent::SshTunnelFailed { reason } => {
+            format!("event=ssh_tunnel_failed reason={}", encode_field(reason))
+        }
         ServerEvent::RequestAuthorized { operation } => {
             format!("event=request_authorized operation={operation}")
         }
@@ -1079,6 +1229,78 @@ mod tests {
     }
 
     #[test]
+    fn ssh_tunnel_supervisor_starts_and_stops_tunnel() {
+        let spawner = FakeSshTunnelSpawner::default();
+        let mut supervisor = SshTunnelSupervisor::new(spawner);
+        let config = SshTunnelConfig {
+            user: "biplab".to_string(),
+            host: "workstation.local".to_string(),
+            local_port: 7676,
+            remote_port: 7677,
+        };
+
+        assert_eq!(supervisor.start(&config), Ok(42));
+        assert_eq!(supervisor.is_running(), Ok(true));
+        assert_eq!(supervisor.stop(), Ok(()));
+        assert_eq!(supervisor.is_running(), Ok(false));
+    }
+
+    #[test]
+    fn ssh_tunnel_supervisor_rejects_double_start() {
+        let spawner = FakeSshTunnelSpawner::default();
+        let mut supervisor = SshTunnelSupervisor::new(spawner);
+        let config = SshTunnelConfig {
+            user: "biplab".to_string(),
+            host: "workstation.local".to_string(),
+            local_port: 7676,
+            remote_port: 7677,
+        };
+
+        assert_eq!(supervisor.start(&config), Ok(42));
+        assert_eq!(
+            supervisor.start(&config),
+            Err(SshTunnelProcessError::AlreadyRunning)
+        );
+    }
+
+    #[test]
+    fn ssh_tunnel_supervisor_rejects_invalid_config() {
+        let spawner = FakeSshTunnelSpawner::default();
+        let mut supervisor = SshTunnelSupervisor::new(spawner);
+        let config = SshTunnelConfig {
+            user: " ".to_string(),
+            host: "workstation.local".to_string(),
+            local_port: 7676,
+            remote_port: 7677,
+        };
+
+        assert_eq!(
+            supervisor.start(&config),
+            Err(SshTunnelProcessError::InvalidConfig(
+                ConfigError::MissingSshUser
+            ))
+        );
+    }
+
+    #[test]
+    fn ssh_tunnel_supervisor_clears_exited_tunnel() {
+        let spawner = FakeSshTunnelSpawner {
+            exited_on_spawn: true,
+        };
+        let mut supervisor = SshTunnelSupervisor::new(spawner);
+        let config = SshTunnelConfig {
+            user: "biplab".to_string(),
+            host: "workstation.local".to_string(),
+            local_port: 7676,
+            remote_port: 7677,
+        };
+
+        assert_eq!(supervisor.start(&config), Ok(42));
+        assert_eq!(supervisor.is_running(), Ok(false));
+        assert_eq!(supervisor.stop(), Err(SshTunnelProcessError::NotRunning));
+    }
+
+    #[test]
     fn in_memory_event_sink_records_events() {
         let mut sink = InMemoryEventSink::default();
 
@@ -1122,6 +1344,50 @@ event=request_authorized operation=health\n"
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct FakeSshTunnelSpawner {
+        exited_on_spawn: bool,
+    }
+
+    impl SshTunnelSpawner for FakeSshTunnelSpawner {
+        type Tunnel = FakeManagedSshTunnel;
+
+        fn spawn(&self, _command: &SshTunnelCommand) -> std::io::Result<Self::Tunnel> {
+            Ok(FakeManagedSshTunnel {
+                running: !self.exited_on_spawn,
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct FakeManagedSshTunnel {
+        running: bool,
+    }
+
+    impl ManagedSshTunnel for FakeManagedSshTunnel {
+        fn id(&self) -> u32 {
+            42
+        }
+
+        fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+            if self.running {
+                Ok(None)
+            } else {
+                Ok(Some(0))
+            }
+        }
+
+        fn kill(&mut self) -> std::io::Result<()> {
+            self.running = false;
+            Ok(())
+        }
+
+        fn wait(&mut self) -> std::io::Result<i32> {
+            self.running = false;
+            Ok(0)
+        }
     }
 
     #[test]
