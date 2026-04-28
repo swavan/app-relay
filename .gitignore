@@ -1,6 +1,7 @@
 /target/
 /.codex
 /.codex/
+/swavan-remote.md
 /apps/client-tauri/node_modules/
 /apps/client-tauri/dist/
 /apps/client-tauri/src-tauri/target/
