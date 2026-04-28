@@ -51,19 +51,19 @@ export class LocalStorageConnectionProfileStore implements ConnectionProfileStor
 }
 
 export function validateConnectionProfile(profile: ConnectionProfile): void {
-  if (profile.id.trim() === "") {
+  if (isBlank(profile.id)) {
     throw new Error("connection profile id is required");
   }
 
-  if (profile.label.trim() === "") {
+  if (isBlank(profile.label)) {
     throw new Error("connection profile label is required");
   }
 
-  if (profile.sshUser.trim() === "") {
+  if (isBlank(profile.sshUser)) {
     throw new Error("ssh user is required");
   }
 
-  if (profile.sshHost.trim() === "") {
+  if (isBlank(profile.sshHost)) {
     throw new Error("ssh host is required");
   }
 
@@ -71,7 +71,7 @@ export function validateConnectionProfile(profile: ConnectionProfile): void {
     throw new Error("ssh tunnel ports must be between 1 and 65535");
   }
 
-  if (profile.authToken.trim() === "") {
+  if (isBlank(profile.authToken)) {
     throw new Error("auth token is required");
   }
 }
@@ -95,4 +95,8 @@ function isConnectionProfile(value: unknown): value is ConnectionProfile {
 
 function isValidPort(port: number): boolean {
   return Number.isInteger(port) && port >= 1 && port <= 65_535;
+}
+
+function isBlank(value: string): boolean {
+  return value.trim().length === 0;
 }
