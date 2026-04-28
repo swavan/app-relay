@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Swavan AppRelay",
+  "version": "0.1.0",
+  "identifier": "dev.swavan.apprelay",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Swavan AppRelay",
+        "width": 960,
+        "height": 720,
+        "minWidth": 320,
+        "minHeight": 520
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  }
+}
