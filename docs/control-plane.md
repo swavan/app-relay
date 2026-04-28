@@ -69,7 +69,7 @@ changing the UI contract.
 
 ## Application Discovery
 
-Linux uses `.desktop` entries from:
+Linux currently uses `.desktop` entries from:
 
 - `/usr/share/applications`
 - `$HOME/.local/share/applications`
@@ -77,5 +77,9 @@ Linux uses `.desktop` entries from:
 The parser includes visible `Type=Application` entries and skips hidden,
 NoDisplay, and non-application entries. Icons are not extracted yet.
 
-Other platforms return typed unsupported errors until their native discovery
-backends are implemented.
+macOS and Windows are expected desktop server targets, but their native
+application discovery backends are not implemented in this slice. They return
+typed unsupported errors with a "not implemented yet" reason.
+
+iOS and Android are client targets for this project, so they do not expose
+desktop application discovery from the server side.

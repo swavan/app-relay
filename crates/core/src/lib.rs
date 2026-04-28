@@ -367,14 +367,25 @@ impl DefaultCapabilityService {
 impl CapabilityService for DefaultCapabilityService {
     fn platform_capabilities(&self) -> Vec<PlatformCapability> {
         let unsupported_reason = "feature planned but not implemented in Phase 1";
-        let app_discovery = if self.platform == Platform::Linux {
-            PlatformCapability::supported(self.platform, Feature::AppDiscovery)
-        } else {
-            PlatformCapability::unsupported(
+        let app_discovery = match self.platform {
+            Platform::Linux => {
+                PlatformCapability::supported(self.platform, Feature::AppDiscovery)
+            }
+            Platform::Macos | Platform::Windows => PlatformCapability::unsupported(
                 self.platform,
                 Feature::AppDiscovery,
-                unsupported_reason,
-            )
+                "desktop application discovery backend is not implemented for this platform yet",
+            ),
+            Platform::Android | Platform::Ios => PlatformCapability::unsupported(
+                self.platform,
+                Feature::AppDiscovery,
+                "mobile platforms are client targets and do not expose desktop application discovery",
+            ),
+            Platform::Unknown => PlatformCapability::unsupported(
+                self.platform,
+                Feature::AppDiscovery,
+                "unknown platform cannot expose desktop application discovery",
+            ),
         };
 
         vec![
@@ -570,6 +581,22 @@ mod tests {
         assert!(capabilities
             .iter()
             .any(|capability| capability.feature == Feature::AppDiscovery && capability.supported));
+    }
+
+    #[test]
+    fn desktop_capabilities_mark_missing_backends_as_not_implemented() {
+        let service = DefaultCapabilityService::new(Platform::Windows);
+        let capabilities = service.platform_capabilities();
+        let app_discovery = capabilities
+            .iter()
+            .find(|capability| capability.feature == Feature::AppDiscovery)
+            .expect("app discovery capability");
+
+        assert!(!app_discovery.supported);
+        assert_eq!(
+            app_discovery.reason.as_deref(),
+            Some("desktop application discovery backend is not implemented for this platform yet")
+        );
     }
 
     #[test]

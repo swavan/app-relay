@@ -63,10 +63,17 @@ enum ApplicationDiscoveryService {
 
 impl ApplicationDiscoveryService {
     fn for_platform(platform: Platform) -> Self {
-        if platform == Platform::Linux {
-            Self::DesktopEntries(DesktopEntryApplicationDiscovery::linux_defaults())
-        } else {
-            Self::Unsupported(UnsupportedApplicationDiscovery::new(platform))
+        match platform {
+            Platform::Linux => {
+                Self::DesktopEntries(DesktopEntryApplicationDiscovery::linux_defaults())
+            }
+            Platform::Macos
+            | Platform::Windows
+            | Platform::Android
+            | Platform::Ios
+            | Platform::Unknown => {
+                Self::Unsupported(UnsupportedApplicationDiscovery::new(platform))
+            }
         }
     }
 }
