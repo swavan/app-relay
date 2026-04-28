@@ -93,6 +93,8 @@ Scope:
   viewport validation, active-session tracking, resize recording, and clean close
 - completed client bridge slice: Tauri commands and UI action for requesting a
   session from the application list
+- completed application metadata slice: Linux `.desktop` launch/icon metadata
+  and macOS bundle launch/icon metadata flow through the control plane
 - application listing with names and icons
 - launch or attach-to-running-app flow
 - selected-window identity model

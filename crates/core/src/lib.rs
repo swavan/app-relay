@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use swavan_protocol::{
-    ApplicationSession, ApplicationSummary, CreateSessionRequest, Feature, HealthStatus, Platform,
-    PlatformCapability, ResizeSessionRequest, SelectedWindow, SessionState, SwavanError,
-    ViewportSize,
+    AppIcon, ApplicationLaunch, ApplicationSession, ApplicationSummary, CreateSessionRequest,
+    Feature, HealthStatus, Platform, PlatformCapability, ResizeSessionRequest, SelectedWindow,
+    SessionState, SwavanError, ViewportSize,
 };
 
 pub trait HealthService {
@@ -1085,6 +1085,8 @@ fn parse_desktop_entry(path: &Path) -> Option<ApplicationSummary> {
     let mut hidden = false;
     let mut no_display = false;
     let mut name = None;
+    let mut icon = None;
+    let mut exec = None;
 
     for line in contents.lines().map(str::trim) {
         if line.is_empty() || line.starts_with('#') {
@@ -1109,6 +1111,8 @@ fn parse_desktop_entry(path: &Path) -> Option<ApplicationSummary> {
             "Hidden" => hidden = value == "true",
             "NoDisplay" => no_display = value == "true",
             "Name" => name = Some(value.trim().to_string()),
+            "Icon" => icon = Some(value.trim().to_string()),
+            "Exec" => exec = Some(value.trim().to_string()),
             _ => {}
         }
     }
@@ -1123,7 +1127,16 @@ fn parse_desktop_entry(path: &Path) -> Option<ApplicationSummary> {
     Some(ApplicationSummary {
         id,
         name,
-        icon: None,
+        icon: icon
+            .filter(|value| !value.is_empty())
+            .map(|source| AppIcon {
+                mime_type: "application/x-icon-theme-name".to_string(),
+                bytes: Vec::new(),
+                source: Some(source),
+            }),
+        launch: exec
+            .filter(|value| !value.is_empty())
+            .map(|command| ApplicationLaunch::DesktopCommand { command }),
     })
 }
 
@@ -1198,6 +1211,7 @@ fn parse_macos_app_bundle(path: &Path) -> Option<ApplicationSummary> {
             path.file_stem()
                 .map(|value| value.to_string_lossy().into_owned())
         })?;
+    let icon = plist_string_value(&contents, "CFBundleIconFile");
 
     if id.trim().is_empty() || name.trim().is_empty() {
         return None;
@@ -1206,7 +1220,16 @@ fn parse_macos_app_bundle(path: &Path) -> Option<ApplicationSummary> {
     Some(ApplicationSummary {
         id,
         name,
-        icon: None,
+        icon: icon
+            .filter(|value| !value.is_empty())
+            .map(|source| AppIcon {
+                mime_type: "application/x-macos-icon-name".to_string(),
+                bytes: Vec::new(),
+                source: Some(source),
+            }),
+        launch: Some(ApplicationLaunch::MacosBundle {
+            bundle_path: path.display().to_string(),
+        }),
     })
 }
 
@@ -1672,7 +1695,7 @@ event=request_authorized operation=health\n"
         fs::create_dir_all(&root).expect("create test applications directory");
         fs::write(
             root.join("visible.desktop"),
-            "[Desktop Entry]\nType=Application\nName=Visible App\nExec=visible\n",
+            "[Desktop Entry]\nType=Application\nName=Visible App\nExec=visible --new-window\nIcon=visible-icon\n",
         )
         .expect("write visible desktop entry");
         fs::write(
@@ -1696,7 +1719,14 @@ event=request_authorized operation=health\n"
             vec![ApplicationSummary {
                 id: "visible".to_string(),
                 name: "Visible App".to_string(),
-                icon: None,
+                icon: Some(AppIcon {
+                    mime_type: "application/x-icon-theme-name".to_string(),
+                    bytes: Vec::new(),
+                    source: Some("visible-icon".to_string()),
+                }),
+                launch: Some(ApplicationLaunch::DesktopCommand {
+                    command: "visible --new-window".to_string(),
+                }),
             }]
         );
 
@@ -1717,6 +1747,8 @@ event=request_authorized operation=health\n"
   <string>dev.swavan.visible</string>
   <key>CFBundleDisplayName</key>
   <string>Visible Mac App</string>
+  <key>CFBundleIconFile</key>
+  <string>VisibleIcon</string>
 </dict>
 </plist>
 "#,
@@ -1734,7 +1766,14 @@ event=request_authorized operation=health\n"
             vec![ApplicationSummary {
                 id: "dev.swavan.visible".to_string(),
                 name: "Visible Mac App".to_string(),
-                icon: None,
+                icon: Some(AppIcon {
+                    mime_type: "application/x-macos-icon-name".to_string(),
+                    bytes: Vec::new(),
+                    source: Some("VisibleIcon".to_string()),
+                }),
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("Visible.app").display().to_string(),
+                }),
             }]
         );
 
@@ -1770,6 +1809,9 @@ event=request_authorized operation=health\n"
                 id: "Fallback".to_string(),
                 name: "Fallback Name".to_string(),
                 icon: None,
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("Fallback.app").display().to_string(),
+                }),
             }]
         );
 

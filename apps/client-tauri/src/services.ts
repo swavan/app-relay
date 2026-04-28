@@ -16,7 +16,14 @@ export type Capability = {
 export type AppSummary = {
   id: string;
   name: string;
-  iconUrl?: string;
+  icon?: {
+    mimeType: string;
+    source?: string;
+  };
+  launch?: {
+    kind: "desktopCommand" | "macosBundle";
+    value: string;
+  };
 };
 
 export type ViewportSize = {
