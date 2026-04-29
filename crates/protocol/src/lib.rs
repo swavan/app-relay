@@ -9,10 +9,10 @@ mod input;
 mod video_stream;
 
 pub use audio_stream::{
-    AudioCapability, AudioCaptureScope, AudioDeviceSelection, AudioMuteState, AudioSource,
-    AudioStreamCapabilities, AudioStreamHealth, AudioStreamSession, AudioStreamState,
-    AudioStreamStats, MicrophoneMode, StartAudioStreamRequest, StopAudioStreamRequest,
-    UpdateAudioStreamRequest,
+    AudioBackendContract, AudioBackendKind, AudioBackendReadiness, AudioCapability,
+    AudioCaptureScope, AudioDeviceSelection, AudioMuteState, AudioSource, AudioStreamCapabilities,
+    AudioStreamHealth, AudioStreamSession, AudioStreamState, AudioStreamStats, MicrophoneMode,
+    StartAudioStreamRequest, StopAudioStreamRequest, UpdateAudioStreamRequest,
 };
 pub use input::{
     ButtonAction, ClientPoint, ForwardInputRequest, InputBackendKind, InputDelivery,
@@ -126,6 +126,19 @@ impl PlatformCapability {
             feature,
             supported: true,
             reason: None,
+        }
+    }
+
+    pub fn supported_with_reason(
+        platform: Platform,
+        feature: Feature,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            platform,
+            feature,
+            supported: true,
+            reason: Some(reason.into()),
         }
     }
 

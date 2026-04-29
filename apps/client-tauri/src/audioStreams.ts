@@ -1,4 +1,6 @@
 export type MicrophoneMode = "disabled" | "enabled";
+export type AudioBackendKind = "controlPlane" | "pipeWire" | "coreAudio" | "wasapi" | "unsupported";
+export type AudioBackendReadiness = "controlPlaneOnly" | "plannedNative" | "unsupported";
 
 export type AudioStreamSession = {
   id: string;
@@ -9,6 +11,14 @@ export type AudioStreamSession = {
     selectedWindowId: string;
     applicationId: string;
     title: string;
+  };
+  backend?: {
+    controlPlane: AudioBackendKind;
+    plannedCapture: AudioBackendKind;
+    plannedPlayback: AudioBackendKind;
+    plannedMicrophone: AudioBackendKind;
+    readiness: AudioBackendReadiness;
+    notes: string[];
   };
   devices: {
     outputDeviceId?: string;
