@@ -1,17 +1,48 @@
 use apprelay_core::ServerConfig;
 use apprelay_protocol::{
     AppRelayError, AudioBackendFailureKind, AudioBackendKind, AudioBackendLeg,
-    AudioBackendReadiness, AudioStreamState, ButtonAction, ClientPoint, ControlAuth, ControlError,
-    CreateSessionRequest, Feature, ForwardInputRequest, InputDeliveryStatus, InputEvent,
-    MappedInputEvent, MicrophoneMode, NegotiateVideoStreamRequest, Platform, PointerButton,
-    ReconnectVideoStreamRequest, ResizeSessionRequest, ServerPoint, ServerVersion, SessionState,
-    StartAudioStreamRequest, StartVideoStreamRequest, StopAudioStreamRequest,
-    StopVideoStreamRequest, UpdateAudioStreamRequest, VideoEncodingPipelineState,
-    VideoResolutionAdaptationReason, VideoStreamFailureKind, VideoStreamNegotiationState,
-    VideoStreamRecoveryAction, VideoStreamState, ViewportSize, WebRtcIceCandidate, WebRtcSdpType,
-    WebRtcSessionDescription,
+    AudioBackendReadiness, AudioStreamSession, AudioStreamState, ButtonAction, ClientPoint,
+    ControlAuth, ControlError, CreateSessionRequest, Feature, ForwardInputRequest,
+    InputDeliveryStatus, InputEvent, MappedInputEvent, MicrophoneMode, NegotiateVideoStreamRequest,
+    Platform, PointerButton, ReconnectVideoStreamRequest, ResizeSessionRequest, ServerPoint,
+    ServerVersion, SessionState, StartAudioStreamRequest, StartVideoStreamRequest,
+    StopAudioStreamRequest, StopVideoStreamRequest, UpdateAudioStreamRequest,
+    VideoEncodingPipelineState, VideoResolutionAdaptationReason, VideoStreamFailureKind,
+    VideoStreamNegotiationState, VideoStreamRecoveryAction, VideoStreamState, ViewportSize,
+    WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription,
 };
 use apprelay_server::{ServerControlPlane, ServerServices};
+
+fn start_audio_stream_for_platform(platform: Platform) -> AudioStreamSession {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(platform, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+
+    control_plane
+        .start_audio_stream(
+            &auth,
+            StartAudioStreamRequest {
+                session_id: session.id,
+                microphone: MicrophoneMode::Enabled,
+                system_audio_muted: false,
+                microphone_muted: true,
+                output_device_id: None,
+                input_device_id: None,
+            },
+        )
+        .expect("start audio stream")
+}
 
 #[test]
 fn control_plane_rejects_unauthorized_requests() {
@@ -724,6 +755,101 @@ fn control_plane_starts_audio_stream_on_desktop_platforms() {
                 && status.failure.as_ref().is_some_and(|failure| {
                     failure.kind == AudioBackendFailureKind::NativeBackendNotImplemented
                 })
+        }));
+    }
+}
+
+#[cfg(not(feature = "pipewire-capture"))]
+#[test]
+fn control_plane_default_linux_audio_stream_has_no_pipewire_capture_boundary() {
+    let audio = start_audio_stream_for_platform(Platform::Linux);
+    let backend = audio.backend.as_ref().expect("audio backend contract");
+
+    assert!(backend
+        .notes
+        .iter()
+        .all(|note| !note.contains("PipeWire capture has an adapter boundary")));
+    let capture = backend
+        .statuses
+        .iter()
+        .find(|status| status.leg == AudioBackendLeg::Capture)
+        .expect("capture status");
+    assert!(!capture
+        .failure
+        .as_ref()
+        .expect("capture failure")
+        .message
+        .contains("adapter boundary"));
+}
+
+#[cfg(feature = "pipewire-capture")]
+#[test]
+fn control_plane_pipewire_capture_feature_reports_linux_adapter_boundary_only() {
+    let audio = start_audio_stream_for_platform(Platform::Linux);
+    let backend = audio.backend.as_ref().expect("audio backend contract");
+
+    assert_eq!(backend.readiness, AudioBackendReadiness::ControlPlaneOnly);
+    assert!(backend
+        .notes
+        .iter()
+        .any(|note| note.contains("PipeWire capture has an adapter boundary")));
+
+    let capture = backend
+        .statuses
+        .iter()
+        .find(|status| status.leg == AudioBackendLeg::Capture)
+        .expect("capture status");
+    assert!(!capture.available);
+    assert!(!capture.media.available);
+    assert_eq!(capture.media.packets_sent, 0);
+    assert_eq!(capture.media.packets_received, 0);
+    assert_eq!(capture.media.bytes_sent, 0);
+    assert_eq!(capture.media.bytes_received, 0);
+    assert!(capture
+        .failure
+        .as_ref()
+        .expect("capture failure")
+        .message
+        .contains("PipeWire adapter boundary"));
+
+    for planned_leg in [
+        AudioBackendLeg::Playback,
+        AudioBackendLeg::ClientMicrophoneCapture,
+        AudioBackendLeg::ServerMicrophoneInjection,
+    ] {
+        let status = backend
+            .statuses
+            .iter()
+            .find(|status| status.leg == planned_leg)
+            .expect("planned leg status");
+        assert!(!status.available);
+        assert!(!status.media.available);
+        assert!(!status
+            .failure
+            .as_ref()
+            .expect("planned leg failure")
+            .message
+            .contains("adapter boundary"));
+    }
+}
+
+#[cfg(feature = "pipewire-capture")]
+#[test]
+fn control_plane_pipewire_capture_feature_does_not_affect_macos_or_windows() {
+    for platform in [Platform::Macos, Platform::Windows] {
+        let audio = start_audio_stream_for_platform(platform);
+        let backend = audio.backend.as_ref().expect("audio backend contract");
+
+        assert!(backend
+            .notes
+            .iter()
+            .all(|note| !note.contains("PipeWire capture has an adapter boundary")));
+        assert!(backend.statuses.iter().all(|status| {
+            !status.available
+                && status
+                    .failure
+                    .as_ref()
+                    .is_some_and(|failure| !failure.message.contains("PipeWire adapter boundary"))
         }));
     }
 }
