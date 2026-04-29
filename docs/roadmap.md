@@ -106,7 +106,8 @@ Scope:
 - completed permission allowlist slice: Rust-owned application grants persist
   to disk, Tauri enforces grants before creating sessions, and the client only
   prompts for approval
-- application listing with names and icons
+- completed application listing icon slice: Tauri exposes renderable icon data
+  when available, and the client renders image icons or stable fallback badges
 - launch or attach-to-running-app flow
 - selected-window identity model
 - server-side session lifecycle

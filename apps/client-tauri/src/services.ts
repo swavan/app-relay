@@ -18,6 +18,7 @@ export type AppSummary = {
   name: string;
   icon?: {
     mimeType: string;
+    dataUrl?: string;
     source?: string;
   };
   launch?: {

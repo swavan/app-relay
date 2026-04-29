@@ -87,6 +87,40 @@ describe("buildAppViewModel", () => {
     expect(viewModel.healthText).toBe("0.1.0");
     expect(viewModel.capabilitiesText).toBe("1/2");
     expect(viewModel.sessionTitle).toBe("Terminal");
-    expect(viewModel.apps).toHaveLength(1);
+    expect(viewModel.apps).toEqual([
+      {
+        id: "terminal",
+        name: "Terminal",
+        iconView: {
+          kind: "label",
+          label: "TE",
+          title: "Terminal",
+        },
+      },
+    ]);
+  });
+
+  it("uses icon image data when available", () => {
+    const viewModel = buildAppViewModel({
+      ...baseInput,
+      apps: [
+        {
+          id: "terminal",
+          name: "Terminal",
+          icon: {
+            mimeType: "image/png",
+            dataUrl: "data:image/png;base64,iVBORw==",
+            source: "terminal.png",
+          },
+        },
+      ],
+    });
+
+    expect(viewModel.apps[0].iconView).toEqual({
+      kind: "image",
+      url: "data:image/png;base64,iVBORw==",
+      label: "Terminal",
+      title: "terminal.png",
+    });
   });
 });
