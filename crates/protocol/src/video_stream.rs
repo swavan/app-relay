@@ -25,6 +25,7 @@ pub struct VideoStreamSession {
     pub session_id: String,
     pub selected_window_id: String,
     pub viewport: ViewportSize,
+    pub capture_source: VideoCaptureSource,
     pub signaling: VideoStreamSignaling,
     pub stats: VideoStreamStats,
     pub health: VideoStreamHealth,
@@ -37,6 +38,21 @@ pub struct VideoStreamSession {
 pub struct VideoStreamSignaling {
     pub kind: VideoStreamSignalingKind,
     pub offer: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoCaptureSource {
+    pub scope: VideoCaptureScope,
+    pub selected_window_id: String,
+    pub application_id: String,
+    pub title: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoCaptureScope {
+    SelectedWindow,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -81,6 +97,12 @@ mod tests {
             session_id: "session-1".to_string(),
             selected_window_id: "window-session-1".to_string(),
             viewport: ViewportSize::new(1280, 720),
+            capture_source: VideoCaptureSource {
+                scope: VideoCaptureScope::SelectedWindow,
+                selected_window_id: "window-session-1".to_string(),
+                application_id: "terminal".to_string(),
+                title: "Terminal".to_string(),
+            },
             signaling: VideoStreamSignaling {
                 kind: VideoStreamSignalingKind::WebRtcOffer,
                 offer: Some("offer".to_string()),

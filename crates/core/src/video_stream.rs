@@ -1,8 +1,8 @@
 use swavan_protocol::{
     ApplicationSession, Feature, Platform, ReconnectVideoStreamRequest, ResizeSessionRequest,
-    SessionState, StartVideoStreamRequest, StopVideoStreamRequest, SwavanError, VideoStreamHealth,
-    VideoStreamSession, VideoStreamSignaling, VideoStreamSignalingKind, VideoStreamState,
-    VideoStreamStats,
+    SessionState, StartVideoStreamRequest, StopVideoStreamRequest, SwavanError, VideoCaptureScope,
+    VideoCaptureSource, VideoStreamHealth, VideoStreamSession, VideoStreamSignaling,
+    VideoStreamSignalingKind, VideoStreamState, VideoStreamStats,
 };
 
 pub trait VideoStreamService {
@@ -28,12 +28,18 @@ pub trait WindowCaptureBackend {
         &self,
         stream_id: &str,
         session: &ApplicationSession,
-    ) -> Result<VideoStreamSignaling, SwavanError>;
+    ) -> Result<WindowCaptureStart, SwavanError>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WindowCaptureStart {
+    pub source: VideoCaptureSource,
+    pub signaling: VideoStreamSignaling,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WindowCaptureBackendService {
-    RecordOnly,
+    LinuxSelectedWindow,
     Unsupported { platform: Platform },
 }
 
@@ -42,14 +48,22 @@ impl WindowCaptureBackend for WindowCaptureBackendService {
         &self,
         stream_id: &str,
         session: &ApplicationSession,
-    ) -> Result<VideoStreamSignaling, SwavanError> {
+    ) -> Result<WindowCaptureStart, SwavanError> {
         match self {
-            Self::RecordOnly => Ok(VideoStreamSignaling {
-                kind: VideoStreamSignalingKind::WebRtcOffer,
-                offer: Some(format!(
-                    "swavan-webrtc-offer:{stream_id}:{}",
-                    session.selected_window.id
-                )),
+            Self::LinuxSelectedWindow => Ok(WindowCaptureStart {
+                source: VideoCaptureSource {
+                    scope: VideoCaptureScope::SelectedWindow,
+                    selected_window_id: session.selected_window.id.clone(),
+                    application_id: session.selected_window.application_id.clone(),
+                    title: session.selected_window.title.clone(),
+                },
+                signaling: VideoStreamSignaling {
+                    kind: VideoStreamSignalingKind::WebRtcOffer,
+                    offer: Some(format!(
+                        "swavan-webrtc-offer:{stream_id}:{}",
+                        session.selected_window.id
+                    )),
+                },
             }),
             Self::Unsupported { platform } => Err(SwavanError::unsupported(
                 *platform,
@@ -84,7 +98,7 @@ impl InMemoryVideoStreamService {
 
 impl Default for InMemoryVideoStreamService {
     fn default() -> Self {
-        Self::new(WindowCaptureBackendService::RecordOnly)
+        Self::new(WindowCaptureBackendService::LinuxSelectedWindow)
     }
 }
 
@@ -102,13 +116,14 @@ impl VideoStreamService for InMemoryVideoStreamService {
         }
 
         let stream_id = self.next_stream_id();
-        let signaling = self.capture_backend.start_capture(&stream_id, session)?;
+        let capture = self.capture_backend.start_capture(&stream_id, session)?;
         let stream = VideoStreamSession {
             id: stream_id,
             session_id: session.id.clone(),
             selected_window_id: session.selected_window.id.clone(),
             viewport: session.viewport.clone(),
-            signaling,
+            capture_source: capture.source,
+            signaling: capture.signaling,
             stats: VideoStreamStats {
                 frames_encoded: 0,
                 bitrate_kbps: 0,
@@ -229,6 +244,18 @@ mod tests {
         assert_eq!(stream.id, "stream-1");
         assert_eq!(stream.session_id, session.id);
         assert_eq!(stream.selected_window_id, session.selected_window.id);
+        assert_eq!(
+            stream.capture_source.scope,
+            VideoCaptureScope::SelectedWindow
+        );
+        assert_eq!(
+            stream.capture_source.selected_window_id,
+            session.selected_window.id
+        );
+        assert_eq!(
+            stream.capture_source.application_id,
+            session.selected_window.application_id
+        );
         assert_eq!(stream.viewport, ViewportSize::new(1280, 720));
         assert_eq!(stream.state, VideoStreamState::Starting);
         assert_eq!(stream.signaling.kind, VideoStreamSignalingKind::WebRtcOffer);

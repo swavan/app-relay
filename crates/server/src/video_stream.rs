@@ -1,7 +1,7 @@
-use swavan_core::{InMemoryVideoStreamService, VideoStreamService};
+use swavan_core::{InMemoryVideoStreamService, VideoStreamService, WindowCaptureBackendService};
 use swavan_protocol::{
-    ApplicationSession, ReconnectVideoStreamRequest, ResizeSessionRequest, StartVideoStreamRequest,
-    StopVideoStreamRequest, SwavanError, VideoStreamSession,
+    ApplicationSession, Platform, ReconnectVideoStreamRequest, ResizeSessionRequest,
+    StartVideoStreamRequest, StopVideoStreamRequest, SwavanError, VideoStreamSession,
 };
 
 #[derive(Debug)]
@@ -13,6 +13,21 @@ impl VideoStreamControl {
     pub fn new() -> Self {
         Self {
             stream_service: InMemoryVideoStreamService::default(),
+        }
+    }
+
+    pub fn for_platform(platform: Platform) -> Self {
+        let capture_backend = match platform {
+            Platform::Linux => WindowCaptureBackendService::LinuxSelectedWindow,
+            Platform::Android
+            | Platform::Ios
+            | Platform::Macos
+            | Platform::Windows
+            | Platform::Unknown => WindowCaptureBackendService::Unsupported { platform },
+        };
+
+        Self {
+            stream_service: InMemoryVideoStreamService::new(capture_backend),
         }
     }
 
