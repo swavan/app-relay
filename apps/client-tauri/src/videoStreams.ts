@@ -22,6 +22,16 @@ export type VideoEncodingPipeline = {
       targetBitrateKbps: number;
       keyframeIntervalFrames: number;
     };
+    adaptation: {
+      requestedViewport: ViewportSize;
+      currentTarget: ViewportSize;
+      limits: {
+        maxWidth: number;
+        maxHeight: number;
+        maxPixels: number;
+      };
+      reason: "matchesViewport" | "cappedToLimits";
+    };
   };
   state: "configured" | "encoding" | "drained";
   output: {

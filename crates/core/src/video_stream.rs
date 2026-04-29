@@ -3,7 +3,8 @@ use apprelay_protocol::{
     ReconnectVideoStreamRequest, ResizeSessionRequest, SessionState, StartVideoStreamRequest,
     StopVideoStreamRequest, VideoCaptureScope, VideoCaptureSource, VideoCodec,
     VideoEncodingContract, VideoEncodingOutput, VideoEncodingPipeline, VideoEncodingPipelineState,
-    VideoEncodingTarget, VideoHardwareAcceleration, VideoPixelFormat, VideoStreamHealth,
+    VideoEncodingTarget, VideoHardwareAcceleration, VideoPixelFormat, VideoResolutionAdaptation,
+    VideoResolutionAdaptationReason, VideoResolutionLimits, VideoStreamHealth,
     VideoStreamNegotiationState, VideoStreamSession, VideoStreamSignaling,
     VideoStreamSignalingKind, VideoStreamState, VideoStreamStats, WebRtcIceCandidate,
     WebRtcSdpType, WebRtcSessionDescription,
@@ -51,19 +52,26 @@ pub struct InMemoryVideoEncodingPipeline;
 impl InMemoryVideoEncodingPipeline {
     const MAX_FPS: u32 = 30;
     const KEYFRAME_INTERVAL_FRAMES: u32 = 60;
+    const MIN_DIMENSION: u32 = 2;
+    const MAX_WIDTH: u32 = 1920;
+    const MAX_HEIGHT: u32 = 1080;
+    const MAX_PIXELS: u32 = Self::MAX_WIDTH * Self::MAX_HEIGHT;
 
     pub fn configured(viewport: apprelay_protocol::ViewportSize) -> VideoEncodingPipeline {
+        let adaptation = Self::adapt_resolution(viewport);
+
         VideoEncodingPipeline {
             contract: VideoEncodingContract {
                 codec: VideoCodec::H264,
                 pixel_format: VideoPixelFormat::Rgba,
                 hardware_acceleration: VideoHardwareAcceleration::None,
                 target: VideoEncodingTarget {
-                    target_bitrate_kbps: Self::target_bitrate_kbps(&viewport),
-                    resolution: viewport,
+                    target_bitrate_kbps: Self::target_bitrate_kbps(&adaptation.current_target),
+                    resolution: adaptation.current_target.clone(),
                     max_fps: Self::MAX_FPS,
                     keyframe_interval_frames: Self::KEYFRAME_INTERVAL_FRAMES,
                 },
+                adaptation,
             },
             state: VideoEncodingPipelineState::Configured,
             output: VideoEncodingOutput {
@@ -112,9 +120,11 @@ impl InMemoryVideoEncodingPipeline {
                 VideoEncodingPipelineState::Configured
             };
 
-        pipeline.contract.target.resolution = viewport;
+        let adaptation = Self::adapt_resolution(viewport);
+        pipeline.contract.target.resolution = adaptation.current_target.clone();
         pipeline.contract.target.target_bitrate_kbps =
             Self::target_bitrate_kbps(&pipeline.contract.target.resolution);
+        pipeline.contract.adaptation = adaptation;
         pipeline.state = state;
     }
 
@@ -139,6 +149,67 @@ impl InMemoryVideoEncodingPipeline {
         (pixels_per_second / 10_000)
             .max(250)
             .min(u64::from(u32::MAX)) as u32
+    }
+
+    fn adapt_resolution(
+        requested_viewport: apprelay_protocol::ViewportSize,
+    ) -> VideoResolutionAdaptation {
+        let current_target = Self::cap_to_limits(&requested_viewport);
+        let reason = if current_target == requested_viewport {
+            VideoResolutionAdaptationReason::MatchesViewport
+        } else {
+            VideoResolutionAdaptationReason::CappedToLimits
+        };
+
+        VideoResolutionAdaptation {
+            requested_viewport,
+            current_target,
+            limits: VideoResolutionLimits {
+                max_width: Self::MAX_WIDTH,
+                max_height: Self::MAX_HEIGHT,
+                max_pixels: Self::MAX_PIXELS,
+            },
+            reason,
+        }
+    }
+
+    fn cap_to_limits(
+        viewport: &apprelay_protocol::ViewportSize,
+    ) -> apprelay_protocol::ViewportSize {
+        let width = u64::from(viewport.width);
+        let height = u64::from(viewport.height);
+
+        if width == 0 || height == 0 {
+            return apprelay_protocol::ViewportSize::new(Self::MIN_DIMENSION, Self::MIN_DIMENSION);
+        }
+
+        let pixels = width.saturating_mul(height);
+
+        if width <= u64::from(Self::MAX_WIDTH)
+            && height <= u64::from(Self::MAX_HEIGHT)
+            && pixels <= u64::from(Self::MAX_PIXELS)
+        {
+            return viewport.clone();
+        }
+
+        let width_scale = f64::from(Self::MAX_WIDTH) / viewport.width as f64;
+        let height_scale = f64::from(Self::MAX_HEIGHT) / viewport.height as f64;
+        let pixel_scale = (f64::from(Self::MAX_PIXELS) / pixels as f64).sqrt();
+        let scale = width_scale.min(height_scale).min(pixel_scale);
+
+        apprelay_protocol::ViewportSize::new(
+            Self::floor_to_even((viewport.width as f64 * scale).floor() as u64),
+            Self::floor_to_even((viewport.height as f64 * scale).floor() as u64),
+        )
+    }
+
+    fn floor_to_even(value: u64) -> u32 {
+        let even = if value > u64::from(Self::MIN_DIMENSION) {
+            value - (value % 2)
+        } else {
+            u64::from(Self::MIN_DIMENSION)
+        };
+        even.min(u64::from(u32::MAX)) as u32
     }
 
     fn encoded_frame_bytes(
@@ -218,6 +289,11 @@ pub struct InMemoryVideoStreamService {
 }
 
 impl InMemoryVideoStreamService {
+    const MIN_VIEWPORT_WIDTH: u32 = 320;
+    const MIN_VIEWPORT_HEIGHT: u32 = 240;
+    const MAX_VIEWPORT_WIDTH: u32 = 7680;
+    const MAX_VIEWPORT_HEIGHT: u32 = 4320;
+
     pub fn new(capture_backend: WindowCaptureBackendService) -> Self {
         Self {
             capture_backend,
@@ -230,6 +306,13 @@ impl InMemoryVideoStreamService {
         let id = format!("stream-{}", self.next_stream_sequence);
         self.next_stream_sequence += 1;
         id
+    }
+
+    fn accepts_resize_viewport(viewport: &apprelay_protocol::ViewportSize) -> bool {
+        viewport.width >= Self::MIN_VIEWPORT_WIDTH
+            && viewport.height >= Self::MIN_VIEWPORT_HEIGHT
+            && viewport.width <= Self::MAX_VIEWPORT_WIDTH
+            && viewport.height <= Self::MAX_VIEWPORT_HEIGHT
     }
 }
 
@@ -390,6 +473,10 @@ impl VideoStreamService for InMemoryVideoStreamService {
     }
 
     fn record_resize(&mut self, request: &ResizeSessionRequest) {
+        if !Self::accepts_resize_viewport(&request.viewport) {
+            return;
+        }
+
         for stream in self.streams.iter_mut().filter(|stream| {
             stream.session_id == request.session_id
                 && stream.state != VideoStreamState::Stopped
@@ -467,6 +554,14 @@ mod tests {
         assert_eq!(
             stream.encoding.contract.target.resolution,
             ViewportSize::new(1280, 720)
+        );
+        assert_eq!(
+            stream.encoding.contract.adaptation.current_target,
+            ViewportSize::new(1280, 720)
+        );
+        assert_eq!(
+            stream.encoding.contract.adaptation.reason,
+            VideoResolutionAdaptationReason::MatchesViewport
         );
         assert_eq!(stream.encoding.contract.codec, VideoCodec::H264);
         assert_eq!(
@@ -645,6 +740,119 @@ mod tests {
     }
 
     #[test]
+    fn video_stream_service_caps_non_negotiated_encoding_to_adaptive_limits() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryVideoStreamService::default();
+        let stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        stream_service.record_resize(&ResizeSessionRequest {
+            session_id: session.id,
+            viewport: ViewportSize::new(2560, 1440),
+        });
+
+        let status = stream_service
+            .stream_status(&stream.id)
+            .expect("stream status");
+        assert_eq!(status.viewport, ViewportSize::new(2560, 1440));
+        assert_eq!(
+            status.encoding.contract.target.resolution,
+            ViewportSize::new(1920, 1080)
+        );
+        assert_eq!(
+            status.encoding.contract.adaptation.requested_viewport,
+            ViewportSize::new(2560, 1440)
+        );
+        assert_eq!(
+            status.encoding.contract.adaptation.current_target,
+            ViewportSize::new(1920, 1080)
+        );
+        assert_eq!(
+            status.encoding.contract.adaptation.limits,
+            VideoResolutionLimits {
+                max_width: 1920,
+                max_height: 1080,
+                max_pixels: 2_073_600,
+            }
+        );
+        assert_eq!(
+            status.encoding.contract.adaptation.reason,
+            VideoResolutionAdaptationReason::CappedToLimits
+        );
+        assert_eq!(status.encoding.contract.target.target_bitrate_kbps, 6220);
+        assert_eq!(
+            status.encoding.state,
+            VideoEncodingPipelineState::Configured
+        );
+    }
+
+    #[test]
+    fn video_stream_service_ignores_invalid_direct_resize_viewports() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryVideoStreamService::default();
+        let stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        for viewport in [
+            ViewportSize::new(0, 720),
+            ViewportSize::new(100, 100),
+            ViewportSize::new(8000, 4500),
+        ] {
+            stream_service.record_resize(&ResizeSessionRequest {
+                session_id: session.id.clone(),
+                viewport,
+            });
+        }
+
+        let status = stream_service
+            .stream_status(&stream.id)
+            .expect("stream status");
+        assert_eq!(status.viewport, ViewportSize::new(1280, 720));
+        assert_eq!(
+            status.encoding.contract.adaptation.requested_viewport,
+            ViewportSize::new(1280, 720)
+        );
+        assert_eq!(
+            status.encoding.contract.target.resolution,
+            ViewportSize::new(1280, 720)
+        );
+        assert_eq!(
+            status.encoding.contract.adaptation.current_target,
+            ViewportSize::new(1280, 720)
+        );
+        assert_eq!(
+            status.encoding.contract.adaptation.reason,
+            VideoResolutionAdaptationReason::MatchesViewport
+        );
+        assert_eq!(status.encoding.contract.target.target_bitrate_kbps, 2764);
+        assert_eq!(status.health.message, None);
+    }
+
+    #[test]
     fn video_stream_service_keeps_streaming_encoding_coherent_after_resize() {
         let mut session_service = InMemoryApplicationSessionService::default();
         let session = session_service
@@ -676,7 +884,7 @@ mod tests {
 
         stream_service.record_resize(&ResizeSessionRequest {
             session_id: session.id,
-            viewport: ViewportSize::new(1440, 900),
+            viewport: ViewportSize::new(2560, 1440),
         });
 
         let status = stream_service
@@ -684,12 +892,17 @@ mod tests {
             .expect("stream status");
         assert_eq!(status.state, VideoStreamState::Streaming);
         assert_eq!(status.encoding.state, VideoEncodingPipelineState::Encoding);
+        assert_eq!(status.viewport, ViewportSize::new(2560, 1440));
         assert_eq!(
             status.encoding.contract.target.resolution,
-            ViewportSize::new(1440, 900)
+            ViewportSize::new(1920, 1080)
+        );
+        assert_eq!(
+            status.encoding.contract.adaptation.reason,
+            VideoResolutionAdaptationReason::CappedToLimits
         );
         assert_eq!(status.stats.frames_encoded, 1);
-        assert_eq!(status.stats.bitrate_kbps, 3888);
+        assert_eq!(status.stats.bitrate_kbps, 6220);
         assert_eq!(status.stats.latency_ms, 33);
     }
 
