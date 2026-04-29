@@ -7,8 +7,9 @@
 mod video_stream;
 
 pub use video_stream::{
-    StartVideoStreamRequest, StopVideoStreamRequest, VideoStreamSession, VideoStreamSignaling,
-    VideoStreamSignalingKind, VideoStreamState, VideoStreamStats,
+    ReconnectVideoStreamRequest, StartVideoStreamRequest, StopVideoStreamRequest,
+    VideoStreamHealth, VideoStreamSession, VideoStreamSignaling, VideoStreamSignalingKind,
+    VideoStreamState, VideoStreamStats,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -140,7 +141,8 @@ pub enum ApplicationLaunch {
     MacosBundle { bundle_path: String },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ViewportSize {
     pub width: u32,
     pub height: u32,

@@ -137,7 +137,11 @@ class FakeRemoteService implements RemoteService {
       stats: {
         framesEncoded: 0,
         bitrateKbps: 0,
-        latencyMs: 0
+        latencyMs: 0,
+        reconnectAttempts: 0
+      },
+      health: {
+        healthy: true
       },
       state: "starting" as const
     };
@@ -159,9 +163,41 @@ class FakeRemoteService implements RemoteService {
       stats: {
         framesEncoded: 0,
         bitrateKbps: 0,
-        latencyMs: 0
+        latencyMs: 0,
+        reconnectAttempts: 0
+      },
+      health: {
+        healthy: false,
+        message: "stream stopped by client"
       },
       state: "stopped" as const
+    };
+  }
+
+  async reconnectVideoStream(streamId: string) {
+    return {
+      id: streamId,
+      sessionId: "session-1",
+      selectedWindowId: "window-session-1",
+      viewport: {
+        width: 1280,
+        height: 720
+      },
+      signaling: {
+        kind: "webRtcOffer" as const,
+        offer: "swavan-webrtc-offer:stream-1:window-session-1"
+      },
+      stats: {
+        framesEncoded: 0,
+        bitrateKbps: 0,
+        latencyMs: 0,
+        reconnectAttempts: 1
+      },
+      health: {
+        healthy: true,
+        message: "reconnect requested"
+      },
+      state: "starting" as const
     };
   }
 
@@ -181,7 +217,11 @@ class FakeRemoteService implements RemoteService {
       stats: {
         framesEncoded: 0,
         bitrateKbps: 0,
-        latencyMs: 0
+        latencyMs: 0,
+        reconnectAttempts: 0
+      },
+      health: {
+        healthy: true
       },
       state: "starting" as const
     };
@@ -282,6 +322,16 @@ describe("RemoteService contract", () => {
     });
     await expect(service.videoStreamStatus("stream-1")).resolves.toMatchObject({
       id: "stream-1",
+      state: "starting"
+    });
+    await expect(service.reconnectVideoStream("stream-1")).resolves.toMatchObject({
+      id: "stream-1",
+      stats: {
+        reconnectAttempts: 1
+      },
+      health: {
+        message: "reconnect requested"
+      },
       state: "starting"
     });
     await expect(service.stopVideoStream("stream-1")).resolves.toMatchObject({

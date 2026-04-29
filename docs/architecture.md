@@ -76,6 +76,15 @@ remain thin and delegate to service modules. CSS theme tokens are exposed throug
 custom properties so downstream apps can override the look without rewriting the
 UI.
 
+Reusable client behavior must live outside the Tauri command layer. Protocol
+types own the shared request/response shape, Rust core/server services own
+application behavior, and frontend services own UI-facing contracts. The
+`apps/client-tauri/src-tauri` layer should only register commands, perform
+minimal host adaptation such as auth-token forwarding, and call those services.
+Avoid putting feature state machines, DTO mapping, persistence rules, media
+logic, or app-specific policy in Tauri files so the client can be embedded as a
+plugin in another Tauri host.
+
 ## Security Notes
 
 Future phases need explicit decisions for:

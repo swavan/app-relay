@@ -48,6 +48,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "apprelay-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "atk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3152,9 +3159,9 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 name = "swavan-app-relay-client"
 version = "0.1.0"
 dependencies = [
+ "apprelay-protocol",
  "serde",
  "swavan-core",
- "swavan-protocol",
  "swavan-server",
  "tauri",
  "tauri-build",
@@ -3164,19 +3171,15 @@ dependencies = [
 name = "swavan-core"
 version = "0.1.0"
 dependencies = [
- "swavan-protocol",
+ "apprelay-protocol",
 ]
-
-[[package]]
-name = "swavan-protocol"
-version = "0.1.0"
 
 [[package]]
 name = "swavan-server"
 version = "0.1.0"
 dependencies = [
+ "apprelay-protocol",
  "swavan-core",
- "swavan-protocol",
 ]
 
 [[package]]

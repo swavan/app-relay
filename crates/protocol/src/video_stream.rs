@@ -1,16 +1,25 @@
 use crate::ViewportSize;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StartVideoStreamRequest {
     pub session_id: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StopVideoStreamRequest {
     pub stream_id: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconnectVideoStreamRequest {
+    pub stream_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VideoStreamSession {
     pub id: String,
     pub session_id: String,
@@ -18,29 +27,42 @@ pub struct VideoStreamSession {
     pub viewport: ViewportSize,
     pub signaling: VideoStreamSignaling,
     pub stats: VideoStreamStats,
+    pub health: VideoStreamHealth,
     pub state: VideoStreamState,
     pub failure_reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VideoStreamSignaling {
     pub kind: VideoStreamSignalingKind,
     pub offer: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum VideoStreamSignalingKind {
     WebRtcOffer,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VideoStreamStats {
     pub frames_encoded: u64,
     pub bitrate_kbps: u32,
     pub latency_ms: u32,
+    pub reconnect_attempts: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoStreamHealth {
+    pub healthy: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum VideoStreamState {
     Starting,
     Streaming,
@@ -67,6 +89,11 @@ mod tests {
                 frames_encoded: 0,
                 bitrate_kbps: 0,
                 latency_ms: 0,
+                reconnect_attempts: 0,
+            },
+            health: VideoStreamHealth {
+                healthy: true,
+                message: None,
             },
             state: VideoStreamState::Starting,
             failure_reason: None,

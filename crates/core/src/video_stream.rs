@@ -1,7 +1,8 @@
 use swavan_protocol::{
-    ApplicationSession, Feature, Platform, SessionState, StartVideoStreamRequest,
-    StopVideoStreamRequest, SwavanError, VideoStreamSession, VideoStreamSignaling,
-    VideoStreamSignalingKind, VideoStreamState, VideoStreamStats,
+    ApplicationSession, Feature, Platform, ReconnectVideoStreamRequest, ResizeSessionRequest,
+    SessionState, StartVideoStreamRequest, StopVideoStreamRequest, SwavanError, VideoStreamHealth,
+    VideoStreamSession, VideoStreamSignaling, VideoStreamSignalingKind, VideoStreamState,
+    VideoStreamStats,
 };
 
 pub trait VideoStreamService {
@@ -14,6 +15,11 @@ pub trait VideoStreamService {
         &mut self,
         request: StopVideoStreamRequest,
     ) -> Result<VideoStreamSession, SwavanError>;
+    fn reconnect_stream(
+        &mut self,
+        request: ReconnectVideoStreamRequest,
+    ) -> Result<VideoStreamSession, SwavanError>;
+    fn record_resize(&mut self, request: &ResizeSessionRequest);
     fn stream_status(&self, stream_id: &str) -> Result<VideoStreamSession, SwavanError>;
 }
 
@@ -107,6 +113,11 @@ impl VideoStreamService for InMemoryVideoStreamService {
                 frames_encoded: 0,
                 bitrate_kbps: 0,
                 latency_ms: 0,
+                reconnect_attempts: 0,
+            },
+            health: VideoStreamHealth {
+                healthy: true,
+                message: None,
             },
             state: VideoStreamState::Starting,
             failure_reason: None,
@@ -131,7 +142,53 @@ impl VideoStreamService for InMemoryVideoStreamService {
             })?;
 
         stream.state = VideoStreamState::Stopped;
+        stream.health = VideoStreamHealth {
+            healthy: false,
+            message: Some("stream stopped by client".to_string()),
+        };
         Ok(stream.clone())
+    }
+
+    fn reconnect_stream(
+        &mut self,
+        request: ReconnectVideoStreamRequest,
+    ) -> Result<VideoStreamSession, SwavanError> {
+        let stream = self
+            .streams
+            .iter_mut()
+            .find(|stream| stream.id == request.stream_id)
+            .ok_or_else(|| {
+                SwavanError::NotFound(format!("stream {} was not found", request.stream_id))
+            })?;
+
+        if stream.state == VideoStreamState::Stopped {
+            return Err(SwavanError::InvalidRequest(format!(
+                "stream {} has been stopped",
+                request.stream_id
+            )));
+        }
+
+        stream.state = VideoStreamState::Starting;
+        stream.stats.reconnect_attempts += 1;
+        stream.health = VideoStreamHealth {
+            healthy: true,
+            message: Some("reconnect requested".to_string()),
+        };
+        Ok(stream.clone())
+    }
+
+    fn record_resize(&mut self, request: &ResizeSessionRequest) {
+        for stream in self.streams.iter_mut().filter(|stream| {
+            stream.session_id == request.session_id
+                && stream.state != VideoStreamState::Stopped
+                && stream.state != VideoStreamState::Failed
+        }) {
+            stream.viewport = request.viewport.clone();
+            stream.health = VideoStreamHealth {
+                healthy: true,
+                message: Some("stream viewport updated".to_string()),
+            };
+        }
     }
 
     fn stream_status(&self, stream_id: &str) -> Result<VideoStreamSession, SwavanError> {
@@ -189,6 +246,73 @@ mod tests {
             .expect("stop stream");
 
         assert_eq!(stopped.state, VideoStreamState::Stopped);
+    }
+
+    #[test]
+    fn video_stream_service_reconnects_active_stream() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryVideoStreamService::default();
+        let stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        let reconnected = stream_service
+            .reconnect_stream(ReconnectVideoStreamRequest {
+                stream_id: stream.id,
+            })
+            .expect("reconnect stream");
+
+        assert_eq!(reconnected.state, VideoStreamState::Starting);
+        assert_eq!(reconnected.stats.reconnect_attempts, 1);
+        assert_eq!(
+            reconnected.health.message.as_deref(),
+            Some("reconnect requested")
+        );
+    }
+
+    #[test]
+    fn video_stream_service_updates_viewport_on_session_resize() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryVideoStreamService::default();
+        let stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        stream_service.record_resize(&ResizeSessionRequest {
+            session_id: session.id,
+            viewport: ViewportSize::new(1440, 900),
+        });
+
+        let status = stream_service
+            .stream_status(&stream.id)
+            .expect("stream status");
+        assert_eq!(status.viewport, ViewportSize::new(1440, 900));
+        assert_eq!(
+            status.health.message.as_deref(),
+            Some("stream viewport updated")
+        );
     }
 
     #[test]

@@ -151,6 +151,9 @@ Scope:
   status, WebRTC signaling placeholder, selected-window binding, stream stats,
   and failure-state models flow through core, server, Tauri, and client service
   contracts
+- completed stream reconnect and health slice: streams expose health metadata,
+  reconnect attempts, explicit reconnect control, and viewport updates when the
+  application session is resized
 - selected-window capture backend for the first supported desktop OS
 - WebRTC media negotiation
 - video encoding pipeline

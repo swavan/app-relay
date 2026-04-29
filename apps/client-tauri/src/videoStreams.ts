@@ -13,6 +13,11 @@ export type VideoStreamSession = {
     framesEncoded: number;
     bitrateKbps: number;
     latencyMs: number;
+    reconnectAttempts: number;
+  };
+  health: {
+    healthy: boolean;
+    message?: string;
   };
   state: "starting" | "streaming" | "stopped" | "failed";
   failureReason?: string;

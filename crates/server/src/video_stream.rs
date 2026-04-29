@@ -1,7 +1,7 @@
 use swavan_core::{InMemoryVideoStreamService, VideoStreamService};
 use swavan_protocol::{
-    ApplicationSession, StartVideoStreamRequest, StopVideoStreamRequest, SwavanError,
-    VideoStreamSession,
+    ApplicationSession, ReconnectVideoStreamRequest, ResizeSessionRequest, StartVideoStreamRequest,
+    StopVideoStreamRequest, SwavanError, VideoStreamSession,
 };
 
 #[derive(Debug)]
@@ -36,6 +36,17 @@ impl VideoStreamControl {
         request: StopVideoStreamRequest,
     ) -> Result<VideoStreamSession, SwavanError> {
         self.stream_service.stop_stream(request)
+    }
+
+    pub fn reconnect(
+        &mut self,
+        request: ReconnectVideoStreamRequest,
+    ) -> Result<VideoStreamSession, SwavanError> {
+        self.stream_service.reconnect_stream(request)
+    }
+
+    pub fn record_resize(&mut self, request: &ResizeSessionRequest) {
+        self.stream_service.record_resize(request);
     }
 
     pub fn status(&self, stream_id: &str) -> Result<VideoStreamSession, SwavanError> {

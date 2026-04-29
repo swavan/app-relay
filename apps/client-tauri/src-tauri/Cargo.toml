@@ -10,7 +10,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 swavan-core = { path = "../../../crates/core" }
-swavan-protocol = { path = "../../../crates/protocol" }
+swavan-protocol = { package = "apprelay-protocol", path = "../../../crates/protocol" }
 swavan-server = { path = "../../../crates/server" }
 tauri = { version = "2", features = [] }
 

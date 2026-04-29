@@ -123,6 +123,9 @@
     try {
       sessionMessage = "";
       activeSession = await remote.resizeSession(activeSession.id, requestedViewport);
+      if (activeStream && activeStream.state !== "stopped") {
+        activeStream = await remote.videoStreamStatus(activeStream.id);
+      }
     } catch (error) {
       sessionMessage = error instanceof Error ? error.message : String(error);
     }
@@ -171,6 +174,19 @@
     try {
       streamMessage = "";
       activeStream = await remote.stopVideoStream(activeStream.id);
+    } catch (error) {
+      streamMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function reconnectStream() {
+    if (!activeStream) {
+      return;
+    }
+
+    try {
+      streamMessage = "";
+      activeStream = await remote.reconnectVideoStream(activeStream.id);
     } catch (error) {
       streamMessage = error instanceof Error ? error.message : String(error);
     }
@@ -293,6 +309,7 @@
       <div class="session-actions">
         <button disabled={!viewportValid} on:click={resizeSession} type="button">Resize</button>
         {#if activeStream && activeStream.state !== "stopped"}
+          <button on:click={reconnectStream} type="button">Reconnect</button>
           <button on:click={stopStream} type="button">Stop Stream</button>
         {:else}
           <button on:click={startStream} type="button">Stream</button>
@@ -312,7 +329,11 @@
         <span>{activeStream.stats.framesEncoded} frames</span>
         <span>{activeStream.stats.bitrateKbps} kbps</span>
         <span>{activeStream.stats.latencyMs} ms</span>
+        <span>{activeStream.stats.reconnectAttempts} reconnects</span>
       </div>
+      {#if activeStream.health.message}
+        <p>{activeStream.health.message}</p>
+      {/if}
     </section>
   {/if}
 
