@@ -37,7 +37,9 @@ export type ApplicationSession = {
   applicationId: string;
   selectedWindow: {
     id: string;
+    applicationId: string;
     title: string;
+    selectionMethod: "launchIntent" | "existingWindow" | "synthetic";
   };
   launchIntent?: {
     sessionId: string;

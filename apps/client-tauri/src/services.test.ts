@@ -44,6 +44,8 @@ class FakeRemoteService implements RemoteService {
       applicationId,
       selectedWindow: {
         id: "window-session-1",
+        applicationId,
+        selectionMethod: "launchIntent" as const,
         title: applicationId
       },
       launchIntent: {
@@ -69,6 +71,8 @@ class FakeRemoteService implements RemoteService {
       applicationId: "terminal",
       selectedWindow: {
         id: "window-session-1",
+        applicationId: "terminal",
+        selectionMethod: "synthetic" as const,
         title: "terminal"
       },
       viewport: {
@@ -94,6 +98,8 @@ class FakeRemoteService implements RemoteService {
       applicationId: "terminal",
       selectedWindow: {
         id: "window-session-1",
+        applicationId: "terminal",
+        selectionMethod: "synthetic" as const,
         title: "terminal"
       },
       viewport: {
@@ -143,6 +149,10 @@ describe("RemoteService contract", () => {
     await expect(service.createSession("terminal", { width: 1280, height: 720 })).resolves.toMatchObject({
       id: "session-1",
       applicationId: "terminal",
+      selectedWindow: {
+        applicationId: "terminal",
+        selectionMethod: "launchIntent"
+      },
       launchIntent: {
         applicationId: "terminal",
         status: "recorded"
