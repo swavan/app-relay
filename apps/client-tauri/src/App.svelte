@@ -9,6 +9,7 @@
     type ApplicationPermission
   } from "./applicationPermissions";
   import { buildAppViewModel } from "./appViewModel";
+  import VideoRenderer from "./VideoRenderer.svelte";
   import {
     TauriRemoteService,
     type AppSummary,
@@ -104,6 +105,10 @@
         return;
       }
 
+      if (activeStream && activeStream.state !== "stopped") {
+        await remote.stopVideoStream(activeStream.id);
+      }
+      activeStream = null;
       activeSession = await remote.createSession(app.id, requestedViewport);
     } catch (error) {
       sessionMessage = error instanceof Error ? error.message : String(error);
@@ -319,23 +324,8 @@
     </section>
   {/if}
 
-  {#if activeStream}
-    <section class="stream-panel" aria-label="Video stream">
-      <div>
-        <strong>{activeStream.state}</strong>
-        <span>{activeStream.captureSource.title}</span>
-        <span>{activeStream.viewport.width} x {activeStream.viewport.height}</span>
-      </div>
-      <div>
-        <span>{activeStream.stats.framesEncoded} frames</span>
-        <span>{activeStream.stats.bitrateKbps} kbps</span>
-        <span>{activeStream.stats.latencyMs} ms</span>
-        <span>{activeStream.stats.reconnectAttempts} reconnects</span>
-      </div>
-      {#if activeStream.health.message}
-        <p>{activeStream.health.message}</p>
-      {/if}
-    </section>
+  {#if activeSession}
+    <VideoRenderer stream={activeStream} requestedViewport={requestedViewport} />
   {/if}
 
   {#if sessionMessage}
