@@ -8,8 +8,8 @@ mod video_stream;
 
 pub use video_stream::{
     ReconnectVideoStreamRequest, StartVideoStreamRequest, StopVideoStreamRequest,
-    VideoStreamHealth, VideoStreamSession, VideoStreamSignaling, VideoStreamSignalingKind,
-    VideoStreamState, VideoStreamStats,
+    VideoCaptureScope, VideoCaptureSource, VideoStreamHealth, VideoStreamSession,
+    VideoStreamSignaling, VideoStreamSignalingKind, VideoStreamState, VideoStreamStats,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

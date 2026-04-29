@@ -154,7 +154,9 @@ Scope:
 - completed stream reconnect and health slice: streams expose health metadata,
   reconnect attempts, explicit reconnect control, and viewport updates when the
   application session is resized
-- selected-window capture backend for the first supported desktop OS
+- completed selected-window capture backend slice: Linux stream startup binds
+  capture metadata to the selected window instead of the full desktop, while
+  unsupported platforms return typed capture errors
 - WebRTC media negotiation
 - video encoding pipeline
 - adaptive resolution based on client viewport

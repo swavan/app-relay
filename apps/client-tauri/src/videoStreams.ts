@@ -5,6 +5,12 @@ export type VideoStreamSession = {
   sessionId: string;
   selectedWindowId: string;
   viewport: ViewportSize;
+  captureSource: {
+    scope: "selectedWindow";
+    selectedWindowId: string;
+    applicationId: string;
+    title: string;
+  };
   signaling: {
     kind: "webRtcOffer";
     offer?: string;

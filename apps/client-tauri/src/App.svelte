@@ -323,6 +323,7 @@
     <section class="stream-panel" aria-label="Video stream">
       <div>
         <strong>{activeStream.state}</strong>
+        <span>{activeStream.captureSource.title}</span>
         <span>{activeStream.viewport.width} x {activeStream.viewport.height}</span>
       </div>
       <div>

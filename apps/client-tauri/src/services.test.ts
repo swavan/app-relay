@@ -130,6 +130,12 @@ class FakeRemoteService implements RemoteService {
         width: 1280,
         height: 720
       },
+      captureSource: {
+        scope: "selectedWindow" as const,
+        selectedWindowId: "window-session-1",
+        applicationId: "terminal",
+        title: "Terminal"
+      },
       signaling: {
         kind: "webRtcOffer" as const,
         offer: "swavan-webrtc-offer:stream-1:window-session-1"
@@ -155,6 +161,12 @@ class FakeRemoteService implements RemoteService {
       viewport: {
         width: 1280,
         height: 720
+      },
+      captureSource: {
+        scope: "selectedWindow" as const,
+        selectedWindowId: "window-session-1",
+        applicationId: "terminal",
+        title: "Terminal"
       },
       signaling: {
         kind: "webRtcOffer" as const,
@@ -183,6 +195,12 @@ class FakeRemoteService implements RemoteService {
         width: 1280,
         height: 720
       },
+      captureSource: {
+        scope: "selectedWindow" as const,
+        selectedWindowId: "window-session-1",
+        applicationId: "terminal",
+        title: "Terminal"
+      },
       signaling: {
         kind: "webRtcOffer" as const,
         offer: "swavan-webrtc-offer:stream-1:window-session-1"
@@ -209,6 +227,12 @@ class FakeRemoteService implements RemoteService {
       viewport: {
         width: 1280,
         height: 720
+      },
+      captureSource: {
+        scope: "selectedWindow" as const,
+        selectedWindowId: "window-session-1",
+        applicationId: "terminal",
+        title: "Terminal"
       },
       signaling: {
         kind: "webRtcOffer" as const,
@@ -315,6 +339,9 @@ describe("RemoteService contract", () => {
       id: "stream-1",
       sessionId: "session-1",
       selectedWindowId: "window-session-1",
+      captureSource: {
+        scope: "selectedWindow"
+      },
       signaling: {
         kind: "webRtcOffer"
       },

@@ -43,7 +43,7 @@ impl ServerServices {
             capability_service: DefaultCapabilityService::new(platform),
             application_discovery: ApplicationDiscoveryService::for_platform(platform),
             session_service: InMemoryApplicationSessionService::new(SessionPolicy::allow_all()),
-            video_stream: VideoStreamControl::new(),
+            video_stream: VideoStreamControl::for_platform(platform),
             platform,
             version,
         }
