@@ -3,8 +3,8 @@ use apprelay_protocol::{
     AppRelayError, ControlAuth, ControlError, CreateSessionRequest, Feature,
     NegotiateVideoStreamRequest, Platform, ReconnectVideoStreamRequest, ResizeSessionRequest,
     ServerVersion, SessionState, StartVideoStreamRequest, StopVideoStreamRequest,
-    VideoStreamNegotiationState, VideoStreamState, ViewportSize, WebRtcIceCandidate, WebRtcSdpType,
-    WebRtcSessionDescription,
+    VideoEncodingPipelineState, VideoStreamNegotiationState, VideoStreamState, ViewportSize,
+    WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription,
 };
 use apprelay_server::{ServerControlPlane, ServerServices};
 
@@ -169,6 +169,14 @@ fn control_plane_manages_video_stream_lifecycle() {
     assert_eq!(stream.selected_window_id, session.selected_window.id);
     assert_eq!(stream.state, VideoStreamState::Starting);
     assert_eq!(
+        stream.encoding.state,
+        VideoEncodingPipelineState::Configured
+    );
+    assert_eq!(
+        stream.encoding.contract.target.resolution,
+        ViewportSize::new(1280, 720)
+    );
+    assert_eq!(
         control_plane.video_stream_status(&auth, &stream.id),
         Ok(stream.clone())
     );
@@ -183,6 +191,7 @@ fn control_plane_manages_video_stream_lifecycle() {
         .expect("stop video stream");
 
     assert_eq!(stopped.state, VideoStreamState::Stopped);
+    assert_eq!(stopped.encoding.state, VideoEncodingPipelineState::Drained);
 }
 
 #[test]
@@ -229,6 +238,14 @@ fn control_plane_negotiates_video_stream() {
         .expect("negotiate video stream");
 
     assert_eq!(negotiated.state, VideoStreamState::Streaming);
+    assert_eq!(
+        negotiated.encoding.state,
+        VideoEncodingPipelineState::Encoding
+    );
+    assert_eq!(negotiated.encoding.output.frames_encoded, 1);
+    assert_eq!(negotiated.encoding.output.keyframes_encoded, 1);
+    assert_eq!(negotiated.stats.frames_encoded, 1);
+    assert_eq!(negotiated.stats.bitrate_kbps, 2764);
     assert_eq!(
         negotiated.signaling.negotiation_state,
         VideoStreamNegotiationState::Negotiated
@@ -293,7 +310,73 @@ fn control_plane_reconnects_and_resizes_video_stream() {
         .expect("stream status");
     assert_eq!(status.viewport, ViewportSize::new(1440, 900));
     assert_eq!(
+        status.encoding.contract.target.resolution,
+        ViewportSize::new(1440, 900)
+    );
+    assert_eq!(status.encoding.contract.target.target_bitrate_kbps, 3888);
+    assert_eq!(
         status.health.message.as_deref(),
         Some("stream viewport updated")
     );
+}
+
+#[test]
+fn control_plane_keeps_negotiated_video_encoding_coherent_after_resize() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let stream = control_plane
+        .start_video_stream(
+            &auth,
+            StartVideoStreamRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .expect("start video stream");
+
+    control_plane
+        .negotiate_video_stream(
+            &auth,
+            NegotiateVideoStreamRequest {
+                stream_id: stream.id.clone(),
+                client_answer: WebRtcSessionDescription {
+                    sdp_type: WebRtcSdpType::Answer,
+                    sdp: "client-answer".to_string(),
+                },
+                client_ice_candidates: Vec::new(),
+            },
+        )
+        .expect("negotiate video stream");
+
+    control_plane
+        .resize_session(
+            &auth,
+            ResizeSessionRequest {
+                session_id: session.id,
+                viewport: ViewportSize::new(1440, 900),
+            },
+        )
+        .expect("resize session");
+
+    let status = control_plane
+        .video_stream_status(&auth, &stream.id)
+        .expect("stream status");
+    assert_eq!(status.state, VideoStreamState::Streaming);
+    assert_eq!(status.encoding.state, VideoEncodingPipelineState::Encoding);
+    assert_eq!(
+        status.encoding.contract.target.resolution,
+        ViewportSize::new(1440, 900)
+    );
+    assert_eq!(status.stats.bitrate_kbps, 3888);
 }

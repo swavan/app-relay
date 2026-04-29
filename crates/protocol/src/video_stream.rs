@@ -34,11 +34,83 @@ pub struct VideoStreamSession {
     pub selected_window_id: String,
     pub viewport: ViewportSize,
     pub capture_source: VideoCaptureSource,
+    pub encoding: VideoEncodingPipeline,
     pub signaling: VideoStreamSignaling,
     pub stats: VideoStreamStats,
     pub health: VideoStreamHealth,
     pub state: VideoStreamState,
     pub failure_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoEncodingPipeline {
+    pub contract: VideoEncodingContract,
+    pub state: VideoEncodingPipelineState,
+    pub output: VideoEncodingOutput,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoEncodingContract {
+    pub codec: VideoCodec,
+    pub pixel_format: VideoPixelFormat,
+    pub hardware_acceleration: VideoHardwareAcceleration,
+    pub target: VideoEncodingTarget,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoEncodingTarget {
+    pub resolution: ViewportSize,
+    pub max_fps: u32,
+    pub target_bitrate_kbps: u32,
+    pub keyframe_interval_frames: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoEncodingOutput {
+    pub frames_submitted: u64,
+    pub frames_encoded: u64,
+    pub keyframes_encoded: u64,
+    pub bytes_produced: u64,
+    pub last_frame: Option<EncodedVideoFrame>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EncodedVideoFrame {
+    pub sequence: u64,
+    pub timestamp_ms: u64,
+    pub byte_length: u32,
+    pub keyframe: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoCodec {
+    H264,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoPixelFormat {
+    Rgba,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoHardwareAcceleration {
+    None,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoEncodingPipelineState {
+    Configured,
+    Encoding,
+    Drained,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -143,6 +215,27 @@ mod tests {
                 application_id: "terminal".to_string(),
                 title: "Terminal".to_string(),
             },
+            encoding: VideoEncodingPipeline {
+                contract: VideoEncodingContract {
+                    codec: VideoCodec::H264,
+                    pixel_format: VideoPixelFormat::Rgba,
+                    hardware_acceleration: VideoHardwareAcceleration::None,
+                    target: VideoEncodingTarget {
+                        resolution: ViewportSize::new(1280, 720),
+                        max_fps: 30,
+                        target_bitrate_kbps: 2_764,
+                        keyframe_interval_frames: 60,
+                    },
+                },
+                state: VideoEncodingPipelineState::Configured,
+                output: VideoEncodingOutput {
+                    frames_submitted: 0,
+                    frames_encoded: 0,
+                    keyframes_encoded: 0,
+                    bytes_produced: 0,
+                    last_frame: None,
+                },
+            },
             signaling: VideoStreamSignaling {
                 kind: VideoStreamSignalingKind::WebRtcOffer,
                 negotiation_state: VideoStreamNegotiationState::AwaitingAnswer,
@@ -173,5 +266,10 @@ mod tests {
 
         assert_eq!(stream.session_id, "session-1");
         assert_eq!(stream.selected_window_id, "window-session-1");
+        assert_eq!(stream.encoding.contract.codec, VideoCodec::H264);
+        assert_eq!(
+            stream.encoding.contract.target.resolution,
+            ViewportSize::new(1280, 720)
+        );
     }
 }

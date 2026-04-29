@@ -160,7 +160,9 @@ Scope:
 - completed WebRTC media negotiation slice: stream signaling now carries
   structured offer, answer, ICE candidates, and negotiation state through the
   protocol, core, server, Tauri command wrapper, and client service contract
-- video encoding pipeline
+- completed video encoding pipeline slice: streams now expose a
+  transport-neutral encoding contract, deterministic in-memory H.264/RGBA
+  pipeline state, encoded frame metadata, and resize-aware encoding targets
 - adaptive resolution based on client viewport
 - client video renderer
 - session health and stream statistics
