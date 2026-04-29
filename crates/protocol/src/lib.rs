@@ -4,9 +4,16 @@
 //! expose them over SSH-tunneled HTTP, WebSocket, gRPC, or another control
 //! protocol without changing the domain model.
 
+mod audio_stream;
 mod input;
 mod video_stream;
 
+pub use audio_stream::{
+    AudioCapability, AudioCaptureScope, AudioDeviceSelection, AudioMuteState, AudioSource,
+    AudioStreamCapabilities, AudioStreamHealth, AudioStreamSession, AudioStreamState,
+    AudioStreamStats, MicrophoneMode, StartAudioStreamRequest, StopAudioStreamRequest,
+    UpdateAudioStreamRequest,
+};
 pub use input::{
     ButtonAction, ClientPoint, ForwardInputRequest, InputBackendKind, InputDelivery,
     InputDeliveryStatus, InputEvent, KeyAction, KeyModifiers, MappedInputEvent, PointerButton,

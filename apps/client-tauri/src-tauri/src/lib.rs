@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
+mod audio_stream;
 mod video_stream;
 
 use apprelay_core::{
@@ -621,6 +622,10 @@ pub fn run() {
             resize_application_session,
             close_application_session,
             forward_input,
+            audio_stream::start_audio_stream,
+            audio_stream::stop_audio_stream,
+            audio_stream::update_audio_stream,
+            audio_stream::audio_stream_status,
             video_stream::start_video_stream,
             video_stream::stop_video_stream,
             video_stream::reconnect_video_stream,

@@ -1,12 +1,14 @@
 use apprelay_core::ServerConfig;
 use apprelay_protocol::{
-    AppRelayError, ButtonAction, ClientPoint, ControlAuth, ControlError, CreateSessionRequest,
-    Feature, ForwardInputRequest, InputDeliveryStatus, InputEvent, MappedInputEvent,
-    NegotiateVideoStreamRequest, Platform, PointerButton, ReconnectVideoStreamRequest,
-    ResizeSessionRequest, ServerPoint, ServerVersion, SessionState, StartVideoStreamRequest,
-    StopVideoStreamRequest, VideoEncodingPipelineState, VideoResolutionAdaptationReason,
-    VideoStreamFailureKind, VideoStreamNegotiationState, VideoStreamRecoveryAction,
-    VideoStreamState, ViewportSize, WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription,
+    AppRelayError, AudioStreamState, ButtonAction, ClientPoint, ControlAuth, ControlError,
+    CreateSessionRequest, Feature, ForwardInputRequest, InputDeliveryStatus, InputEvent,
+    MappedInputEvent, MicrophoneMode, NegotiateVideoStreamRequest, Platform, PointerButton,
+    ReconnectVideoStreamRequest, ResizeSessionRequest, ServerPoint, ServerVersion, SessionState,
+    StartAudioStreamRequest, StartVideoStreamRequest, StopAudioStreamRequest,
+    StopVideoStreamRequest, UpdateAudioStreamRequest, VideoEncodingPipelineState,
+    VideoResolutionAdaptationReason, VideoStreamFailureKind, VideoStreamNegotiationState,
+    VideoStreamRecoveryAction, VideoStreamState, ViewportSize, WebRtcIceCandidate, WebRtcSdpType,
+    WebRtcSessionDescription,
 };
 use apprelay_server::{ServerControlPlane, ServerServices};
 
@@ -53,6 +55,26 @@ fn control_plane_reports_linux_app_discovery_capability() {
     assert!(capabilities
         .iter()
         .any(|capability| capability.feature == Feature::AppDiscovery && capability.supported));
+}
+
+#[test]
+fn control_plane_reports_desktop_audio_capabilities() {
+    for platform in [Platform::Linux, Platform::Macos, Platform::Windows] {
+        let control_plane = ServerControlPlane::new(
+            ServerServices::new(platform, "integration-test"),
+            ServerConfig::local("correct-token"),
+        );
+        let capabilities = control_plane
+            .capabilities(&ControlAuth::new("correct-token"))
+            .expect("authorized capabilities response");
+
+        assert!(capabilities.iter().any(|capability| {
+            capability.feature == Feature::SystemAudioStream && capability.supported
+        }));
+        assert!(capabilities.iter().any(|capability| {
+            capability.feature == Feature::ClientMicrophoneInput && capability.supported
+        }));
+    }
 }
 
 #[test]
@@ -560,5 +582,206 @@ fn control_plane_marks_stream_failed_when_session_closes() {
                     .to_string()
             )
         ))
+    );
+}
+
+#[test]
+fn control_plane_manages_audio_stream_independently_from_video() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let video = control_plane
+        .start_video_stream(
+            &auth,
+            StartVideoStreamRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .expect("start video stream");
+
+    let audio = control_plane
+        .start_audio_stream(
+            &auth,
+            StartAudioStreamRequest {
+                session_id: session.id.clone(),
+                microphone: MicrophoneMode::Enabled,
+                system_audio_muted: false,
+                microphone_muted: true,
+                output_device_id: Some("speakers".to_string()),
+                input_device_id: Some("mic".to_string()),
+            },
+        )
+        .expect("start audio stream");
+
+    assert_eq!(audio.session_id, session.id);
+    assert_eq!(audio.selected_window_id, session.selected_window.id);
+    assert_eq!(audio.microphone, MicrophoneMode::Enabled);
+    assert!(!audio.mute.system_audio_muted);
+    assert!(audio.mute.microphone_muted);
+    assert!(audio.capabilities.system_audio.supported);
+    assert!(audio.capabilities.microphone_capture.supported);
+    assert_eq!(audio.state, AudioStreamState::Streaming);
+    assert_eq!(
+        control_plane.video_stream_status(&auth, &video.id),
+        Ok(video)
+    );
+
+    let stopped = control_plane
+        .stop_audio_stream(
+            &auth,
+            StopAudioStreamRequest {
+                stream_id: audio.id,
+            },
+        )
+        .expect("stop audio stream");
+
+    assert_eq!(stopped.state, AudioStreamState::Stopped);
+}
+
+#[test]
+fn control_plane_starts_audio_stream_on_desktop_platforms() {
+    for platform in [Platform::Linux, Platform::Macos, Platform::Windows] {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(platform, "integration-test"),
+            ServerConfig::local("correct-token"),
+        );
+        let auth = ControlAuth::new("correct-token");
+        let session = control_plane
+            .create_session(
+                &auth,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create session");
+
+        let audio = control_plane
+            .start_audio_stream(
+                &auth,
+                StartAudioStreamRequest {
+                    session_id: session.id,
+                    microphone: MicrophoneMode::Enabled,
+                    system_audio_muted: false,
+                    microphone_muted: true,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+            )
+            .expect("start audio stream");
+
+        assert_eq!(audio.state, AudioStreamState::Streaming);
+        assert!(audio.capabilities.system_audio.supported);
+        assert!(audio.capabilities.microphone_capture.supported);
+    }
+}
+
+#[test]
+fn control_plane_updates_audio_mute_and_devices() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let audio = control_plane
+        .start_audio_stream(
+            &auth,
+            StartAudioStreamRequest {
+                session_id: session.id.clone(),
+                microphone: MicrophoneMode::Disabled,
+                system_audio_muted: false,
+                microphone_muted: true,
+                output_device_id: None,
+                input_device_id: None,
+            },
+        )
+        .expect("start audio stream");
+
+    let updated = control_plane
+        .update_audio_stream(
+            &auth,
+            UpdateAudioStreamRequest {
+                stream_id: audio.id.clone(),
+                system_audio_muted: true,
+                microphone_muted: true,
+                output_device_id: Some("headphones".to_string()),
+                input_device_id: None,
+            },
+        )
+        .expect("update audio stream");
+
+    assert!(updated.mute.system_audio_muted);
+    assert!(updated.mute.microphone_muted);
+    assert_eq!(
+        updated.devices.output_device_id.as_deref(),
+        Some("headphones")
+    );
+    assert_eq!(
+        control_plane.audio_stream_status(&auth, &audio.id),
+        Ok(updated)
+    );
+}
+
+#[test]
+fn control_plane_stops_audio_stream_when_session_closes() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let audio = control_plane
+        .start_audio_stream(
+            &auth,
+            StartAudioStreamRequest {
+                session_id: session.id.clone(),
+                microphone: MicrophoneMode::Disabled,
+                system_audio_muted: false,
+                microphone_muted: true,
+                output_device_id: None,
+                input_device_id: None,
+            },
+        )
+        .expect("start audio stream");
+
+    control_plane
+        .close_session(&auth, &session.id)
+        .expect("close session");
+
+    let status = control_plane
+        .audio_stream_status(&auth, &audio.id)
+        .expect("audio stream status");
+    assert_eq!(status.state, AudioStreamState::Stopped);
+    assert_eq!(
+        status.health.message.as_deref(),
+        Some("application session session-1 closed")
     );
 }
