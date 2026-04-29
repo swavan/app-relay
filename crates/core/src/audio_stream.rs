@@ -42,6 +42,26 @@ pub struct AudioBackendNativeReadiness {
     available_legs: Vec<AudioBackendLeg>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NativeAudioMediaBackend {
+    platform: Platform,
+    kind: AudioBackendKind,
+    legs: Vec<NativeAudioMediaBackendLeg>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NativeAudioMediaBackendLeg {
+    leg: AudioBackendLeg,
+    state: NativeAudioMediaBackendLegState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum NativeAudioMediaBackendLegState {
+    NotImplemented,
+    #[cfg(test)]
+    AvailableForTest,
+}
+
 impl AudioBackendNativeReadiness {
     pub fn unavailable() -> Self {
         Self::default()
@@ -55,16 +75,9 @@ impl AudioBackendNativeReadiness {
         Self { available_legs }
     }
 
+    #[cfg(test)]
     fn is_available(&self, leg: &AudioBackendLeg) -> bool {
         self.available_legs.contains(leg)
-    }
-
-    fn all_native_legs_available(&self) -> bool {
-        Self::native_legs().iter().all(|leg| self.is_available(leg))
-    }
-
-    fn no_native_legs_available(&self) -> bool {
-        self.available_legs.is_empty()
     }
 
     fn native_legs() -> [AudioBackendLeg; 4] {
@@ -83,6 +96,171 @@ impl AudioBackendNativeReadiness {
             AudioBackendLeg::Playback => 1,
             AudioBackendLeg::ClientMicrophoneCapture => 2,
             AudioBackendLeg::ServerMicrophoneInjection => 3,
+        }
+    }
+}
+
+impl NativeAudioMediaBackend {
+    fn for_platform(platform: Platform) -> Option<Self> {
+        match platform {
+            Platform::Linux => Some(Self::linux_pipewire()),
+            Platform::Macos => Some(Self::macos_core_audio()),
+            Platform::Windows => Some(Self::windows_wasapi()),
+            Platform::Android | Platform::Ios | Platform::Unknown => None,
+        }
+    }
+
+    fn linux_pipewire() -> Self {
+        Self::planned_desktop_backend(Platform::Linux, AudioBackendKind::PipeWire)
+    }
+
+    fn macos_core_audio() -> Self {
+        Self::planned_desktop_backend(Platform::Macos, AudioBackendKind::CoreAudio)
+    }
+
+    fn windows_wasapi() -> Self {
+        Self::planned_desktop_backend(Platform::Windows, AudioBackendKind::Wasapi)
+    }
+
+    fn planned_desktop_backend(platform: Platform, kind: AudioBackendKind) -> Self {
+        Self {
+            platform,
+            kind,
+            legs: AudioBackendNativeReadiness::native_legs()
+                .into_iter()
+                .map(|leg| NativeAudioMediaBackendLeg {
+                    leg,
+                    state: NativeAudioMediaBackendLegState::NotImplemented,
+                })
+                .collect(),
+        }
+    }
+
+    #[cfg(test)]
+    fn for_platform_with_readiness(
+        platform: Platform,
+        native_readiness: &AudioBackendNativeReadiness,
+    ) -> Option<Self> {
+        let mut backend = Self::for_platform(platform)?;
+        for leg in &mut backend.legs {
+            if native_readiness.is_available(&leg.leg) {
+                leg.state = NativeAudioMediaBackendLegState::AvailableForTest;
+            }
+        }
+        Some(backend)
+    }
+
+    #[cfg(not(test))]
+    fn for_platform_with_readiness(
+        platform: Platform,
+        _native_readiness: &AudioBackendNativeReadiness,
+    ) -> Option<Self> {
+        Self::for_platform(platform)
+    }
+
+    fn kind(&self) -> AudioBackendKind {
+        self.kind.clone()
+    }
+
+    fn all_legs_available(&self) -> bool {
+        self.legs
+            .iter()
+            .all(NativeAudioMediaBackendLeg::is_available)
+    }
+
+    fn no_legs_available(&self) -> bool {
+        self.legs
+            .iter()
+            .all(|leg| !NativeAudioMediaBackendLeg::is_available(leg))
+    }
+
+    fn leg_available(&self, leg: &AudioBackendLeg) -> bool {
+        self.legs
+            .iter()
+            .find(|backend_leg| &backend_leg.leg == leg)
+            .is_some_and(NativeAudioMediaBackendLeg::is_available)
+    }
+
+    fn readiness(&self) -> AudioBackendReadiness {
+        if self.all_legs_available() {
+            AudioBackendReadiness::NativeAvailable
+        } else {
+            AudioBackendReadiness::ControlPlaneOnly
+        }
+    }
+
+    fn statuses(&self) -> Vec<AudioBackendStatus> {
+        self.legs
+            .iter()
+            .map(|backend_leg| AudioBackendStatus {
+                leg: backend_leg.leg.clone(),
+                backend: self.kind.clone(),
+                available: backend_leg.is_available(),
+                readiness: if backend_leg.is_available() {
+                    AudioBackendReadiness::NativeAvailable
+                } else {
+                    AudioBackendReadiness::PlannedNative
+                },
+                media: AudioBackendMediaStats::default(),
+                failure: if backend_leg.is_available() {
+                    None
+                } else {
+                    Some(AudioBackendFailure {
+                        kind: AudioBackendFailureKind::NativeBackendNotImplemented,
+                        message: Self::native_backend_gap_message(
+                            &backend_leg.leg,
+                            self.platform,
+                        ),
+                        recovery: "keep the control-plane stream active for state negotiation, but do not expect audio packets until the native backend is implemented".to_string(),
+                    })
+                },
+            })
+            .collect()
+    }
+
+    fn notes(&self) -> Vec<String> {
+        if self.all_legs_available() {
+            vec![
+                "all native audio backend legs are configured available for transport-neutral service tests"
+                    .to_string(),
+            ]
+        } else if self.no_legs_available() {
+            vec![
+                "current stream enforces control-plane state only; native capture, playback, client microphone capture, and server microphone injection are not implemented"
+                    .to_string(),
+            ]
+        } else {
+            vec![
+                "current stream enforces control-plane state for unavailable native legs; configured native leg availability is reported per backend status"
+                    .to_string(),
+            ]
+        }
+    }
+
+    fn native_backend_gap_message(leg: &AudioBackendLeg, platform: Platform) -> String {
+        let backend = match platform {
+            Platform::Linux => "PipeWire",
+            Platform::Macos => "CoreAudio",
+            Platform::Windows => "WASAPI",
+            Platform::Android | Platform::Ios | Platform::Unknown => "native",
+        };
+        let capability = match leg {
+            AudioBackendLeg::Capture => "desktop audio capture",
+            AudioBackendLeg::Playback => "client playback",
+            AudioBackendLeg::ClientMicrophoneCapture => "client microphone capture",
+            AudioBackendLeg::ServerMicrophoneInjection => "server-side microphone injection",
+        };
+
+        format!("{capability} via {backend} is not implemented yet")
+    }
+}
+
+impl NativeAudioMediaBackendLeg {
+    fn is_available(&self) -> bool {
+        match self.state {
+            NativeAudioMediaBackendLegState::NotImplemented => false,
+            #[cfg(test)]
+            NativeAudioMediaBackendLegState::AvailableForTest => true,
         }
     }
 }
@@ -126,10 +304,17 @@ impl AudioBackendService {
     pub fn capabilities(&self) -> AudioStreamCapabilities {
         match self {
             Self::DesktopControl {
-                native_readiness, ..
+                platform,
+                native_readiness,
             } => {
+                let Some(native_backend) = NativeAudioMediaBackend::for_platform_with_readiness(
+                    *platform,
+                    native_readiness,
+                ) else {
+                    return Self::unsupported_capabilities(*platform);
+                };
                 let microphone_injection_available =
-                    native_readiness.is_available(&AudioBackendLeg::ServerMicrophoneInjection);
+                    native_backend.leg_available(&AudioBackendLeg::ServerMicrophoneInjection);
                 AudioStreamCapabilities {
                     system_audio: AudioCapability {
                         supported: true,
@@ -164,31 +349,7 @@ impl AudioBackendService {
                     },
                 }
             }
-            Self::Unsupported { platform } => {
-                let reason = format!("audio streaming is unsupported on {platform:?}");
-                AudioStreamCapabilities {
-                    system_audio: AudioCapability {
-                        supported: false,
-                        reason: Some(reason.clone()),
-                    },
-                    microphone_capture: AudioCapability {
-                        supported: false,
-                        reason: Some(reason.clone()),
-                    },
-                    microphone_injection: AudioCapability {
-                        supported: false,
-                        reason: Some(reason.clone()),
-                    },
-                    echo_cancellation: AudioCapability {
-                        supported: false,
-                        reason: Some(reason.clone()),
-                    },
-                    device_selection: AudioCapability {
-                        supported: false,
-                        reason: Some(reason),
-                    },
-                }
-            }
+            Self::Unsupported { platform } => Self::unsupported_capabilities(*platform),
         }
     }
 
@@ -198,96 +359,66 @@ impl AudioBackendService {
                 platform,
                 native_readiness,
             } => {
-                let native_backend = match platform {
-                    Platform::Linux => AudioBackendKind::PipeWire,
-                    Platform::Macos => AudioBackendKind::CoreAudio,
-                    Platform::Windows => AudioBackendKind::Wasapi,
-                    Platform::Android | Platform::Ios | Platform::Unknown => {
-                        AudioBackendKind::Unsupported
-                    }
+                let Some(native_backend) = NativeAudioMediaBackend::for_platform_with_readiness(
+                    *platform,
+                    native_readiness,
+                ) else {
+                    return Self::unsupported_backend_contract(*platform);
                 };
+                let native_backend_kind = native_backend.kind();
 
                 AudioBackendContract {
                     control_plane: AudioBackendKind::ControlPlane,
-                    planned_capture: native_backend.clone(),
-                    planned_playback: native_backend.clone(),
-                    planned_microphone: native_backend,
-                    statuses: Self::desktop_backend_statuses(*platform, native_readiness),
-                    readiness: if native_readiness.all_native_legs_available() {
-                        AudioBackendReadiness::NativeAvailable
-                    } else {
-                        AudioBackendReadiness::ControlPlaneOnly
-                    },
-                    notes: Self::desktop_backend_notes(native_readiness),
+                    planned_capture: native_backend_kind.clone(),
+                    planned_playback: native_backend_kind.clone(),
+                    planned_microphone: native_backend_kind,
+                    statuses: native_backend.statuses(),
+                    readiness: native_backend.readiness(),
+                    notes: native_backend.notes(),
                 }
             }
-            Self::Unsupported { platform } => AudioBackendContract {
-                control_plane: AudioBackendKind::Unsupported,
-                planned_capture: AudioBackendKind::Unsupported,
-                planned_playback: AudioBackendKind::Unsupported,
-                planned_microphone: AudioBackendKind::Unsupported,
-                statuses: Self::unsupported_backend_statuses(*platform),
-                readiness: AudioBackendReadiness::Unsupported,
-                notes: vec![format!(
-                    "audio native backend contract is unsupported on {platform:?}"
-                )],
+            Self::Unsupported { platform } => Self::unsupported_backend_contract(*platform),
+        }
+    }
+
+    fn unsupported_capabilities(platform: Platform) -> AudioStreamCapabilities {
+        let reason = format!("audio streaming is unsupported on {platform:?}");
+        AudioStreamCapabilities {
+            system_audio: AudioCapability {
+                supported: false,
+                reason: Some(reason.clone()),
+            },
+            microphone_capture: AudioCapability {
+                supported: false,
+                reason: Some(reason.clone()),
+            },
+            microphone_injection: AudioCapability {
+                supported: false,
+                reason: Some(reason.clone()),
+            },
+            echo_cancellation: AudioCapability {
+                supported: false,
+                reason: Some(reason.clone()),
+            },
+            device_selection: AudioCapability {
+                supported: false,
+                reason: Some(reason),
             },
         }
     }
 
-    fn desktop_backend_notes(native_readiness: &AudioBackendNativeReadiness) -> Vec<String> {
-        if native_readiness.all_native_legs_available() {
-            vec![
-                "all native audio backend legs are configured available for transport-neutral service tests"
-                    .to_string(),
-            ]
-        } else if native_readiness.no_native_legs_available() {
-            vec![
-                "current stream enforces control-plane state only; native capture, playback, client microphone capture, and server microphone injection are not implemented"
-                    .to_string(),
-            ]
-        } else {
-            vec![
-                "current stream enforces control-plane state for unavailable native legs; configured native leg availability is reported per backend status"
-                    .to_string(),
-            ]
+    fn unsupported_backend_contract(platform: Platform) -> AudioBackendContract {
+        AudioBackendContract {
+            control_plane: AudioBackendKind::Unsupported,
+            planned_capture: AudioBackendKind::Unsupported,
+            planned_playback: AudioBackendKind::Unsupported,
+            planned_microphone: AudioBackendKind::Unsupported,
+            statuses: Self::unsupported_backend_statuses(platform),
+            readiness: AudioBackendReadiness::Unsupported,
+            notes: vec![format!(
+                "audio native backend contract is unsupported on {platform:?}"
+            )],
         }
-    }
-
-    fn desktop_backend_statuses(
-        platform: Platform,
-        native_readiness: &AudioBackendNativeReadiness,
-    ) -> Vec<AudioBackendStatus> {
-        let backend = match platform {
-            Platform::Linux => AudioBackendKind::PipeWire,
-            Platform::Macos => AudioBackendKind::CoreAudio,
-            Platform::Windows => AudioBackendKind::Wasapi,
-            Platform::Android | Platform::Ios | Platform::Unknown => AudioBackendKind::Unsupported,
-        };
-
-        AudioBackendNativeReadiness::native_legs()
-        .into_iter()
-        .map(|leg| AudioBackendStatus {
-            leg: leg.clone(),
-            backend: backend.clone(),
-            available: native_readiness.is_available(&leg),
-            readiness: if native_readiness.is_available(&leg) {
-                AudioBackendReadiness::NativeAvailable
-            } else {
-                AudioBackendReadiness::PlannedNative
-            },
-            media: AudioBackendMediaStats::default(),
-            failure: if native_readiness.is_available(&leg) {
-                None
-            } else {
-                Some(AudioBackendFailure {
-                    kind: AudioBackendFailureKind::NativeBackendNotImplemented,
-                    message: Self::native_backend_gap_message(&leg, platform),
-                    recovery: "keep the control-plane stream active for state negotiation, but do not expect audio packets until the native backend is implemented".to_string(),
-                })
-            },
-        })
-        .collect()
     }
 
     fn unsupported_backend_statuses(platform: Platform) -> Vec<AudioBackendStatus> {
@@ -313,29 +444,19 @@ impl AudioBackendService {
         .collect()
     }
 
-    fn native_backend_gap_message(leg: &AudioBackendLeg, platform: Platform) -> String {
-        let backend = match platform {
-            Platform::Linux => "PipeWire",
-            Platform::Macos => "CoreAudio",
-            Platform::Windows => "WASAPI",
-            Platform::Android | Platform::Ios | Platform::Unknown => "native",
-        };
-        let capability = match leg {
-            AudioBackendLeg::Capture => "desktop audio capture",
-            AudioBackendLeg::Playback => "client playback",
-            AudioBackendLeg::ClientMicrophoneCapture => "client microphone capture",
-            AudioBackendLeg::ServerMicrophoneInjection => "server-side microphone injection",
-        };
-
-        format!("{capability} via {backend} is not implemented yet")
-    }
-
     fn microphone_injection_readiness(&self) -> AudioBackendReadiness {
         match self {
             Self::DesktopControl {
-                native_readiness, ..
+                platform,
+                native_readiness,
             } => {
-                if native_readiness.is_available(&AudioBackendLeg::ServerMicrophoneInjection) {
+                let Some(native_backend) = NativeAudioMediaBackend::for_platform_with_readiness(
+                    *platform,
+                    native_readiness,
+                ) else {
+                    return AudioBackendReadiness::Unsupported;
+                };
+                if native_backend.leg_available(&AudioBackendLeg::ServerMicrophoneInjection) {
                     AudioBackendReadiness::NativeAvailable
                 } else {
                     AudioBackendReadiness::PlannedNative
@@ -374,7 +495,16 @@ impl AudioBackendService {
 
     fn ensure_supported(&self) -> Result<(), AppRelayError> {
         match self {
-            Self::DesktopControl { .. } => Ok(()),
+            Self::DesktopControl { platform, .. } => {
+                if NativeAudioMediaBackend::for_platform(*platform).is_some() {
+                    Ok(())
+                } else {
+                    Err(AppRelayError::unsupported(
+                        *platform,
+                        Feature::SystemAudioStream,
+                    ))
+                }
+            }
             Self::Unsupported { platform } => Err(AppRelayError::unsupported(
                 *platform,
                 Feature::SystemAudioStream,
@@ -711,6 +841,28 @@ mod tests {
         ];
 
         for (platform, expected_backend) in cases {
+            let native_backend =
+                NativeAudioMediaBackend::for_platform(platform).expect("native backend scaffold");
+            assert_eq!(native_backend.platform, platform);
+            assert_eq!(native_backend.kind(), expected_backend);
+            assert_eq!(
+                native_backend
+                    .legs
+                    .iter()
+                    .map(|leg| leg.leg.clone())
+                    .collect::<Vec<_>>(),
+                vec![
+                    AudioBackendLeg::Capture,
+                    AudioBackendLeg::Playback,
+                    AudioBackendLeg::ClientMicrophoneCapture,
+                    AudioBackendLeg::ServerMicrophoneInjection,
+                ]
+            );
+            assert!(native_backend
+                .legs
+                .iter()
+                .all(|leg| leg.state == NativeAudioMediaBackendLegState::NotImplemented));
+
             let contract = AudioBackendService::for_platform(platform).backend_contract();
 
             assert_eq!(contract.control_plane, AudioBackendKind::ControlPlane);
@@ -859,24 +1011,105 @@ mod tests {
     }
 
     #[test]
-    fn audio_backend_contract_marks_mobile_platforms_unsupported() {
-        let contract = AudioBackendService::for_platform(Platform::Ios).backend_contract();
+    fn audio_backend_contract_marks_mobile_and_unknown_platforms_unsupported() {
+        for platform in [Platform::Android, Platform::Ios, Platform::Unknown] {
+            assert!(NativeAudioMediaBackend::for_platform(platform).is_none());
 
-        assert_eq!(contract.control_plane, AudioBackendKind::Unsupported);
-        assert_eq!(contract.planned_capture, AudioBackendKind::Unsupported);
-        assert_eq!(contract.planned_playback, AudioBackendKind::Unsupported);
-        assert_eq!(contract.planned_microphone, AudioBackendKind::Unsupported);
-        assert_eq!(contract.readiness, AudioBackendReadiness::Unsupported);
-        assert_eq!(contract.statuses.len(), 4);
-        assert!(contract.statuses.iter().all(|status| {
-            status.backend == AudioBackendKind::Unsupported
-                && !status.available
-                && status.readiness == AudioBackendReadiness::Unsupported
-                && status.media == AudioBackendMediaStats::default()
-                && status.failure.as_ref().is_some_and(|failure| {
-                    failure.kind == AudioBackendFailureKind::UnsupportedPlatform
-                })
-        }));
+            let contract = AudioBackendService::for_platform(platform).backend_contract();
+
+            assert_eq!(contract.control_plane, AudioBackendKind::Unsupported);
+            assert_eq!(contract.planned_capture, AudioBackendKind::Unsupported);
+            assert_eq!(contract.planned_playback, AudioBackendKind::Unsupported);
+            assert_eq!(contract.planned_microphone, AudioBackendKind::Unsupported);
+            assert_eq!(contract.readiness, AudioBackendReadiness::Unsupported);
+            assert_eq!(contract.statuses.len(), 4);
+            assert!(contract.statuses.iter().all(|status| {
+                status.backend == AudioBackendKind::Unsupported
+                    && !status.available
+                    && status.readiness == AudioBackendReadiness::Unsupported
+                    && status.media == AudioBackendMediaStats::default()
+                    && status.failure.as_ref().is_some_and(|failure| {
+                        failure.kind == AudioBackendFailureKind::UnsupportedPlatform
+                    })
+            }));
+        }
+    }
+
+    #[test]
+    fn invalid_desktop_control_platform_reports_unsupported_backend_state() {
+        for platform in [Platform::Android, Platform::Ios, Platform::Unknown] {
+            let backend = AudioBackendService::DesktopControl {
+                platform,
+                native_readiness: AudioBackendNativeReadiness::unavailable(),
+            };
+
+            let capabilities = backend.capabilities();
+            let expected_reason = format!("audio streaming is unsupported on {platform:?}");
+            assert!(!capabilities.system_audio.supported);
+            assert!(!capabilities.microphone_capture.supported);
+            assert!(!capabilities.microphone_injection.supported);
+            assert!(!capabilities.echo_cancellation.supported);
+            assert!(!capabilities.device_selection.supported);
+            assert_eq!(
+                capabilities.system_audio.reason.as_deref(),
+                Some(expected_reason.as_str())
+            );
+
+            let contract = backend.backend_contract();
+            assert_eq!(contract.control_plane, AudioBackendKind::Unsupported);
+            assert_eq!(contract.planned_capture, AudioBackendKind::Unsupported);
+            assert_eq!(contract.planned_playback, AudioBackendKind::Unsupported);
+            assert_eq!(contract.planned_microphone, AudioBackendKind::Unsupported);
+            assert_eq!(contract.readiness, AudioBackendReadiness::Unsupported);
+            assert_eq!(contract.statuses.len(), 4);
+            assert!(contract.statuses.iter().all(|status| {
+                status.backend == AudioBackendKind::Unsupported
+                    && !status.available
+                    && status.readiness == AudioBackendReadiness::Unsupported
+                    && status.failure.as_ref().is_some_and(|failure| {
+                        failure.kind == AudioBackendFailureKind::UnsupportedPlatform
+                    })
+            }));
+            assert_eq!(
+                backend.microphone_injection_readiness(),
+                AudioBackendReadiness::Unsupported
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_desktop_control_platform_stream_start_reports_unsupported() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service =
+            InMemoryAudioStreamService::new(AudioBackendService::DesktopControl {
+                platform: Platform::Android,
+                native_readiness: AudioBackendNativeReadiness::unavailable(),
+            });
+
+        let error = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Disabled,
+                    system_audio_muted: false,
+                    microphone_muted: false,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+                &session,
+            )
+            .expect_err("invalid desktop control platform should be unsupported");
+
+        assert_eq!(
+            error,
+            AppRelayError::unsupported(Platform::Android, Feature::SystemAudioStream)
+        );
     }
 
     #[test]
