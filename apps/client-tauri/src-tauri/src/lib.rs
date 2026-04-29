@@ -612,6 +612,7 @@ pub fn run() {
             close_application_session,
             video_stream::start_video_stream,
             video_stream::stop_video_stream,
+            video_stream::reconnect_video_stream,
             video_stream::video_stream_status
         ])
         .run(tauri::generate_context!())

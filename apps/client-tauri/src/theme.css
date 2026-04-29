@@ -156,6 +156,11 @@ h1 {
   color: #cbd5e1;
 }
 
+.stream-panel p {
+  color: #93c5fd;
+  margin: 0;
+}
+
 .viewport-fields label {
   color: var(--swavan-muted);
   display: grid;

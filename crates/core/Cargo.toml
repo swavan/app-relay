@@ -5,7 +5,7 @@ edition.workspace = true
 repository.workspace = true
 
 [dependencies]
-swavan-protocol = { path = "../protocol" }
+swavan-protocol = { package = "apprelay-protocol", path = "../protocol" }
 
 [lib]
 path = "src/lib.rs"

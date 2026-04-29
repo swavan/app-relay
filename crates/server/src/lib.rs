@@ -17,8 +17,8 @@ use swavan_core::{
 use swavan_protocol::{
     ApplicationSession, ApplicationSummary, ControlAuth, ControlError, ControlResult,
     CreateSessionRequest, HealthStatus, HeartbeatStatus, Platform, PlatformCapability,
-    ResizeSessionRequest, ServerVersion, StartVideoStreamRequest, StopVideoStreamRequest,
-    SwavanError, VideoStreamSession,
+    ReconnectVideoStreamRequest, ResizeSessionRequest, ServerVersion, StartVideoStreamRequest,
+    StopVideoStreamRequest, SwavanError, VideoStreamSession,
 };
 
 use crate::video_stream::VideoStreamControl;
@@ -91,7 +91,9 @@ impl ServerServices {
         &mut self,
         request: ResizeSessionRequest,
     ) -> Result<ApplicationSession, SwavanError> {
-        self.session_service.resize_session(request)
+        let session = self.session_service.resize_session(request.clone())?;
+        self.video_stream.record_resize(&request);
+        Ok(session)
     }
 
     pub fn close_session(&mut self, session_id: &str) -> Result<ApplicationSession, SwavanError> {
@@ -115,6 +117,13 @@ impl ServerServices {
         request: StopVideoStreamRequest,
     ) -> Result<VideoStreamSession, SwavanError> {
         self.video_stream.stop(request)
+    }
+
+    pub fn reconnect_video_stream(
+        &mut self,
+        request: ReconnectVideoStreamRequest,
+    ) -> Result<VideoStreamSession, SwavanError> {
+        self.video_stream.reconnect(request)
     }
 
     pub fn video_stream_status(&self, stream_id: &str) -> Result<VideoStreamSession, SwavanError> {
@@ -250,6 +259,17 @@ impl ServerControlPlane {
     ) -> ControlResult<VideoStreamSession> {
         self.authorize(auth)?;
         self.services.stop_video_stream(request).map_err(Into::into)
+    }
+
+    pub fn reconnect_video_stream(
+        &mut self,
+        auth: &ControlAuth,
+        request: ReconnectVideoStreamRequest,
+    ) -> ControlResult<VideoStreamSession> {
+        self.authorize(auth)?;
+        self.services
+            .reconnect_video_stream(request)
+            .map_err(Into::into)
     }
 
     pub fn video_stream_status(

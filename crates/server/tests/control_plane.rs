@@ -1,8 +1,8 @@
 use swavan_core::ServerConfig;
 use swavan_protocol::{
-    ControlAuth, ControlError, CreateSessionRequest, Feature, Platform, ResizeSessionRequest,
-    ServerVersion, SessionState, StartVideoStreamRequest, StopVideoStreamRequest, SwavanError,
-    VideoStreamState, ViewportSize,
+    ControlAuth, ControlError, CreateSessionRequest, Feature, Platform,
+    ReconnectVideoStreamRequest, ResizeSessionRequest, ServerVersion, SessionState,
+    StartVideoStreamRequest, StopVideoStreamRequest, SwavanError, VideoStreamState, ViewportSize,
 };
 use swavan_server::{ServerControlPlane, ServerServices};
 
@@ -181,4 +181,59 @@ fn control_plane_manages_video_stream_lifecycle() {
         .expect("stop video stream");
 
     assert_eq!(stopped.state, VideoStreamState::Stopped);
+}
+
+#[test]
+fn control_plane_reconnects_and_resizes_video_stream() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let stream = control_plane
+        .start_video_stream(
+            &auth,
+            StartVideoStreamRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .expect("start video stream");
+
+    let reconnected = control_plane
+        .reconnect_video_stream(
+            &auth,
+            ReconnectVideoStreamRequest {
+                stream_id: stream.id.clone(),
+            },
+        )
+        .expect("reconnect video stream");
+    assert_eq!(reconnected.stats.reconnect_attempts, 1);
+
+    control_plane
+        .resize_session(
+            &auth,
+            ResizeSessionRequest {
+                session_id: session.id,
+                viewport: ViewportSize::new(1440, 900),
+            },
+        )
+        .expect("resize session");
+
+    let status = control_plane
+        .video_stream_status(&auth, &stream.id)
+        .expect("stream status");
+    assert_eq!(status.viewport, ViewportSize::new(1440, 900));
+    assert_eq!(
+        status.health.message.as_deref(),
+        Some("stream viewport updated")
+    );
 }

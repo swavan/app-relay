@@ -71,6 +71,7 @@ export interface RemoteService {
   closeSession(sessionId: string): Promise<ApplicationSession>;
   startVideoStream(sessionId: string): Promise<VideoStreamSession>;
   stopVideoStream(streamId: string): Promise<VideoStreamSession>;
+  reconnectVideoStream(streamId: string): Promise<VideoStreamSession>;
   videoStreamStatus(streamId: string): Promise<VideoStreamSession>;
 }
 
@@ -132,6 +133,13 @@ export class TauriRemoteService implements RemoteService {
 
   async stopVideoStream(streamId: string): Promise<VideoStreamSession> {
     return invoke<VideoStreamSession>("stop_video_stream", {
+      authToken: this.authToken,
+      request: { streamId }
+    });
+  }
+
+  async reconnectVideoStream(streamId: string): Promise<VideoStreamSession> {
+    return invoke<VideoStreamSession>("reconnect_video_stream", {
       authToken: this.authToken,
       request: { streamId }
     });
