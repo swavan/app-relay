@@ -10,7 +10,7 @@ use swavan_protocol::{
     AppIcon, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession, ControlAuth,
     CreateSessionRequest, Feature, LaunchIntentStatus, Platform, PlatformCapability,
     ResizeIntentStatus, ResizeSessionRequest, SelectedWindow, SessionState, SwavanError,
-    ViewportSize, WindowResizeIntent,
+    ViewportSize, WindowResizeIntent, WindowSelectionMethod,
 };
 use swavan_server::{ServerControlPlane, ServerServices};
 
@@ -101,7 +101,9 @@ pub struct ResizeSessionRequestDto {
 #[serde(rename_all = "camelCase")]
 pub struct SelectedWindowDto {
     pub id: String,
+    pub application_id: String,
     pub title: String,
+    pub selection_method: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -481,7 +483,9 @@ impl From<SelectedWindow> for SelectedWindowDto {
     fn from(window: SelectedWindow) -> Self {
         Self {
             id: window.id,
+            application_id: window.application_id,
             title: window.title,
+            selection_method: window_selection_method_name(&window.selection_method).to_string(),
         }
     }
 }
@@ -543,6 +547,14 @@ fn session_state_name(state: &SessionState) -> &'static str {
         SessionState::Starting => "starting",
         SessionState::Ready => "ready",
         SessionState::Closed => "closed",
+    }
+}
+
+fn window_selection_method_name(method: &WindowSelectionMethod) -> &'static str {
+    match method {
+        WindowSelectionMethod::LaunchIntent => "launchIntent",
+        WindowSelectionMethod::ExistingWindow => "existingWindow",
+        WindowSelectionMethod::Synthetic => "synthetic",
     }
 }
 

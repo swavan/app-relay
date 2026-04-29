@@ -72,7 +72,9 @@ describe("buildAppViewModel", () => {
         applicationId: "terminal",
         selectedWindow: {
           id: "window-1",
+          applicationId: "terminal",
           title: "Terminal",
+          selectionMethod: "launchIntent",
         },
         viewport: {
           width: 1280,

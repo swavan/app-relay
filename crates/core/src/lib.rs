@@ -9,7 +9,7 @@ use swavan_protocol::{
     AppIcon, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession, ApplicationSummary,
     CreateSessionRequest, Feature, HealthStatus, LaunchIntentStatus, Platform, PlatformCapability,
     ResizeIntentStatus, ResizeSessionRequest, SelectedWindow, SessionState, SwavanError,
-    ViewportSize, WindowResizeIntent,
+    ViewportSize, WindowResizeIntent, WindowSelectionMethod,
 };
 
 pub trait HealthService {
@@ -937,12 +937,19 @@ impl InMemoryApplicationSessionService {
         let launch_intent = self
             .launch_backend
             .prepare_launch(&application, &session_id)?;
+        let selection_method = if launch_intent.launch.is_some() {
+            WindowSelectionMethod::LaunchIntent
+        } else {
+            WindowSelectionMethod::Synthetic
+        };
         let session = ApplicationSession {
             id: session_id.clone(),
-            application_id: application.id,
+            application_id: application.id.clone(),
             selected_window: SelectedWindow {
                 id: format!("window-{session_id}"),
+                application_id: application.id,
                 title: application.name,
+                selection_method,
             },
             launch_intent: Some(launch_intent),
             viewport: request.viewport,
@@ -1900,7 +1907,9 @@ event=request_authorized operation=health\n"
                 application_id: "terminal".to_string(),
                 selected_window: SelectedWindow {
                     id: "window-session-1".to_string(),
+                    application_id: "terminal".to_string(),
                     title: "terminal".to_string(),
+                    selection_method: WindowSelectionMethod::Synthetic,
                 },
                 launch_intent: Some(ApplicationLaunchIntent {
                     session_id: "session-1".to_string(),
@@ -1954,6 +1963,11 @@ event=request_authorized operation=health\n"
             .expect("create session");
 
         assert_eq!(session.selected_window.title, "Terminal");
+        assert_eq!(session.selected_window.application_id, "terminal");
+        assert_eq!(
+            session.selected_window.selection_method,
+            WindowSelectionMethod::LaunchIntent
+        );
         assert_eq!(
             session.launch_intent,
             Some(ApplicationLaunchIntent {

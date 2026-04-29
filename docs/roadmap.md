@@ -108,8 +108,10 @@ Scope:
   prompts for approval
 - completed application listing icon slice: Tauri exposes renderable icon data
   when available, and the client renders image icons or stable fallback badges
+- completed selected-window identity slice: sessions expose application id and
+  selection method for the selected window across protocol, Tauri, and client
+  contracts
 - launch or attach-to-running-app flow
-- selected-window identity model
 - server-side session lifecycle
 - requested client viewport size and server-side resize intent
 - client list and tile views backed by real API data

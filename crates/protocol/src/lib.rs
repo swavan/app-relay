@@ -201,7 +201,16 @@ pub enum LaunchIntentStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SelectedWindow {
     pub id: String,
+    pub application_id: String,
     pub title: String,
+    pub selection_method: WindowSelectionMethod,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WindowSelectionMethod {
+    LaunchIntent,
+    ExistingWindow,
+    Synthetic,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
