@@ -4,6 +4,7 @@
     TauriConnectionProfileService,
     type ConnectionProfile
   } from "./connectionProfiles";
+  import { buildAppViewModel } from "./appViewModel";
   import {
     TauriRemoteService,
     type AppSummary,
@@ -24,9 +25,21 @@
   let view: "tile" | "list" = "tile";
   let errorMessage = "";
   let sessionMessage = "";
+  let loading = true;
+
+  $: appView = buildAppViewModel({
+    health,
+    capabilities,
+    apps,
+    errorMessage,
+    selectedProfileLabel: selectedProfile?.label ?? null,
+    activeSession,
+    loading
+  });
 
   onMount(async () => {
     try {
+      loading = true;
       profiles = await profilesService.list();
       selectedProfile = profiles[0] ?? null;
 
@@ -41,6 +54,8 @@
         healthy: false,
         version: "unconnected"
       };
+    } finally {
+      loading = false;
     }
   });
 
@@ -87,29 +102,29 @@
 
   <section class="status" aria-label="Server health">
     <span>{health?.service ?? "swavan-server"}</span>
-    <strong>{health?.version ?? "checking"}</strong>
+    <strong>{appView.healthText}</strong>
   </section>
 
   <section class="status" aria-label="Connection profile">
     <span>Profile</span>
-    <strong>{selectedProfile?.label ?? "Local development"}</strong>
+    <strong>{appView.connectionLabel}</strong>
   </section>
 
-  {#if errorMessage}
+  {#if appView.loadState === "error"}
     <section class="status error" aria-label="Connection error">
       <span>Connection error</span>
-      <strong>{errorMessage}</strong>
+      <strong>{appView.errorText}</strong>
     </section>
   {/if}
 
   <section class="status" aria-label="Capabilities">
     <span>Capabilities</span>
-    <strong>{capabilities.filter((capability) => capability.supported).length}/{capabilities.length}</strong>
+    <strong>{appView.capabilitiesText}</strong>
   </section>
 
   {#if activeSession}
     <section class="status" aria-label="Application session">
-      <span>{activeSession.selectedWindow.title}</span>
+      <span>{appView.sessionTitle}</span>
       <button on:click={closeSession} type="button">Close</button>
     </section>
   {/if}
@@ -122,10 +137,12 @@
   {/if}
 
   <section class:grid={view === "tile"} class:list={view === "list"} aria-label="Applications">
-    {#if apps.length === 0}
-      <p class="empty">No applications found for this server.</p>
+    {#if appView.loadState === "loading"}
+      <p class="empty">Loading applications...</p>
+    {:else if appView.loadState === "empty"}
+      <p class="empty">{appView.emptyText}</p>
     {:else}
-      {#each apps as app}
+      {#each appView.apps as app}
         <button class="app" on:click={() => createSession(app)} type="button">
           <span class="icon" aria-hidden="true"></span>
           <span>{app.name}</span>
