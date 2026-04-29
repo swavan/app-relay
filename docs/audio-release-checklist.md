@@ -7,6 +7,7 @@ Use this checklist before promoting Phase 6 beyond the desktop audio control-pla
 - Confirm `SystemAudioStream` and `ClientMicrophoneInput` desktop control-plane capability results match the host platform.
 - Confirm desktop capability details name the planned native backend: PipeWire on Linux, CoreAudio on macOS, and WASAPI on Windows.
 - Confirm active audio stream status exposes control-plane-only audio state plus planned capture, playback, and microphone backend fields.
+- Confirm active audio stream status exposes unavailable native backend statuses with typed failures for capture, playback, client microphone capture, and server-side microphone injection.
 - Confirm unsupported platforms return explicit unsupported reasons.
 - Confirm audio can start while video is stopped.
 - Confirm video can start while audio is stopped.

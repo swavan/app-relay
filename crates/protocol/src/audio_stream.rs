@@ -73,8 +73,44 @@ pub struct AudioBackendContract {
     pub planned_capture: AudioBackendKind,
     pub planned_playback: AudioBackendKind,
     pub planned_microphone: AudioBackendKind,
+    #[serde(default)]
+    pub statuses: Vec<AudioBackendStatus>,
     pub readiness: AudioBackendReadiness,
     pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioBackendStatus {
+    pub leg: AudioBackendLeg,
+    pub backend: AudioBackendKind,
+    pub available: bool,
+    pub readiness: AudioBackendReadiness,
+    pub failure: Option<AudioBackendFailure>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioBackendLeg {
+    Capture,
+    Playback,
+    ClientMicrophoneCapture,
+    ServerMicrophoneInjection,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioBackendFailure {
+    pub kind: AudioBackendFailureKind,
+    pub message: String,
+    pub recovery: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioBackendFailureKind {
+    NativeBackendNotImplemented,
+    UnsupportedPlatform,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -176,6 +212,59 @@ mod tests {
     }
 
     #[test]
+    fn audio_backend_leg_json_wire_names_are_stable() {
+        let cases = [
+            (AudioBackendLeg::Capture, "\"capture\""),
+            (AudioBackendLeg::Playback, "\"playback\""),
+            (
+                AudioBackendLeg::ClientMicrophoneCapture,
+                "\"clientMicrophoneCapture\"",
+            ),
+            (
+                AudioBackendLeg::ServerMicrophoneInjection,
+                "\"serverMicrophoneInjection\"",
+            ),
+        ];
+
+        for (leg, expected_json) in cases {
+            assert_eq!(
+                serde_json::to_string(&leg).expect("serialize"),
+                expected_json
+            );
+            assert_eq!(
+                serde_json::from_str::<AudioBackendLeg>(expected_json).expect("deserialize"),
+                leg
+            );
+        }
+    }
+
+    #[test]
+    fn audio_backend_failure_kind_json_wire_names_are_stable() {
+        let cases = [
+            (
+                AudioBackendFailureKind::NativeBackendNotImplemented,
+                "\"nativeBackendNotImplemented\"",
+            ),
+            (
+                AudioBackendFailureKind::UnsupportedPlatform,
+                "\"unsupportedPlatform\"",
+            ),
+        ];
+
+        for (kind, expected_json) in cases {
+            assert_eq!(
+                serde_json::to_string(&kind).expect("serialize"),
+                expected_json
+            );
+            assert_eq!(
+                serde_json::from_str::<AudioBackendFailureKind>(expected_json)
+                    .expect("deserialize"),
+                kind
+            );
+        }
+    }
+
+    #[test]
     fn audio_backend_readiness_json_wire_names_are_stable() {
         let cases = [
             (
@@ -196,6 +285,23 @@ mod tests {
                 readiness
             );
         }
+    }
+
+    #[test]
+    fn audio_backend_contract_accepts_legacy_payload_without_statuses() {
+        let payload = r#"{
+            "controlPlane": "controlPlane",
+            "plannedCapture": "pipeWire",
+            "plannedPlayback": "pipeWire",
+            "plannedMicrophone": "pipeWire",
+            "readiness": "controlPlaneOnly",
+            "notes": []
+        }"#;
+
+        let contract =
+            serde_json::from_str::<AudioBackendContract>(payload).expect("deserialize contract");
+
+        assert!(contract.statuses.is_empty());
     }
 
     #[test]

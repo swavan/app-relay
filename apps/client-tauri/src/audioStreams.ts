@@ -1,6 +1,24 @@
 export type MicrophoneMode = "disabled" | "enabled";
 export type AudioBackendKind = "controlPlane" | "pipeWire" | "coreAudio" | "wasapi" | "unsupported";
 export type AudioBackendReadiness = "controlPlaneOnly" | "plannedNative" | "unsupported";
+export type AudioBackendLeg =
+  | "capture"
+  | "playback"
+  | "clientMicrophoneCapture"
+  | "serverMicrophoneInjection";
+export type AudioBackendFailureKind = "nativeBackendNotImplemented" | "unsupportedPlatform";
+
+export type AudioBackendStatus = {
+  leg: AudioBackendLeg;
+  backend: AudioBackendKind;
+  available: boolean;
+  readiness: AudioBackendReadiness;
+  failure?: {
+    kind: AudioBackendFailureKind;
+    message: string;
+    recovery: string;
+  } | null;
+};
 
 export type AudioStreamSession = {
   id: string;
@@ -17,6 +35,7 @@ export type AudioStreamSession = {
     plannedCapture: AudioBackendKind;
     plannedPlayback: AudioBackendKind;
     plannedMicrophone: AudioBackendKind;
+    statuses?: AudioBackendStatus[];
     readiness: AudioBackendReadiness;
     notes: string[];
   };

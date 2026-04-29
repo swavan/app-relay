@@ -1,6 +1,7 @@
 use apprelay_core::ServerConfig;
 use apprelay_protocol::{
-    AppRelayError, AudioStreamState, ButtonAction, ClientPoint, ControlAuth, ControlError,
+    AppRelayError, AudioBackendFailureKind, AudioBackendKind, AudioBackendLeg,
+    AudioBackendReadiness, AudioStreamState, ButtonAction, ClientPoint, ControlAuth, ControlError,
     CreateSessionRequest, Feature, ForwardInputRequest, InputDeliveryStatus, InputEvent,
     MappedInputEvent, MicrophoneMode, NegotiateVideoStreamRequest, Platform, PointerButton,
     ReconnectVideoStreamRequest, ResizeSessionRequest, ServerPoint, ServerVersion, SessionState,
@@ -684,6 +685,34 @@ fn control_plane_starts_audio_stream_on_desktop_platforms() {
         assert_eq!(audio.state, AudioStreamState::Streaming);
         assert!(audio.capabilities.system_audio.supported);
         assert!(audio.capabilities.microphone_capture.supported);
+        let backend = audio.backend.as_ref().expect("audio backend contract");
+        let expected_backend = match platform {
+            Platform::Linux => AudioBackendKind::PipeWire,
+            Platform::Macos => AudioBackendKind::CoreAudio,
+            Platform::Windows => AudioBackendKind::Wasapi,
+            Platform::Android | Platform::Ios | Platform::Unknown => AudioBackendKind::Unsupported,
+        };
+        assert_eq!(
+            backend
+                .statuses
+                .iter()
+                .map(|status| status.leg.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                AudioBackendLeg::Capture,
+                AudioBackendLeg::Playback,
+                AudioBackendLeg::ClientMicrophoneCapture,
+                AudioBackendLeg::ServerMicrophoneInjection,
+            ]
+        );
+        assert!(backend.statuses.iter().all(|status| {
+            status.backend == expected_backend
+                && !status.available
+                && status.readiness == AudioBackendReadiness::PlannedNative
+                && status.failure.as_ref().is_some_and(|failure| {
+                    failure.kind == AudioBackendFailureKind::NativeBackendNotImplemented
+                })
+        }));
     }
 }
 
