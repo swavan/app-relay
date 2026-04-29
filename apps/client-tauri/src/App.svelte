@@ -14,7 +14,8 @@
     type AppSummary,
     type ApplicationSession,
     type Capability,
-    type HealthStatus
+    type HealthStatus,
+    type ViewportSize
   } from "./services";
 
   const profilesService = new TauriConnectionProfileService();
@@ -29,9 +30,20 @@
   let activeSession: ApplicationSession | null = null;
   let apps: AppSummary[] = [];
   let view: "tile" | "list" = "tile";
+  let viewportWidth = "1280";
+  let viewportHeight = "720";
   let errorMessage = "";
   let sessionMessage = "";
   let loading = true;
+
+  const viewportPresets: ViewportSize[] = [
+    { width: 1280, height: 720 },
+    { width: 1440, height: 900 },
+    { width: 1920, height: 1080 }
+  ];
+
+  $: requestedViewport = parseViewport(viewportWidth, viewportHeight);
+  $: viewportValid = requestedViewport !== null;
 
   $: appView = buildAppViewModel({
     health,
@@ -55,6 +67,9 @@
       capabilities = await remote.capabilities();
       apps = await remote.applications();
       activeSession = (await remote.activeSessions())[0] ?? null;
+      if (activeSession) {
+        setViewport(activeSession.viewport);
+      }
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
       health = {
@@ -81,7 +96,30 @@
         permissions = await permissionService.list();
       }
 
-      activeSession = await remote.createSession(app.id, { width: 1280, height: 720 });
+      if (!requestedViewport) {
+        sessionMessage = "Viewport must be a whole-pixel size.";
+        return;
+      }
+
+      activeSession = await remote.createSession(app.id, requestedViewport);
+    } catch (error) {
+      sessionMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function resizeSession() {
+    if (!activeSession) {
+      return;
+    }
+
+    if (!requestedViewport) {
+      sessionMessage = "Viewport must be a whole-pixel size.";
+      return;
+    }
+
+    try {
+      sessionMessage = "";
+      activeSession = await remote.resizeSession(activeSession.id, requestedViewport);
     } catch (error) {
       sessionMessage = error instanceof Error ? error.message : String(error);
     }
@@ -103,6 +141,37 @@
     } catch (error) {
       sessionMessage = error instanceof Error ? error.message : String(error);
     }
+  }
+
+  function setViewport(viewport: ViewportSize) {
+    viewportWidth = String(viewport.width);
+    viewportHeight = String(viewport.height);
+  }
+
+  function parseViewport(width: string, height: string): ViewportSize | null {
+    const parsedWidth = Number(width);
+    const parsedHeight = Number(height);
+
+    if (
+      !Number.isInteger(parsedWidth) ||
+      !Number.isInteger(parsedHeight) ||
+      parsedWidth <= 0 ||
+      parsedHeight <= 0
+    ) {
+      return null;
+    }
+
+    return {
+      width: parsedWidth,
+      height: parsedHeight
+    };
+  }
+
+  function viewportMatches(viewport: ViewportSize) {
+    return (
+      requestedViewport?.width === viewport.width &&
+      requestedViewport?.height === viewport.height
+    );
   }
 </script>
 
@@ -145,10 +214,53 @@
     <strong>{appView.capabilitiesText}</strong>
   </section>
 
+  <section class="viewport-controls" aria-label="Requested viewport">
+    <div class="viewport-fields">
+      <label>
+        <span>Width</span>
+        <input
+          bind:value={viewportWidth}
+          inputmode="numeric"
+          min="1"
+          step="1"
+          type="number"
+        />
+      </label>
+      <label>
+        <span>Height</span>
+        <input
+          bind:value={viewportHeight}
+          inputmode="numeric"
+          min="1"
+          step="1"
+          type="number"
+        />
+      </label>
+    </div>
+
+    <div class="presets" aria-label="Viewport presets">
+      {#each viewportPresets as preset}
+        <button
+          class:active={viewportMatches(preset)}
+          on:click={() => setViewport(preset)}
+          type="button"
+        >
+          {preset.width} x {preset.height}
+        </button>
+      {/each}
+    </div>
+  </section>
+
   {#if activeSession}
     <section class="status" aria-label="Application session">
-      <span>{appView.sessionTitle}</span>
-      <button on:click={closeSession} type="button">Close</button>
+      <span>
+        {appView.sessionTitle}
+        <small>{activeSession.viewport.width} x {activeSession.viewport.height}</small>
+      </span>
+      <div class="session-actions">
+        <button disabled={!viewportValid} on:click={resizeSession} type="button">Resize</button>
+        <button on:click={closeSession} type="button">Close</button>
+      </div>
     </section>
   {/if}
 
