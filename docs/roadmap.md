@@ -273,6 +273,9 @@ Completed:
 - active audio backend contracts report per-leg status and typed native backend
   failures for desktop capture, client playback, client microphone capture, and
   server-side microphone injection
+- active audio stream status exposes transport-neutral server-side microphone
+  injection request state, readiness, active state, and reason without claiming
+  native media injection
 
 Remaining:
 

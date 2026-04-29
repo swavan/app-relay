@@ -3,8 +3,8 @@ use apprelay_protocol::{
     AudioBackendFailureKind, AudioBackendKind, AudioBackendLeg, AudioBackendReadiness,
     AudioBackendStatus, AudioCapability, AudioCaptureScope, AudioDeviceSelection, AudioMuteState,
     AudioSource, AudioStreamCapabilities, AudioStreamHealth, AudioStreamSession, AudioStreamState,
-    AudioStreamStats, Feature, MicrophoneMode, Platform, SessionState, StartAudioStreamRequest,
-    StopAudioStreamRequest, UpdateAudioStreamRequest,
+    AudioStreamStats, Feature, MicrophoneInjectionState, MicrophoneMode, Platform, SessionState,
+    StartAudioStreamRequest, StopAudioStreamRequest, UpdateAudioStreamRequest,
 };
 
 pub trait AudioStreamService {
@@ -205,6 +205,35 @@ impl AudioBackendService {
         format!("{capability} via {backend} is not implemented yet")
     }
 
+    fn microphone_injection_readiness(&self) -> AudioBackendReadiness {
+        match self {
+            Self::DesktopControl { .. } => AudioBackendReadiness::PlannedNative,
+            Self::Unsupported { .. } => AudioBackendReadiness::Unsupported,
+        }
+    }
+
+    fn microphone_injection_state(
+        &self,
+        microphone: &MicrophoneMode,
+        capabilities: &AudioStreamCapabilities,
+    ) -> MicrophoneInjectionState {
+        let requested = microphone == &MicrophoneMode::Enabled;
+        let reason = if !requested {
+            Some("microphone input is disabled for this session".to_string())
+        } else if !capabilities.microphone_injection.supported {
+            capabilities.microphone_injection.reason.clone()
+        } else {
+            Some("microphone injection is waiting for transport media".to_string())
+        };
+
+        MicrophoneInjectionState {
+            requested,
+            active: false,
+            readiness: self.microphone_injection_readiness(),
+            reason,
+        }
+    }
+
     fn ensure_supported(&self) -> Result<(), AppRelayError> {
         match self {
             Self::DesktopControl { .. } => Ok(()),
@@ -281,6 +310,10 @@ impl AudioStreamService for InMemoryAudioStreamService {
             )));
         }
 
+        let microphone_injection = self
+            .backend
+            .microphone_injection_state(&request.microphone, &capabilities);
+
         let stream = AudioStreamSession {
             id: self.next_stream_id(),
             session_id: session.id.clone(),
@@ -292,6 +325,7 @@ impl AudioStreamService for InMemoryAudioStreamService {
                 input_device_id: request.input_device_id,
             },
             microphone: request.microphone,
+            microphone_injection,
             mute: AudioMuteState {
                 system_audio_muted: request.system_audio_muted,
                 microphone_muted: request.microphone_muted,
@@ -425,6 +459,16 @@ mod tests {
 
         assert_eq!(stream.session_id, session.id);
         assert_eq!(stream.microphone, MicrophoneMode::Enabled);
+        assert!(stream.microphone_injection.requested);
+        assert!(!stream.microphone_injection.active);
+        assert_eq!(
+            stream.microphone_injection.readiness,
+            AudioBackendReadiness::PlannedNative
+        );
+        assert_eq!(
+            stream.microphone_injection.reason.as_deref(),
+            Some("server-side microphone injection backend is not implemented yet")
+        );
         assert!(!stream.mute.system_audio_muted);
         assert!(stream.mute.microphone_muted);
         assert!(stream.capabilities.system_audio.supported);
@@ -442,6 +486,43 @@ mod tests {
             })
         }));
         assert_eq!(stream.state, AudioStreamState::Streaming);
+    }
+
+    #[test]
+    fn audio_stream_reports_microphone_injection_not_requested_when_microphone_disabled() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::default();
+
+        let stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Disabled,
+                    system_audio_muted: false,
+                    microphone_muted: true,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+                &session,
+            )
+            .expect("start audio stream");
+
+        assert!(!stream.microphone_injection.requested);
+        assert!(!stream.microphone_injection.active);
+        assert_eq!(
+            stream.microphone_injection.readiness,
+            AudioBackendReadiness::PlannedNative
+        );
+        assert_eq!(
+            stream.microphone_injection.reason.as_deref(),
+            Some("microphone input is disabled for this session")
+        );
     }
 
     #[test]

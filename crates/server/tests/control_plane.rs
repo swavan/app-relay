@@ -628,6 +628,12 @@ fn control_plane_manages_audio_stream_independently_from_video() {
     assert_eq!(audio.session_id, session.id);
     assert_eq!(audio.selected_window_id, session.selected_window.id);
     assert_eq!(audio.microphone, MicrophoneMode::Enabled);
+    assert!(audio.microphone_injection.requested);
+    assert!(!audio.microphone_injection.active);
+    assert_eq!(
+        audio.microphone_injection.readiness,
+        AudioBackendReadiness::PlannedNative
+    );
     assert!(!audio.mute.system_audio_muted);
     assert!(audio.mute.microphone_muted);
     assert!(audio.capabilities.system_audio.supported);
@@ -683,6 +689,12 @@ fn control_plane_starts_audio_stream_on_desktop_platforms() {
             .expect("start audio stream");
 
         assert_eq!(audio.state, AudioStreamState::Streaming);
+        assert!(audio.microphone_injection.requested);
+        assert!(!audio.microphone_injection.active);
+        assert_eq!(
+            audio.microphone_injection.readiness,
+            AudioBackendReadiness::PlannedNative
+        );
         assert!(audio.capabilities.system_audio.supported);
         assert!(audio.capabilities.microphone_capture.supported);
         let backend = audio.backend.as_ref().expect("audio backend contract");
