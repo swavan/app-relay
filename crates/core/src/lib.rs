@@ -1,4 +1,4 @@
-//! Core service contracts for Swavan AppRelay.
+//! Core service contracts for AppRelay.
 
 mod video_stream;
 
@@ -12,10 +12,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use swavan_protocol::{
-    AppIcon, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession, ApplicationSummary,
-    CreateSessionRequest, Feature, HealthStatus, LaunchIntentStatus, Platform, PlatformCapability,
-    ResizeIntentStatus, ResizeSessionRequest, SelectedWindow, SessionState, SwavanError,
+use apprelay_protocol::{
+    AppIcon, AppRelayError, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession,
+    ApplicationSummary, CreateSessionRequest, Feature, HealthStatus, LaunchIntentStatus, Platform,
+    PlatformCapability, ResizeIntentStatus, ResizeSessionRequest, SelectedWindow, SessionState,
     ViewportSize, WindowResizeIntent, WindowSelectionMethod,
 };
 
@@ -28,19 +28,19 @@ pub trait CapabilityService {
 }
 
 pub trait ApplicationDiscovery {
-    fn available_applications(&self) -> Result<Vec<ApplicationSummary>, SwavanError>;
+    fn available_applications(&self) -> Result<Vec<ApplicationSummary>, AppRelayError>;
 }
 
 pub trait ApplicationSessionService {
     fn create_session(
         &mut self,
         request: CreateSessionRequest,
-    ) -> Result<ApplicationSession, SwavanError>;
+    ) -> Result<ApplicationSession, AppRelayError>;
     fn resize_session(
         &mut self,
         request: ResizeSessionRequest,
-    ) -> Result<ApplicationSession, SwavanError>;
-    fn close_session(&mut self, session_id: &str) -> Result<ApplicationSession, SwavanError>;
+    ) -> Result<ApplicationSession, AppRelayError>;
+    fn close_session(&mut self, session_id: &str) -> Result<ApplicationSession, AppRelayError>;
     fn active_sessions(&self) -> Vec<ApplicationSession>;
 }
 
@@ -49,7 +49,7 @@ pub trait ApplicationLaunchBackend {
         &self,
         application: &ApplicationSummary,
         session_id: &str,
-    ) -> Result<ApplicationLaunchIntent, SwavanError>;
+    ) -> Result<ApplicationLaunchIntent, AppRelayError>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,7 +63,7 @@ impl ApplicationLaunchBackend for ApplicationLaunchBackendService {
         &self,
         application: &ApplicationSummary,
         session_id: &str,
-    ) -> Result<ApplicationLaunchIntent, SwavanError> {
+    ) -> Result<ApplicationLaunchIntent, AppRelayError> {
         match self {
             Self::RecordOnly => Ok(ApplicationLaunchIntent {
                 session_id: session_id.to_string(),
@@ -75,7 +75,7 @@ impl ApplicationLaunchBackend for ApplicationLaunchBackendService {
                     LaunchIntentStatus::Attached
                 },
             }),
-            Self::Unsupported { platform } => Err(SwavanError::unsupported(
+            Self::Unsupported { platform } => Err(AppRelayError::unsupported(
                 *platform,
                 Feature::ApplicationLaunch,
             )),
@@ -88,7 +88,7 @@ pub trait WindowResizeBackend {
         &self,
         selected_window: &SelectedWindow,
         viewport: &ViewportSize,
-    ) -> Result<ResizeIntentStatus, SwavanError>;
+    ) -> Result<ResizeIntentStatus, AppRelayError>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -102,11 +102,11 @@ impl WindowResizeBackend for WindowResizeBackendService {
         &self,
         _selected_window: &SelectedWindow,
         _viewport: &ViewportSize,
-    ) -> Result<ResizeIntentStatus, SwavanError> {
+    ) -> Result<ResizeIntentStatus, AppRelayError> {
         match self {
             Self::RecordOnly => Ok(ResizeIntentStatus::Recorded),
             Self::Unsupported { platform } => {
-                Err(SwavanError::unsupported(*platform, Feature::WindowResize))
+                Err(AppRelayError::unsupported(*platform, Feature::WindowResize))
             }
         }
     }
@@ -169,9 +169,9 @@ impl SessionPolicy {
         )
     }
 
-    pub fn validate_application(&self, application_id: &str) -> Result<(), SwavanError> {
+    pub fn validate_application(&self, application_id: &str) -> Result<(), AppRelayError> {
         if application_id.trim().is_empty() {
-            return Err(SwavanError::InvalidRequest(
+            return Err(AppRelayError::InvalidRequest(
                 "application id is required".to_string(),
             ));
         }
@@ -184,22 +184,22 @@ impl SessionPolicy {
         {
             Ok(())
         } else {
-            Err(SwavanError::PermissionDenied(format!(
+            Err(AppRelayError::PermissionDenied(format!(
                 "application {application_id} is not allowed"
             )))
         }
     }
 
-    pub fn validate_viewport(&self, viewport: &ViewportSize) -> Result<(), SwavanError> {
+    pub fn validate_viewport(&self, viewport: &ViewportSize) -> Result<(), AppRelayError> {
         if viewport.width < self.min_viewport_width || viewport.height < self.min_viewport_height {
-            return Err(SwavanError::InvalidRequest(format!(
+            return Err(AppRelayError::InvalidRequest(format!(
                 "viewport must be at least {}x{}",
                 self.min_viewport_width, self.min_viewport_height
             )));
         }
 
         if viewport.width > self.max_viewport_width || viewport.height > self.max_viewport_height {
-            return Err(SwavanError::InvalidRequest(format!(
+            return Err(AppRelayError::InvalidRequest(format!(
                 "viewport must be at most {}x{}",
                 self.max_viewport_width, self.max_viewport_height
             )));
@@ -924,9 +924,9 @@ impl InMemoryApplicationSessionService {
         &mut self,
         request: CreateSessionRequest,
         application: ApplicationSummary,
-    ) -> Result<ApplicationSession, SwavanError> {
+    ) -> Result<ApplicationSession, AppRelayError> {
         if request.application_id != application.id {
-            return Err(SwavanError::InvalidRequest(format!(
+            return Err(AppRelayError::InvalidRequest(format!(
                 "application {} does not match request {}",
                 application.id, request.application_id
             )));
@@ -939,7 +939,7 @@ impl InMemoryApplicationSessionService {
         &mut self,
         request: CreateSessionRequest,
         application: ApplicationSummary,
-    ) -> Result<ApplicationSession, SwavanError> {
+    ) -> Result<ApplicationSession, AppRelayError> {
         self.policy
             .validate_application(&request.application_id)
             .and_then(|_| self.policy.validate_viewport(&request.viewport))?;
@@ -983,7 +983,7 @@ impl ApplicationSessionService for InMemoryApplicationSessionService {
     fn create_session(
         &mut self,
         request: CreateSessionRequest,
-    ) -> Result<ApplicationSession, SwavanError> {
+    ) -> Result<ApplicationSession, AppRelayError> {
         let application = ApplicationSummary {
             id: request.application_id.clone(),
             name: request.application_id.clone(),
@@ -997,7 +997,7 @@ impl ApplicationSessionService for InMemoryApplicationSessionService {
     fn resize_session(
         &mut self,
         request: ResizeSessionRequest,
-    ) -> Result<ApplicationSession, SwavanError> {
+    ) -> Result<ApplicationSession, AppRelayError> {
         self.policy.validate_viewport(&request.viewport)?;
         let session = self
             .sessions
@@ -1006,7 +1006,7 @@ impl ApplicationSessionService for InMemoryApplicationSessionService {
                 session.id == request.session_id && session.state != SessionState::Closed
             })
             .ok_or_else(|| {
-                SwavanError::NotFound(format!("session {} was not found", request.session_id))
+                AppRelayError::NotFound(format!("session {} was not found", request.session_id))
             })?;
         let intent = WindowResizeIntent {
             session_id: session.id.clone(),
@@ -1022,12 +1022,14 @@ impl ApplicationSessionService for InMemoryApplicationSessionService {
         Ok(session.clone())
     }
 
-    fn close_session(&mut self, session_id: &str) -> Result<ApplicationSession, SwavanError> {
+    fn close_session(&mut self, session_id: &str) -> Result<ApplicationSession, AppRelayError> {
         let session = self
             .sessions
             .iter_mut()
             .find(|session| session.id == session_id && session.state != SessionState::Closed)
-            .ok_or_else(|| SwavanError::NotFound(format!("session {session_id} was not found")))?;
+            .ok_or_else(|| {
+                AppRelayError::NotFound(format!("session {session_id} was not found"))
+            })?;
 
         session.state = SessionState::Closed;
         Ok(session.clone())
@@ -1362,8 +1364,8 @@ impl UnsupportedApplicationDiscovery {
 }
 
 impl ApplicationDiscovery for UnsupportedApplicationDiscovery {
-    fn available_applications(&self) -> Result<Vec<ApplicationSummary>, SwavanError> {
-        Err(SwavanError::unsupported(
+    fn available_applications(&self) -> Result<Vec<ApplicationSummary>, AppRelayError> {
+        Err(AppRelayError::unsupported(
             self.platform,
             Feature::AppDiscovery,
         ))
@@ -1409,7 +1411,7 @@ impl DesktopEntryApplicationDiscovery {
 }
 
 impl ApplicationDiscovery for DesktopEntryApplicationDiscovery {
-    fn available_applications(&self) -> Result<Vec<ApplicationSummary>, SwavanError> {
+    fn available_applications(&self) -> Result<Vec<ApplicationSummary>, AppRelayError> {
         let mut applications = Vec::new();
 
         for root in &self.roots {
@@ -1529,7 +1531,7 @@ impl MacosApplicationDiscovery {
 }
 
 impl ApplicationDiscovery for MacosApplicationDiscovery {
-    fn available_applications(&self) -> Result<Vec<ApplicationSummary>, SwavanError> {
+    fn available_applications(&self) -> Result<Vec<ApplicationSummary>, AppRelayError> {
         let mut applications = Vec::new();
 
         for root in &self.roots {
@@ -1605,11 +1607,11 @@ mod tests {
 
     #[test]
     fn static_health_service_returns_configured_status() {
-        let service = StaticHealthService::new("swavan-server", "0.1.0");
+        let service = StaticHealthService::new("apprelay-server", "0.1.0");
 
         assert_eq!(
             service.status(),
-            HealthStatus::healthy("swavan-server", "0.1.0")
+            HealthStatus::healthy("apprelay-server", "0.1.0")
         );
     }
 
@@ -1667,7 +1669,7 @@ mod tests {
 
         assert_eq!(
             discovery.available_applications(),
-            Err(SwavanError::unsupported(
+            Err(AppRelayError::unsupported(
                 Platform::Windows,
                 Feature::AppDiscovery
             ))
@@ -1947,7 +1949,7 @@ event=request_authorized operation=health\n"
                 application_id: "browser".to_string(),
                 viewport: ViewportSize::new(1280, 720),
             }),
-            Err(SwavanError::PermissionDenied(
+            Err(AppRelayError::PermissionDenied(
                 "application browser is not allowed".to_string()
             ))
         );
@@ -2039,7 +2041,7 @@ event=request_authorized operation=health\n"
                 application_id: "terminal".to_string(),
                 viewport: ViewportSize::new(1280, 720),
             }),
-            Err(SwavanError::unsupported(
+            Err(AppRelayError::unsupported(
                 Platform::Linux,
                 Feature::ApplicationLaunch
             ))
@@ -2095,7 +2097,7 @@ event=request_authorized operation=health\n"
                 session_id: session.id,
                 viewport: ViewportSize::new(1440, 900),
             }),
-            Err(SwavanError::unsupported(
+            Err(AppRelayError::unsupported(
                 Platform::Linux,
                 Feature::WindowResize
             ))
@@ -2127,7 +2129,7 @@ event=request_authorized operation=health\n"
                 application_id: "terminal".to_string(),
                 viewport: ViewportSize::new(100, 100),
             }),
-            Err(SwavanError::InvalidRequest(
+            Err(AppRelayError::InvalidRequest(
                 "viewport must be at least 320x240".to_string()
             ))
         );
@@ -2232,7 +2234,7 @@ event=request_authorized operation=health\n"
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key>
-  <string>dev.swavan.visible</string>
+  <string>dev.apprelay.visible</string>
   <key>CFBundleDisplayName</key>
   <string>Visible Mac App</string>
   <key>CFBundleIconFile</key>
@@ -2252,7 +2254,7 @@ event=request_authorized operation=health\n"
         assert_eq!(
             applications,
             vec![ApplicationSummary {
-                id: "dev.swavan.visible".to_string(),
+                id: "dev.apprelay.visible".to_string(),
                 name: "Visible Mac App".to_string(),
                 icon: Some(AppIcon {
                     mime_type: "application/x-macos-icon-name".to_string(),
@@ -2337,7 +2339,7 @@ event=request_authorized operation=health\n"
         assert_eq!(policy.validate_application("terminal"), Ok(()));
         assert_eq!(
             policy.validate_application("browser"),
-            Err(SwavanError::PermissionDenied(
+            Err(AppRelayError::PermissionDenied(
                 "application browser is not allowed".to_string()
             ))
         );

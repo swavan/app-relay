@@ -1,4 +1,4 @@
-//! Server composition for Swavan AppRelay.
+//! Server composition for AppRelay.
 
 mod video_stream;
 
@@ -8,17 +8,17 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use swavan_core::{
+use apprelay_core::{
     ApplicationDiscovery, ApplicationSessionService, CapabilityService, DefaultCapabilityService,
     DesktopEntryApplicationDiscovery, EventSink, HealthService, InMemoryApplicationSessionService,
     MacosApplicationDiscovery, ServerConfig, ServerEvent, SessionPolicy, StaticHealthService,
     UnsupportedApplicationDiscovery,
 };
-use swavan_protocol::{
-    ApplicationSession, ApplicationSummary, ControlAuth, ControlError, ControlResult,
-    CreateSessionRequest, HealthStatus, HeartbeatStatus, Platform, PlatformCapability,
-    ReconnectVideoStreamRequest, ResizeSessionRequest, ServerVersion, StartVideoStreamRequest,
-    StopVideoStreamRequest, SwavanError, VideoStreamSession,
+use apprelay_protocol::{
+    AppRelayError, ApplicationSession, ApplicationSummary, ControlAuth, ControlError,
+    ControlResult, CreateSessionRequest, HealthStatus, HeartbeatStatus, Platform,
+    PlatformCapability, ReconnectVideoStreamRequest, ResizeSessionRequest, ServerVersion,
+    StartVideoStreamRequest, StopVideoStreamRequest, VideoStreamSession,
 };
 
 use crate::video_stream::VideoStreamControl;
@@ -39,7 +39,7 @@ impl ServerServices {
         let version = version.into();
 
         Self {
-            health_service: StaticHealthService::new("swavan-server", version.clone()),
+            health_service: StaticHealthService::new("apprelay-server", version.clone()),
             capability_service: DefaultCapabilityService::new(platform),
             application_discovery: ApplicationDiscoveryService::for_platform(platform),
             session_service: InMemoryApplicationSessionService::new(SessionPolicy::allow_all()),
@@ -61,14 +61,14 @@ impl ServerServices {
         self.capability_service.platform_capabilities()
     }
 
-    pub fn available_applications(&self) -> Result<Vec<ApplicationSummary>, SwavanError> {
+    pub fn available_applications(&self) -> Result<Vec<ApplicationSummary>, AppRelayError> {
         self.application_discovery.available_applications()
     }
 
     pub fn create_session(
         &mut self,
         request: CreateSessionRequest,
-    ) -> Result<ApplicationSession, SwavanError> {
+    ) -> Result<ApplicationSession, AppRelayError> {
         let application = self
             .application_discovery
             .available_applications()
@@ -90,13 +90,13 @@ impl ServerServices {
     pub fn resize_session(
         &mut self,
         request: ResizeSessionRequest,
-    ) -> Result<ApplicationSession, SwavanError> {
+    ) -> Result<ApplicationSession, AppRelayError> {
         let session = self.session_service.resize_session(request.clone())?;
         self.video_stream.record_resize(&request);
         Ok(session)
     }
 
-    pub fn close_session(&mut self, session_id: &str) -> Result<ApplicationSession, SwavanError> {
+    pub fn close_session(&mut self, session_id: &str) -> Result<ApplicationSession, AppRelayError> {
         self.session_service.close_session(session_id)
     }
 
@@ -107,7 +107,7 @@ impl ServerServices {
     pub fn start_video_stream(
         &mut self,
         request: StartVideoStreamRequest,
-    ) -> Result<VideoStreamSession, SwavanError> {
+    ) -> Result<VideoStreamSession, AppRelayError> {
         self.video_stream
             .start(request, &self.session_service.active_sessions())
     }
@@ -115,23 +115,26 @@ impl ServerServices {
     pub fn stop_video_stream(
         &mut self,
         request: StopVideoStreamRequest,
-    ) -> Result<VideoStreamSession, SwavanError> {
+    ) -> Result<VideoStreamSession, AppRelayError> {
         self.video_stream.stop(request)
     }
 
     pub fn reconnect_video_stream(
         &mut self,
         request: ReconnectVideoStreamRequest,
-    ) -> Result<VideoStreamSession, SwavanError> {
+    ) -> Result<VideoStreamSession, AppRelayError> {
         self.video_stream.reconnect(request)
     }
 
-    pub fn video_stream_status(&self, stream_id: &str) -> Result<VideoStreamSession, SwavanError> {
+    pub fn video_stream_status(
+        &self,
+        stream_id: &str,
+    ) -> Result<VideoStreamSession, AppRelayError> {
         self.video_stream.status(stream_id)
     }
 
     pub fn version(&self) -> ServerVersion {
-        ServerVersion::new("swavan-server", self.version.clone(), self.platform)
+        ServerVersion::new("apprelay-server", self.version.clone(), self.platform)
     }
 }
 
@@ -157,7 +160,7 @@ impl ApplicationDiscoveryService {
 }
 
 impl ApplicationDiscovery for ApplicationDiscoveryService {
-    fn available_applications(&self) -> Result<Vec<ApplicationSummary>, SwavanError> {
+    fn available_applications(&self) -> Result<Vec<ApplicationSummary>, AppRelayError> {
         match self {
             Self::DesktopEntries(discovery) => discovery.available_applications(),
             Self::MacosApplications(discovery) => discovery.available_applications(),
@@ -462,15 +465,15 @@ impl DaemonServiceInstaller {
 
     fn linux_user_systemd_plan(&self) -> Result<ServiceInstallPlan, ServiceInstallError> {
         let home = home_dir()?;
-        let config_path = xdg_config_home(&home).join("swavan/app-relay/server.conf");
-        let log_path = xdg_state_home(&home).join("swavan/app-relay/server.log");
-        let manifest_path = home.join(".config/systemd/user/swavan-app-relay.service");
+        let config_path = xdg_config_home(&home).join("apprelay/server.conf");
+        let log_path = xdg_state_home(&home).join("apprelay/server.log");
+        let manifest_path = home.join(".config/systemd/user/apprelay.service");
         let executable_path = display_path(&self.executable_path);
         let config_arg = display_path(&config_path);
         let log_arg = display_path(&log_path);
         let manifest_contents = format!(
             "[Unit]\n\
-Description=Swavan AppRelay server\n\
+Description=AppRelay server\n\
 \n\
 [Service]\n\
 ExecStart={executable_path} --config {config_arg} --log {log_arg}\n\
@@ -487,20 +490,20 @@ WantedBy=default.target\n"
             config_path,
             log_path,
             manifest_contents,
-            start_command: "systemctl --user start swavan-app-relay.service".to_string(),
-            stop_command: "systemctl --user stop swavan-app-relay.service".to_string(),
-            status_command: "systemctl --user status swavan-app-relay.service".to_string(),
+            start_command: "systemctl --user start apprelay.service".to_string(),
+            stop_command: "systemctl --user stop apprelay.service".to_string(),
+            status_command: "systemctl --user status apprelay.service".to_string(),
             uninstall_command:
-                "systemctl --user disable --now swavan-app-relay.service && rm ~/.config/systemd/user/swavan-app-relay.service && systemctl --user daemon-reload"
+                "systemctl --user disable --now apprelay.service && rm ~/.config/systemd/user/apprelay.service && systemctl --user daemon-reload"
                     .to_string(),
         })
     }
 
     fn macos_launch_agent_plan(&self) -> Result<ServiceInstallPlan, ServiceInstallError> {
         let home = home_dir()?;
-        let config_path = home.join("Library/Application Support/Swavan/AppRelay/server.conf");
-        let log_path = home.join("Library/Logs/Swavan/AppRelay/server.log");
-        let manifest_path = home.join("Library/LaunchAgents/com.swavan.apprelay.server.plist");
+        let config_path = home.join("Library/Application Support/AppRelay/server.conf");
+        let log_path = home.join("Library/Logs/AppRelay/server.log");
+        let manifest_path = home.join("Library/LaunchAgents/dev.apprelay.server.plist");
         let executable_path = xml_escape(&display_path(&self.executable_path));
         let config_arg = xml_escape(&display_path(&config_path));
         let log_arg = xml_escape(&display_path(&log_path));
@@ -511,7 +514,7 @@ WantedBy=default.target\n"
 <plist version=\"1.0\">\n\
 <dict>\n\
   <key>Label</key>\n\
-  <string>com.swavan.apprelay.server</string>\n\
+  <string>dev.apprelay.server</string>\n\
   <key>ProgramArguments</key>\n\
   <array>\n\
     <string>{executable_path}</string>\n\
@@ -535,10 +538,10 @@ WantedBy=default.target\n"
             log_path,
             manifest_contents,
             start_command: format!("launchctl bootstrap gui/$UID {manifest_arg}"),
-            stop_command: "launchctl bootout gui/$UID/com.swavan.apprelay.server".to_string(),
-            status_command: "launchctl print gui/$UID/com.swavan.apprelay.server".to_string(),
+            stop_command: "launchctl bootout gui/$UID/dev.apprelay.server".to_string(),
+            status_command: "launchctl print gui/$UID/dev.apprelay.server".to_string(),
             uninstall_command: format!(
-                "launchctl bootout gui/$UID/com.swavan.apprelay.server; rm {manifest_arg}"
+                "launchctl bootout gui/$UID/dev.apprelay.server; rm {manifest_arg}"
             ),
         })
     }
@@ -547,7 +550,7 @@ WantedBy=default.target\n"
         let program_data = std::env::var_os("ProgramData")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("C:\\ProgramData"));
-        let service_root = program_data.join("Swavan\\AppRelay");
+        let service_root = program_data.join("AppRelay");
         let config_path = service_root.join("server.conf");
         let log_path = service_root.join("server.log");
         let manifest_path = service_root.join("install-service.ps1");
@@ -556,13 +559,13 @@ WantedBy=default.target\n"
         let log_arg = display_path(&log_path);
         let manifest_contents = format!(
             "$ErrorActionPreference = 'Stop'\n\
-$serviceName = 'SwavanAppRelay'\n\
+$serviceName = 'AppRelay'\n\
 $binaryPath = '\"{executable_path}\" --config \"{config_arg}\" --log \"{log_arg}\"'\n\
 if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {{\n\
   sc.exe stop $serviceName | Out-Null\n\
   sc.exe delete $serviceName | Out-Null\n\
 }}\n\
-sc.exe create $serviceName binPath= $binaryPath start= auto DisplayName= 'Swavan AppRelay Server'\n\
+sc.exe create $serviceName binPath= $binaryPath start= auto DisplayName= 'AppRelay Server'\n\
 sc.exe start $serviceName\n"
         );
 
@@ -572,11 +575,10 @@ sc.exe start $serviceName\n"
             config_path,
             log_path,
             manifest_contents,
-            start_command: "sc.exe start SwavanAppRelay".to_string(),
-            stop_command: "sc.exe stop SwavanAppRelay".to_string(),
-            status_command: "sc.exe query SwavanAppRelay".to_string(),
-            uninstall_command: "sc.exe stop SwavanAppRelay && sc.exe delete SwavanAppRelay"
-                .to_string(),
+            start_command: "sc.exe start AppRelay".to_string(),
+            stop_command: "sc.exe stop AppRelay".to_string(),
+            status_command: "sc.exe query AppRelay".to_string(),
+            uninstall_command: "sc.exe stop AppRelay && sc.exe delete AppRelay".to_string(),
         })
     }
 }
@@ -614,7 +616,7 @@ fn xml_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swavan_core::InMemoryEventSink;
+    use apprelay_core::InMemoryEventSink;
 
     #[test]
     fn server_services_report_health() {
@@ -622,7 +624,7 @@ mod tests {
 
         assert_eq!(
             services.health(),
-            HealthStatus::healthy("swavan-server", "test")
+            HealthStatus::healthy("apprelay-server", "test")
         );
     }
 
@@ -632,7 +634,7 @@ mod tests {
 
         assert_eq!(
             services.version(),
-            ServerVersion::new("swavan-server", "test", Platform::Linux)
+            ServerVersion::new("apprelay-server", "test", Platform::Linux)
         );
     }
 
@@ -652,7 +654,7 @@ mod tests {
 
         assert!(matches!(
             services.available_applications(),
-            Err(SwavanError::UnsupportedPlatform { .. })
+            Err(AppRelayError::UnsupportedPlatform { .. })
         ));
     }
 
@@ -678,7 +680,7 @@ mod tests {
 
         assert_eq!(
             control_plane.health(&ControlAuth::new("correct-token")),
-            Ok(HealthStatus::healthy("swavan-server", "test"))
+            Ok(HealthStatus::healthy("apprelay-server", "test"))
         );
     }
 
@@ -719,7 +721,7 @@ mod tests {
                 &auth,
                 CreateSessionRequest {
                     application_id: "terminal".to_string(),
-                    viewport: swavan_protocol::ViewportSize::new(1280, 720),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
                 },
             )
             .expect("create session");
@@ -740,7 +742,7 @@ mod tests {
                 &auth,
                 CreateSessionRequest {
                     application_id: "terminal".to_string(),
-                    viewport: swavan_protocol::ViewportSize::new(1280, 720),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
                 },
             )
             .expect("create session");
@@ -750,7 +752,7 @@ mod tests {
                 &auth,
                 ResizeSessionRequest {
                     session_id: session.id.clone(),
-                    viewport: swavan_protocol::ViewportSize::new(1440, 900),
+                    viewport: apprelay_protocol::ViewportSize::new(1440, 900),
                 },
             )
             .expect("resize session");
@@ -760,9 +762,9 @@ mod tests {
 
         assert_eq!(
             resized.viewport,
-            swavan_protocol::ViewportSize::new(1440, 900)
+            apprelay_protocol::ViewportSize::new(1440, 900)
         );
-        assert_eq!(closed.state, swavan_protocol::SessionState::Closed);
+        assert_eq!(closed.state, apprelay_protocol::SessionState::Closed);
         assert_eq!(control_plane.active_sessions(&auth), Ok(Vec::new()));
     }
 
@@ -778,7 +780,7 @@ mod tests {
                 &ControlAuth::new("wrong-token"),
                 CreateSessionRequest {
                     application_id: "terminal".to_string(),
-                    viewport: swavan_protocol::ViewportSize::new(1280, 720),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
                 },
             ),
             Err(ControlError::Unauthorized)
@@ -795,7 +797,7 @@ mod tests {
 
         assert_eq!(
             server.handle_request("health correct-token", &mut events),
-            "OK health service=swavan-server version=test healthy=true"
+            "OK health service=apprelay-server version=test healthy=true"
         );
         assert_eq!(
             events.events(),
@@ -842,7 +844,7 @@ mod tests {
 
     #[test]
     fn daemon_service_installer_builds_linux_user_systemd_plan() {
-        let installer = DaemonServiceInstaller::new("/usr/bin/swavan-server");
+        let installer = DaemonServiceInstaller::new("/usr/bin/apprelay-server");
         let plan = installer
             .plan_for_platform(Platform::Linux)
             .expect("linux service plan");
@@ -850,22 +852,22 @@ mod tests {
         assert_eq!(plan.platform, Platform::Linux);
         assert!(plan
             .manifest_path
-            .ends_with(".config/systemd/user/swavan-app-relay.service"));
+            .ends_with(".config/systemd/user/apprelay.service"));
         assert!(plan
             .manifest_contents
-            .contains("ExecStart=/usr/bin/swavan-server --config"));
+            .contains("ExecStart=/usr/bin/apprelay-server --config"));
         assert!(plan
             .manifest_contents
             .contains("Restart=on-failure\nRestartSec=3"));
         assert_eq!(
             plan.start_command,
-            "systemctl --user start swavan-app-relay.service"
+            "systemctl --user start apprelay.service"
         );
     }
 
     #[test]
     fn daemon_service_installer_builds_macos_launch_agent_plan() {
-        let installer = DaemonServiceInstaller::new("/Applications/Swavan AppRelay.app/server");
+        let installer = DaemonServiceInstaller::new("/Applications/AppRelay.app/server");
         let plan = installer
             .plan_for_platform(Platform::Macos)
             .expect("macos service plan");
@@ -873,35 +875,33 @@ mod tests {
         assert_eq!(plan.platform, Platform::Macos);
         assert!(plan
             .manifest_path
-            .ends_with("Library/LaunchAgents/com.swavan.apprelay.server.plist"));
+            .ends_with("Library/LaunchAgents/dev.apprelay.server.plist"));
         assert!(plan
             .manifest_contents
-            .contains("<string>com.swavan.apprelay.server</string>"));
+            .contains("<string>dev.apprelay.server</string>"));
         assert!(plan.manifest_contents.contains("<key>KeepAlive</key>"));
         assert!(plan.start_command.starts_with("launchctl bootstrap"));
     }
 
     #[test]
     fn daemon_service_installer_builds_windows_service_script_plan() {
-        let installer = DaemonServiceInstaller::new("C:\\Program Files\\Swavan\\server.exe");
+        let installer = DaemonServiceInstaller::new("C:\\Program Files\\AppRelay\\server.exe");
         let plan = installer
             .plan_for_platform(Platform::Windows)
             .expect("windows service plan");
 
         assert_eq!(plan.platform, Platform::Windows);
         assert!(plan.manifest_path.ends_with("install-service.ps1"));
-        assert!(plan
-            .manifest_contents
-            .contains("$serviceName = 'SwavanAppRelay'"));
+        assert!(plan.manifest_contents.contains("$serviceName = 'AppRelay'"));
         assert!(plan
             .manifest_contents
             .contains("sc.exe create $serviceName"));
-        assert_eq!(plan.status_command, "sc.exe query SwavanAppRelay");
+        assert_eq!(plan.status_command, "sc.exe query AppRelay");
     }
 
     #[test]
     fn daemon_service_installer_rejects_client_platforms() {
-        let installer = DaemonServiceInstaller::new("/usr/bin/swavan-server");
+        let installer = DaemonServiceInstaller::new("/usr/bin/apprelay-server");
 
         assert_eq!(
             installer.plan_for_platform(Platform::Ios),

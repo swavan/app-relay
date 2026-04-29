@@ -87,8 +87,8 @@ installer owns host startup behavior.
 
 The server binary supports:
 
-- `swavan-server service-plan [linux|macos|windows]`
-- `swavan-server install-service [linux|macos|windows]`
+- `apprelay-server service-plan [linux|macos|windows]`
+- `apprelay-server install-service [linux|macos|windows]`
 
 `service-plan` prints the platform manifest, config path, log path, and lifecycle
 commands. `install-service` writes the manifest or installer script to the

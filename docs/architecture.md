@@ -2,7 +2,7 @@
 
 ## Goal
 
-Swavan AppRelay lets a client access selected desktop applications from a phone
+AppRelay lets a client access selected desktop applications from a phone
 or desktop without exposing the entire desktop session.
 
 ## Phase 1 Scope

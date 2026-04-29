@@ -3,18 +3,18 @@ use std::sync::{Mutex, OnceLock};
 
 mod video_stream;
 
-use swavan_core::{
+use apprelay_core::{
     ApplicationPermission, ApplicationPermissionRepository, ConnectionProfile,
     ConnectionProfileRepository, FileApplicationPermissionRepository,
     FileConnectionProfileRepository, ServerConfig,
 };
-use swavan_protocol::{
+use apprelay_protocol::{
     AppIcon, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession, ControlAuth,
     CreateSessionRequest, Feature, LaunchIntentStatus, Platform, PlatformCapability,
-    ResizeIntentStatus, ResizeSessionRequest, SelectedWindow, SessionState, SwavanError,
+    ResizeIntentStatus, ResizeSessionRequest, SelectedWindow, SessionState, AppRelayError,
     ViewportSize, WindowResizeIntent, WindowSelectionMethod,
 };
-use swavan_server::{ServerControlPlane, ServerServices};
+use apprelay_server::{ServerControlPlane, ServerServices};
 
 static CONTROL_PLANE: OnceLock<Mutex<ServerControlPlane>> = OnceLock::new();
 
@@ -277,13 +277,13 @@ fn ensure_application_allowed(application_id: &str) -> Result<(), String> {
     } else {
         Err(format!(
             "{:?}",
-            SwavanError::PermissionDenied(format!("application {application_id} is not allowed"))
+            AppRelayError::PermissionDenied(format!("application {application_id} is not allowed"))
         ))
     }
 }
 
 pub(crate) fn with_control_plane<T>(
-    action: impl FnOnce(&mut ServerControlPlane) -> swavan_protocol::ControlResult<T>,
+    action: impl FnOnce(&mut ServerControlPlane) -> apprelay_protocol::ControlResult<T>,
 ) -> Result<T, String> {
     let mut control_plane = control_plane()
         .lock()
@@ -309,7 +309,7 @@ fn new_control_plane() -> ServerControlPlane {
 fn data_dir() -> PathBuf {
     std::env::var_os("SWAVAN_APP_RELAY_DATA_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("swavan-app-relay"))
+        .unwrap_or_else(|| std::env::temp_dir().join("apprelay"))
 }
 
 impl From<ConnectionProfileDto> for ConnectionProfile {
@@ -358,8 +358,8 @@ impl From<ApplicationPermission> for ApplicationPermissionDto {
     }
 }
 
-impl From<swavan_protocol::HealthStatus> for HealthStatusDto {
-    fn from(status: swavan_protocol::HealthStatus) -> Self {
+impl From<apprelay_protocol::HealthStatus> for HealthStatusDto {
+    fn from(status: apprelay_protocol::HealthStatus) -> Self {
         Self {
             service: status.service,
             healthy: status.healthy,
@@ -379,8 +379,8 @@ impl From<PlatformCapability> for CapabilityDto {
     }
 }
 
-impl From<swavan_protocol::ApplicationSummary> for AppSummaryDto {
-    fn from(application: swavan_protocol::ApplicationSummary) -> Self {
+impl From<apprelay_protocol::ApplicationSummary> for AppSummaryDto {
+    fn from(application: apprelay_protocol::ApplicationSummary) -> Self {
         Self {
             id: application.id,
             name: application.name,
@@ -616,7 +616,7 @@ pub fn run() {
             video_stream::video_stream_status
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run Swavan AppRelay client");
+        .expect("failed to run AppRelay client");
 }
 
 #[cfg(test)]

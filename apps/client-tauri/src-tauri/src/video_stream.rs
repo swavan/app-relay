@@ -1,4 +1,4 @@
-use swavan_protocol::{
+use apprelay_protocol::{
     ControlAuth, ReconnectVideoStreamRequest, StartVideoStreamRequest, StopVideoStreamRequest,
     VideoStreamSession,
 };

@@ -48,10 +48,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "apprelay-client"
+version = "0.1.0"
+dependencies = [
+ "apprelay-core",
+ "apprelay-protocol",
+ "apprelay-server",
+ "serde",
+ "tauri",
+ "tauri-build",
+]
+
+[[package]]
+name = "apprelay-core"
+version = "0.1.0"
+dependencies = [
+ "apprelay-protocol",
+]
+
+[[package]]
 name = "apprelay-protocol"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "apprelay-server"
+version = "0.1.0"
+dependencies = [
+ "apprelay-core",
+ "apprelay-protocol",
 ]
 
 [[package]]
@@ -3154,33 +3181,6 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "swavan-app-relay-client"
-version = "0.1.0"
-dependencies = [
- "apprelay-protocol",
- "serde",
- "swavan-core",
- "swavan-server",
- "tauri",
- "tauri-build",
-]
-
-[[package]]
-name = "swavan-core"
-version = "0.1.0"
-dependencies = [
- "apprelay-protocol",
-]
-
-[[package]]
-name = "swavan-server"
-version = "0.1.0"
-dependencies = [
- "apprelay-protocol",
- "swavan-core",
-]
 
 [[package]]
 name = "swift-rs"

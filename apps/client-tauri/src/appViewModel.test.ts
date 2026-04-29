@@ -44,7 +44,7 @@ describe("buildAppViewModel", () => {
     const viewModel = buildAppViewModel({
       ...baseInput,
       health: {
-        service: "swavan-server",
+        service: "apprelay-server",
         healthy: true,
         version: "0.1.0",
       },

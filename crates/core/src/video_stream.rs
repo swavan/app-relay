@@ -1,8 +1,8 @@
-use swavan_protocol::{
-    ApplicationSession, Feature, Platform, ReconnectVideoStreamRequest, ResizeSessionRequest,
-    SessionState, StartVideoStreamRequest, StopVideoStreamRequest, SwavanError, VideoCaptureScope,
-    VideoCaptureSource, VideoStreamHealth, VideoStreamSession, VideoStreamSignaling,
-    VideoStreamSignalingKind, VideoStreamState, VideoStreamStats,
+use apprelay_protocol::{
+    AppRelayError, ApplicationSession, Feature, Platform, ReconnectVideoStreamRequest,
+    ResizeSessionRequest, SessionState, StartVideoStreamRequest, StopVideoStreamRequest,
+    VideoCaptureScope, VideoCaptureSource, VideoStreamHealth, VideoStreamSession,
+    VideoStreamSignaling, VideoStreamSignalingKind, VideoStreamState, VideoStreamStats,
 };
 
 pub trait VideoStreamService {
@@ -10,17 +10,17 @@ pub trait VideoStreamService {
         &mut self,
         request: StartVideoStreamRequest,
         session: &ApplicationSession,
-    ) -> Result<VideoStreamSession, SwavanError>;
+    ) -> Result<VideoStreamSession, AppRelayError>;
     fn stop_stream(
         &mut self,
         request: StopVideoStreamRequest,
-    ) -> Result<VideoStreamSession, SwavanError>;
+    ) -> Result<VideoStreamSession, AppRelayError>;
     fn reconnect_stream(
         &mut self,
         request: ReconnectVideoStreamRequest,
-    ) -> Result<VideoStreamSession, SwavanError>;
+    ) -> Result<VideoStreamSession, AppRelayError>;
     fn record_resize(&mut self, request: &ResizeSessionRequest);
-    fn stream_status(&self, stream_id: &str) -> Result<VideoStreamSession, SwavanError>;
+    fn stream_status(&self, stream_id: &str) -> Result<VideoStreamSession, AppRelayError>;
 }
 
 pub trait WindowCaptureBackend {
@@ -28,7 +28,7 @@ pub trait WindowCaptureBackend {
         &self,
         stream_id: &str,
         session: &ApplicationSession,
-    ) -> Result<WindowCaptureStart, SwavanError>;
+    ) -> Result<WindowCaptureStart, AppRelayError>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,7 +48,7 @@ impl WindowCaptureBackend for WindowCaptureBackendService {
         &self,
         stream_id: &str,
         session: &ApplicationSession,
-    ) -> Result<WindowCaptureStart, SwavanError> {
+    ) -> Result<WindowCaptureStart, AppRelayError> {
         match self {
             Self::LinuxSelectedWindow => Ok(WindowCaptureStart {
                 source: VideoCaptureSource {
@@ -60,12 +60,12 @@ impl WindowCaptureBackend for WindowCaptureBackendService {
                 signaling: VideoStreamSignaling {
                     kind: VideoStreamSignalingKind::WebRtcOffer,
                     offer: Some(format!(
-                        "swavan-webrtc-offer:{stream_id}:{}",
+                        "apprelay-webrtc-offer:{stream_id}:{}",
                         session.selected_window.id
                     )),
                 },
             }),
-            Self::Unsupported { platform } => Err(SwavanError::unsupported(
+            Self::Unsupported { platform } => Err(AppRelayError::unsupported(
                 *platform,
                 Feature::WindowVideoStream,
             )),
@@ -107,9 +107,9 @@ impl VideoStreamService for InMemoryVideoStreamService {
         &mut self,
         request: StartVideoStreamRequest,
         session: &ApplicationSession,
-    ) -> Result<VideoStreamSession, SwavanError> {
+    ) -> Result<VideoStreamSession, AppRelayError> {
         if session.id != request.session_id || session.state == SessionState::Closed {
-            return Err(SwavanError::NotFound(format!(
+            return Err(AppRelayError::NotFound(format!(
                 "session {} was not found",
                 request.session_id
             )));
@@ -145,7 +145,7 @@ impl VideoStreamService for InMemoryVideoStreamService {
     fn stop_stream(
         &mut self,
         request: StopVideoStreamRequest,
-    ) -> Result<VideoStreamSession, SwavanError> {
+    ) -> Result<VideoStreamSession, AppRelayError> {
         let stream = self
             .streams
             .iter_mut()
@@ -153,7 +153,7 @@ impl VideoStreamService for InMemoryVideoStreamService {
                 stream.id == request.stream_id && stream.state != VideoStreamState::Stopped
             })
             .ok_or_else(|| {
-                SwavanError::NotFound(format!("stream {} was not found", request.stream_id))
+                AppRelayError::NotFound(format!("stream {} was not found", request.stream_id))
             })?;
 
         stream.state = VideoStreamState::Stopped;
@@ -167,17 +167,17 @@ impl VideoStreamService for InMemoryVideoStreamService {
     fn reconnect_stream(
         &mut self,
         request: ReconnectVideoStreamRequest,
-    ) -> Result<VideoStreamSession, SwavanError> {
+    ) -> Result<VideoStreamSession, AppRelayError> {
         let stream = self
             .streams
             .iter_mut()
             .find(|stream| stream.id == request.stream_id)
             .ok_or_else(|| {
-                SwavanError::NotFound(format!("stream {} was not found", request.stream_id))
+                AppRelayError::NotFound(format!("stream {} was not found", request.stream_id))
             })?;
 
         if stream.state == VideoStreamState::Stopped {
-            return Err(SwavanError::InvalidRequest(format!(
+            return Err(AppRelayError::InvalidRequest(format!(
                 "stream {} has been stopped",
                 request.stream_id
             )));
@@ -206,12 +206,12 @@ impl VideoStreamService for InMemoryVideoStreamService {
         }
     }
 
-    fn stream_status(&self, stream_id: &str) -> Result<VideoStreamSession, SwavanError> {
+    fn stream_status(&self, stream_id: &str) -> Result<VideoStreamSession, AppRelayError> {
         self.streams
             .iter()
             .find(|stream| stream.id == stream_id)
             .cloned()
-            .ok_or_else(|| SwavanError::NotFound(format!("stream {stream_id} was not found")))
+            .ok_or_else(|| AppRelayError::NotFound(format!("stream {stream_id} was not found")))
     }
 }
 
@@ -219,7 +219,7 @@ impl VideoStreamService for InMemoryVideoStreamService {
 mod tests {
     use super::*;
     use crate::{ApplicationSessionService, InMemoryApplicationSessionService};
-    use swavan_protocol::{CreateSessionRequest, ViewportSize};
+    use apprelay_protocol::{CreateSessionRequest, ViewportSize};
 
     #[test]
     fn video_stream_service_starts_and_stops_selected_window_stream() {
@@ -363,7 +363,7 @@ mod tests {
                 },
                 &session,
             ),
-            Err(SwavanError::unsupported(
+            Err(AppRelayError::unsupported(
                 Platform::Linux,
                 Feature::WindowVideoStream
             ))

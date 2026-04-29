@@ -1,7 +1,7 @@
-use swavan_core::{InMemoryVideoStreamService, VideoStreamService, WindowCaptureBackendService};
-use swavan_protocol::{
-    ApplicationSession, Platform, ReconnectVideoStreamRequest, ResizeSessionRequest,
-    StartVideoStreamRequest, StopVideoStreamRequest, SwavanError, VideoStreamSession,
+use apprelay_core::{InMemoryVideoStreamService, VideoStreamService, WindowCaptureBackendService};
+use apprelay_protocol::{
+    AppRelayError, ApplicationSession, Platform, ReconnectVideoStreamRequest, ResizeSessionRequest,
+    StartVideoStreamRequest, StopVideoStreamRequest, VideoStreamSession,
 };
 
 #[derive(Debug)]
@@ -35,12 +35,12 @@ impl VideoStreamControl {
         &mut self,
         request: StartVideoStreamRequest,
         sessions: &[ApplicationSession],
-    ) -> Result<VideoStreamSession, SwavanError> {
+    ) -> Result<VideoStreamSession, AppRelayError> {
         let session = sessions
             .iter()
             .find(|session| session.id == request.session_id)
             .ok_or_else(|| {
-                SwavanError::NotFound(format!("session {} was not found", request.session_id))
+                AppRelayError::NotFound(format!("session {} was not found", request.session_id))
             })?;
 
         self.stream_service.start_stream(request, session)
@@ -49,14 +49,14 @@ impl VideoStreamControl {
     pub fn stop(
         &mut self,
         request: StopVideoStreamRequest,
-    ) -> Result<VideoStreamSession, SwavanError> {
+    ) -> Result<VideoStreamSession, AppRelayError> {
         self.stream_service.stop_stream(request)
     }
 
     pub fn reconnect(
         &mut self,
         request: ReconnectVideoStreamRequest,
-    ) -> Result<VideoStreamSession, SwavanError> {
+    ) -> Result<VideoStreamSession, AppRelayError> {
         self.stream_service.reconnect_stream(request)
     }
 
@@ -64,7 +64,7 @@ impl VideoStreamControl {
         self.stream_service.record_resize(request);
     }
 
-    pub fn status(&self, stream_id: &str) -> Result<VideoStreamSession, SwavanError> {
+    pub fn status(&self, stream_id: &str) -> Result<VideoStreamSession, AppRelayError> {
         self.stream_service.stream_status(stream_id)
     }
 }

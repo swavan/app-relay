@@ -1,5 +1,5 @@
 {
-  "name": "swavan-app-relay-client",
+  "name": "apprelay-client",
   "version": "0.1.0",
   "private": true,
   "type": "module",

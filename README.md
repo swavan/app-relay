@@ -1,6 +1,6 @@
-# Swavan AppRelay
+# AppRelay
 
-Swavan AppRelay is a Rust and Tauri/Svelte monorepo for accessing selected
+AppRelay is a Rust and Tauri/Svelte monorepo for accessing selected
 desktop applications from a mobile or desktop client.
 
 ## Workspace
