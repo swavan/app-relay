@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
+mod video_stream;
+
 use swavan_core::{
     ApplicationPermission, ApplicationPermissionRepository, ConnectionProfile,
     ConnectionProfileRepository, FileApplicationPermissionRepository,
@@ -280,7 +282,7 @@ fn ensure_application_allowed(application_id: &str) -> Result<(), String> {
     }
 }
 
-fn with_control_plane<T>(
+pub(crate) fn with_control_plane<T>(
     action: impl FnOnce(&mut ServerControlPlane) -> swavan_protocol::ControlResult<T>,
 ) -> Result<T, String> {
     let mut control_plane = control_plane()
@@ -607,7 +609,10 @@ pub fn run() {
             active_application_sessions,
             create_application_session,
             resize_application_session,
-            close_application_session
+            close_application_session,
+            video_stream::start_video_stream,
+            video_stream::stop_video_stream,
+            video_stream::video_stream_status
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Swavan AppRelay client");

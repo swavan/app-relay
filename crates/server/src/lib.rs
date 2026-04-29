@@ -1,5 +1,7 @@
 //! Server composition for Swavan AppRelay.
 
+mod video_stream;
+
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -15,8 +17,11 @@ use swavan_core::{
 use swavan_protocol::{
     ApplicationSession, ApplicationSummary, ControlAuth, ControlError, ControlResult,
     CreateSessionRequest, HealthStatus, HeartbeatStatus, Platform, PlatformCapability,
-    ResizeSessionRequest, ServerVersion, SwavanError,
+    ResizeSessionRequest, ServerVersion, StartVideoStreamRequest, StopVideoStreamRequest,
+    SwavanError, VideoStreamSession,
 };
+
+use crate::video_stream::VideoStreamControl;
 
 #[derive(Debug)]
 pub struct ServerServices {
@@ -24,6 +29,7 @@ pub struct ServerServices {
     capability_service: DefaultCapabilityService,
     application_discovery: ApplicationDiscoveryService,
     session_service: InMemoryApplicationSessionService,
+    video_stream: VideoStreamControl,
     platform: Platform,
     version: String,
 }
@@ -37,6 +43,7 @@ impl ServerServices {
             capability_service: DefaultCapabilityService::new(platform),
             application_discovery: ApplicationDiscoveryService::for_platform(platform),
             session_service: InMemoryApplicationSessionService::new(SessionPolicy::allow_all()),
+            video_stream: VideoStreamControl::new(),
             platform,
             version,
         }
@@ -93,6 +100,25 @@ impl ServerServices {
 
     pub fn active_sessions(&self) -> Vec<ApplicationSession> {
         self.session_service.active_sessions()
+    }
+
+    pub fn start_video_stream(
+        &mut self,
+        request: StartVideoStreamRequest,
+    ) -> Result<VideoStreamSession, SwavanError> {
+        self.video_stream
+            .start(request, &self.session_service.active_sessions())
+    }
+
+    pub fn stop_video_stream(
+        &mut self,
+        request: StopVideoStreamRequest,
+    ) -> Result<VideoStreamSession, SwavanError> {
+        self.video_stream.stop(request)
+    }
+
+    pub fn video_stream_status(&self, stream_id: &str) -> Result<VideoStreamSession, SwavanError> {
+        self.video_stream.status(stream_id)
     }
 
     pub fn version(&self) -> ServerVersion {
@@ -204,6 +230,37 @@ impl ServerControlPlane {
     pub fn active_sessions(&self, auth: &ControlAuth) -> ControlResult<Vec<ApplicationSession>> {
         self.authorize(auth)?;
         Ok(self.services.active_sessions())
+    }
+
+    pub fn start_video_stream(
+        &mut self,
+        auth: &ControlAuth,
+        request: StartVideoStreamRequest,
+    ) -> ControlResult<VideoStreamSession> {
+        self.authorize(auth)?;
+        self.services
+            .start_video_stream(request)
+            .map_err(Into::into)
+    }
+
+    pub fn stop_video_stream(
+        &mut self,
+        auth: &ControlAuth,
+        request: StopVideoStreamRequest,
+    ) -> ControlResult<VideoStreamSession> {
+        self.authorize(auth)?;
+        self.services.stop_video_stream(request).map_err(Into::into)
+    }
+
+    pub fn video_stream_status(
+        &self,
+        auth: &ControlAuth,
+        stream_id: &str,
+    ) -> ControlResult<VideoStreamSession> {
+        self.authorize(auth)?;
+        self.services
+            .video_stream_status(stream_id)
+            .map_err(Into::into)
     }
 
     pub fn heartbeat(&self, auth: &ControlAuth) -> ControlResult<HeartbeatStatus> {

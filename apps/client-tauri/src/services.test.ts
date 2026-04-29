@@ -120,6 +120,72 @@ class FakeRemoteService implements RemoteService {
       state: "closed" as const
     };
   }
+
+  async startVideoStream(sessionId: string) {
+    return {
+      id: "stream-1",
+      sessionId,
+      selectedWindowId: "window-session-1",
+      viewport: {
+        width: 1280,
+        height: 720
+      },
+      signaling: {
+        kind: "webRtcOffer" as const,
+        offer: "swavan-webrtc-offer:stream-1:window-session-1"
+      },
+      stats: {
+        framesEncoded: 0,
+        bitrateKbps: 0,
+        latencyMs: 0
+      },
+      state: "starting" as const
+    };
+  }
+
+  async stopVideoStream(streamId: string) {
+    return {
+      id: streamId,
+      sessionId: "session-1",
+      selectedWindowId: "window-session-1",
+      viewport: {
+        width: 1280,
+        height: 720
+      },
+      signaling: {
+        kind: "webRtcOffer" as const,
+        offer: "swavan-webrtc-offer:stream-1:window-session-1"
+      },
+      stats: {
+        framesEncoded: 0,
+        bitrateKbps: 0,
+        latencyMs: 0
+      },
+      state: "stopped" as const
+    };
+  }
+
+  async videoStreamStatus(streamId: string) {
+    return {
+      id: streamId,
+      sessionId: "session-1",
+      selectedWindowId: "window-session-1",
+      viewport: {
+        width: 1280,
+        height: 720
+      },
+      signaling: {
+        kind: "webRtcOffer" as const,
+        offer: "swavan-webrtc-offer:stream-1:window-session-1"
+      },
+      stats: {
+        framesEncoded: 0,
+        bitrateKbps: 0,
+        latencyMs: 0
+      },
+      state: "starting" as const
+    };
+  }
 }
 
 describe("RemoteService contract", () => {
@@ -199,6 +265,28 @@ describe("RemoteService contract", () => {
     await expect(service.closeSession("session-1")).resolves.toMatchObject({
       id: "session-1",
       state: "closed"
+    });
+  });
+
+  it("starts, checks, and stops video streams", async () => {
+    const service = new FakeRemoteService();
+
+    await expect(service.startVideoStream("session-1")).resolves.toMatchObject({
+      id: "stream-1",
+      sessionId: "session-1",
+      selectedWindowId: "window-session-1",
+      signaling: {
+        kind: "webRtcOffer"
+      },
+      state: "starting"
+    });
+    await expect(service.videoStreamStatus("stream-1")).resolves.toMatchObject({
+      id: "stream-1",
+      state: "starting"
+    });
+    await expect(service.stopVideoStream("stream-1")).resolves.toMatchObject({
+      id: "stream-1",
+      state: "stopped"
     });
   });
 });

@@ -132,6 +132,30 @@ h1 {
   padding: 12px;
 }
 
+.stream-panel {
+  background: #111827;
+  border: 1px solid #243244;
+  border-radius: var(--swavan-radius);
+  color: #f8fafc;
+  display: grid;
+  gap: 12px;
+  margin: 20px 0;
+  min-height: 180px;
+  padding: 14px;
+}
+
+.stream-panel div {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.stream-panel span {
+  color: #cbd5e1;
+}
+
 .viewport-fields label {
   color: var(--swavan-muted);
   display: grid;

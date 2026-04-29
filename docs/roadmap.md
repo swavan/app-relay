@@ -140,11 +140,17 @@ Acceptance criteria:
 
 ## Phase 4: Video Streaming
 
+Status: in progress
+
 Goal: stream only the selected application window to the client with acceptable
 latency.
 
 Scope:
 
+- completed initial stream contract slice: transport-neutral stream start, stop,
+  status, WebRTC signaling placeholder, selected-window binding, stream stats,
+  and failure-state models flow through core, server, Tauri, and client service
+  contracts
 - selected-window capture backend for the first supported desktop OS
 - WebRTC media negotiation
 - video encoding pipeline

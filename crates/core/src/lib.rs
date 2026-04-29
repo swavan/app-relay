@@ -1,5 +1,12 @@
 //! Core service contracts for Swavan AppRelay.
 
+mod video_stream;
+
+pub use video_stream::{
+    InMemoryVideoStreamService, VideoStreamService, WindowCaptureBackend,
+    WindowCaptureBackendService,
+};
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
