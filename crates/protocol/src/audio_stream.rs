@@ -108,7 +108,20 @@ pub struct AudioBackendStatus {
     pub backend: AudioBackendKind,
     pub available: bool,
     pub readiness: AudioBackendReadiness,
+    #[serde(default)]
+    pub media: AudioBackendMediaStats,
     pub failure: Option<AudioBackendFailure>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioBackendMediaStats {
+    pub available: bool,
+    pub packets_sent: u64,
+    pub packets_received: u64,
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub latency_ms: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -349,6 +362,22 @@ mod tests {
             serde_json::from_str::<AudioBackendContract>(payload).expect("deserialize contract");
 
         assert!(contract.statuses.is_empty());
+    }
+
+    #[test]
+    fn audio_backend_status_accepts_legacy_payload_without_media_stats() {
+        let payload = r#"{
+            "leg": "capture",
+            "backend": "pipeWire",
+            "available": false,
+            "readiness": "plannedNative",
+            "failure": null
+        }"#;
+
+        let status = serde_json::from_str::<AudioBackendStatus>(payload)
+            .expect("deserialize backend status");
+
+        assert_eq!(status.media, AudioBackendMediaStats::default());
     }
 
     #[test]

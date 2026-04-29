@@ -67,6 +67,14 @@ const pipeWireAudioBackendStatuses = nativeAudioBackendStatuses.map((leg) => ({
   backend: "pipeWire" as const,
   available: false,
   readiness: "plannedNative" as const,
+  media: {
+    available: false,
+    packetsSent: 0,
+    packetsReceived: 0,
+    bytesSent: 0,
+    bytesReceived: 0,
+    latencyMs: 0
+  },
   failure: {
     kind: "nativeBackendNotImplemented" as const,
     message: `${leg} via PipeWire is not implemented yet`,

@@ -280,6 +280,9 @@ Completed:
   hook so tests can model capture, playback, client microphone capture, and
   server-side microphone injection legs becoming available without adding OS
   media dependencies or changing production defaults
+- active audio backend leg statuses expose transport-neutral media counters for
+  packets, bytes, and latency that remain zero and unavailable until live media
+  telemetry is implemented
 
 Remaining:
 
