@@ -103,12 +103,14 @@ Scope:
   unsupported errors
 - completed client state slice: app list/session view model covers loading,
   empty, error, and success states
+- completed permission allowlist slice: Rust-owned application grants persist
+  to disk, Tauri enforces grants before creating sessions, and the client only
+  prompts for approval
 - application listing with names and icons
 - launch or attach-to-running-app flow
 - selected-window identity model
 - server-side session lifecycle
 - requested client viewport size and server-side resize intent
-- permission prompts and allowlist policy
 - client list and tile views backed by real API data
 
 Out of scope:
