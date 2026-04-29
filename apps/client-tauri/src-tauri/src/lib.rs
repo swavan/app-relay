@@ -298,7 +298,7 @@ fn control_plane() -> &'static Mutex<ServerControlPlane> {
 
 fn new_control_plane() -> ServerControlPlane {
     let auth_token =
-        std::env::var("SWAVAN_APP_RELAY_TOKEN").unwrap_or_else(|_| "local-dev-token".to_string());
+        std::env::var("APPRELAY_TOKEN").unwrap_or_else(|_| "local-dev-token".to_string());
 
     ServerControlPlane::new(
         ServerServices::for_current_platform(),
@@ -307,7 +307,7 @@ fn new_control_plane() -> ServerControlPlane {
 }
 
 fn data_dir() -> PathBuf {
-    std::env::var_os("SWAVAN_APP_RELAY_DATA_DIR")
+    std::env::var_os("APPRELAY_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("apprelay"))
 }
@@ -613,6 +613,7 @@ pub fn run() {
             video_stream::start_video_stream,
             video_stream::stop_video_stream,
             video_stream::reconnect_video_stream,
+            video_stream::negotiate_video_stream,
             video_stream::video_stream_status
         ])
         .run(tauri::generate_context!())

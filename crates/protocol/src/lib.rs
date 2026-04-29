@@ -7,9 +7,11 @@
 mod video_stream;
 
 pub use video_stream::{
-    ReconnectVideoStreamRequest, StartVideoStreamRequest, StopVideoStreamRequest,
-    VideoCaptureScope, VideoCaptureSource, VideoStreamHealth, VideoStreamSession,
-    VideoStreamSignaling, VideoStreamSignalingKind, VideoStreamState, VideoStreamStats,
+    NegotiateVideoStreamRequest, ReconnectVideoStreamRequest, StartVideoStreamRequest,
+    StopVideoStreamRequest, VideoCaptureScope, VideoCaptureSource, VideoStreamHealth,
+    VideoStreamNegotiationState, VideoStreamSession, VideoStreamSignaling,
+    VideoStreamSignalingKind, VideoStreamState, VideoStreamStats, WebRtcIceCandidate,
+    WebRtcSdpType, WebRtcSessionDescription,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

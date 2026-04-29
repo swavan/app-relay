@@ -16,9 +16,10 @@ use apprelay_core::{
 };
 use apprelay_protocol::{
     AppRelayError, ApplicationSession, ApplicationSummary, ControlAuth, ControlError,
-    ControlResult, CreateSessionRequest, HealthStatus, HeartbeatStatus, Platform,
-    PlatformCapability, ReconnectVideoStreamRequest, ResizeSessionRequest, ServerVersion,
-    StartVideoStreamRequest, StopVideoStreamRequest, VideoStreamSession,
+    ControlResult, CreateSessionRequest, HealthStatus, HeartbeatStatus,
+    NegotiateVideoStreamRequest, Platform, PlatformCapability, ReconnectVideoStreamRequest,
+    ResizeSessionRequest, ServerVersion, StartVideoStreamRequest, StopVideoStreamRequest,
+    VideoStreamSession,
 };
 
 use crate::video_stream::VideoStreamControl;
@@ -124,6 +125,13 @@ impl ServerServices {
         request: ReconnectVideoStreamRequest,
     ) -> Result<VideoStreamSession, AppRelayError> {
         self.video_stream.reconnect(request)
+    }
+
+    pub fn negotiate_video_stream(
+        &mut self,
+        request: NegotiateVideoStreamRequest,
+    ) -> Result<VideoStreamSession, AppRelayError> {
+        self.video_stream.negotiate(request)
     }
 
     pub fn video_stream_status(
@@ -272,6 +280,17 @@ impl ServerControlPlane {
         self.authorize(auth)?;
         self.services
             .reconnect_video_stream(request)
+            .map_err(Into::into)
+    }
+
+    pub fn negotiate_video_stream(
+        &mut self,
+        auth: &ControlAuth,
+        request: NegotiateVideoStreamRequest,
+    ) -> ControlResult<VideoStreamSession> {
+        self.authorize(auth)?;
+        self.services
+            .negotiate_video_stream(request)
             .map_err(Into::into)
     }
 

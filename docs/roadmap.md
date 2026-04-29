@@ -157,7 +157,9 @@ Scope:
 - completed selected-window capture backend slice: Linux stream startup binds
   capture metadata to the selected window instead of the full desktop, while
   unsupported platforms return typed capture errors
-- WebRTC media negotiation
+- completed WebRTC media negotiation slice: stream signaling now carries
+  structured offer, answer, ICE candidates, and negotiation state through the
+  protocol, core, server, Tauri command wrapper, and client service contract
 - video encoding pipeline
 - adaptive resolution based on client viewport
 - client video renderer

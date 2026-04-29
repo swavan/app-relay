@@ -1,7 +1,8 @@
 use apprelay_core::{InMemoryVideoStreamService, VideoStreamService, WindowCaptureBackendService};
 use apprelay_protocol::{
-    AppRelayError, ApplicationSession, Platform, ReconnectVideoStreamRequest, ResizeSessionRequest,
-    StartVideoStreamRequest, StopVideoStreamRequest, VideoStreamSession,
+    AppRelayError, ApplicationSession, NegotiateVideoStreamRequest, Platform,
+    ReconnectVideoStreamRequest, ResizeSessionRequest, StartVideoStreamRequest,
+    StopVideoStreamRequest, VideoStreamSession,
 };
 
 #[derive(Debug)]
@@ -58,6 +59,13 @@ impl VideoStreamControl {
         request: ReconnectVideoStreamRequest,
     ) -> Result<VideoStreamSession, AppRelayError> {
         self.stream_service.reconnect_stream(request)
+    }
+
+    pub fn negotiate(
+        &mut self,
+        request: NegotiateVideoStreamRequest,
+    ) -> Result<VideoStreamSession, AppRelayError> {
+        self.stream_service.negotiate_stream(request)
     }
 
     pub fn record_resize(&mut self, request: &ResizeSessionRequest) {

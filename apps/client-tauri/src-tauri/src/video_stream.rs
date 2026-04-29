@@ -1,6 +1,6 @@
 use apprelay_protocol::{
-    ControlAuth, ReconnectVideoStreamRequest, StartVideoStreamRequest, StopVideoStreamRequest,
-    VideoStreamSession,
+    ControlAuth, NegotiateVideoStreamRequest, ReconnectVideoStreamRequest, StartVideoStreamRequest,
+    StopVideoStreamRequest, VideoStreamSession,
 };
 
 use crate::with_control_plane;
@@ -32,6 +32,16 @@ pub fn reconnect_video_stream(
 ) -> Result<VideoStreamSession, String> {
     with_control_plane(|control_plane| {
         control_plane.reconnect_video_stream(&ControlAuth::new(auth_token), request)
+    })
+}
+
+#[tauri::command]
+pub fn negotiate_video_stream(
+    auth_token: String,
+    request: NegotiateVideoStreamRequest,
+) -> Result<VideoStreamSession, String> {
+    with_control_plane(|control_plane| {
+        control_plane.negotiate_video_stream(&ControlAuth::new(auth_token), request)
     })
 }
 

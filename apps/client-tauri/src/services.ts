@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { VideoStreamSession } from "./videoStreams";
+import type {
+  VideoStreamSession,
+  WebRtcIceCandidate,
+  WebRtcSessionDescription
+} from "./videoStreams";
 
 export type HealthStatus = {
   service: string;
@@ -72,6 +76,11 @@ export interface RemoteService {
   startVideoStream(sessionId: string): Promise<VideoStreamSession>;
   stopVideoStream(streamId: string): Promise<VideoStreamSession>;
   reconnectVideoStream(streamId: string): Promise<VideoStreamSession>;
+  negotiateVideoStream(
+    streamId: string,
+    clientAnswer: WebRtcSessionDescription,
+    clientIceCandidates: WebRtcIceCandidate[]
+  ): Promise<VideoStreamSession>;
   videoStreamStatus(streamId: string): Promise<VideoStreamSession>;
 }
 
@@ -142,6 +151,17 @@ export class TauriRemoteService implements RemoteService {
     return invoke<VideoStreamSession>("reconnect_video_stream", {
       authToken: this.authToken,
       request: { streamId }
+    });
+  }
+
+  async negotiateVideoStream(
+    streamId: string,
+    clientAnswer: WebRtcSessionDescription,
+    clientIceCandidates: WebRtcIceCandidate[]
+  ): Promise<VideoStreamSession> {
+    return invoke<VideoStreamSession>("negotiate_video_stream", {
+      authToken: this.authToken,
+      request: { streamId, clientAnswer, clientIceCandidates }
     });
   }
 

@@ -20,6 +20,14 @@ pub struct ReconnectVideoStreamRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NegotiateVideoStreamRequest {
+    pub stream_id: String,
+    pub client_answer: WebRtcSessionDescription,
+    pub client_ice_candidates: Vec<WebRtcIceCandidate>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VideoStreamSession {
     pub id: String,
     pub session_id: String,
@@ -37,7 +45,10 @@ pub struct VideoStreamSession {
 #[serde(rename_all = "camelCase")]
 pub struct VideoStreamSignaling {
     pub kind: VideoStreamSignalingKind,
-    pub offer: Option<String>,
+    pub negotiation_state: VideoStreamNegotiationState,
+    pub offer: Option<WebRtcSessionDescription>,
+    pub answer: Option<WebRtcSessionDescription>,
+    pub ice_candidates: Vec<WebRtcIceCandidate>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -59,6 +70,35 @@ pub enum VideoCaptureScope {
 #[serde(rename_all = "camelCase")]
 pub enum VideoStreamSignalingKind {
     WebRtcOffer,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoStreamNegotiationState {
+    AwaitingAnswer,
+    Negotiated,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebRtcSessionDescription {
+    pub sdp_type: WebRtcSdpType,
+    pub sdp: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WebRtcSdpType {
+    Offer,
+    Answer,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebRtcIceCandidate {
+    pub candidate: String,
+    pub sdp_mid: Option<String>,
+    pub sdp_m_line_index: Option<u16>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -105,7 +145,17 @@ mod tests {
             },
             signaling: VideoStreamSignaling {
                 kind: VideoStreamSignalingKind::WebRtcOffer,
-                offer: Some("offer".to_string()),
+                negotiation_state: VideoStreamNegotiationState::AwaitingAnswer,
+                offer: Some(WebRtcSessionDescription {
+                    sdp_type: WebRtcSdpType::Offer,
+                    sdp: "offer".to_string(),
+                }),
+                answer: None,
+                ice_candidates: vec![WebRtcIceCandidate {
+                    candidate: "candidate".to_string(),
+                    sdp_mid: Some("video".to_string()),
+                    sdp_m_line_index: Some(0),
+                }],
             },
             stats: VideoStreamStats {
                 frames_encoded: 0,

@@ -1,5 +1,16 @@
 import type { ViewportSize } from "./services";
 
+export type WebRtcSessionDescription = {
+  sdpType: "offer" | "answer";
+  sdp: string;
+};
+
+export type WebRtcIceCandidate = {
+  candidate: string;
+  sdpMid?: string;
+  sdpMLineIndex?: number;
+};
+
 export type VideoStreamSession = {
   id: string;
   sessionId: string;
@@ -13,7 +24,10 @@ export type VideoStreamSession = {
   };
   signaling: {
     kind: "webRtcOffer";
-    offer?: string;
+    negotiationState: "awaitingAnswer" | "negotiated";
+    offer?: WebRtcSessionDescription;
+    answer?: WebRtcSessionDescription;
+    iceCandidates: WebRtcIceCandidate[];
   };
   stats: {
     framesEncoded: number;
