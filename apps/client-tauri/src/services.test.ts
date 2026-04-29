@@ -13,6 +13,31 @@ const serverIceCandidate = {
   sdpMLineIndex: 0
 };
 
+const configuredEncoding = {
+  contract: {
+    codec: "h264" as const,
+    pixelFormat: "rgba" as const,
+    hardwareAcceleration: "none" as const,
+    target: {
+      resolution: {
+        width: 1280,
+        height: 720
+      },
+      maxFps: 30,
+      targetBitrateKbps: 2764,
+      keyframeIntervalFrames: 60
+    }
+  },
+  state: "configured" as const,
+  output: {
+    framesSubmitted: 0,
+    framesEncoded: 0,
+    keyframesEncoded: 0,
+    bytesProduced: 0,
+    lastFrame: null
+  }
+};
+
 class FakeRemoteService implements RemoteService {
   async health() {
     return {
@@ -148,6 +173,7 @@ class FakeRemoteService implements RemoteService {
         applicationId: "terminal",
         title: "Terminal"
       },
+      encoding: configuredEncoding,
       signaling: {
         kind: "webRtcOffer" as const,
         negotiationState: "awaitingAnswer" as const,
@@ -181,6 +207,10 @@ class FakeRemoteService implements RemoteService {
         selectedWindowId: "window-session-1",
         applicationId: "terminal",
         title: "Terminal"
+      },
+      encoding: {
+        ...configuredEncoding,
+        state: "drained" as const
       },
       signaling: {
         kind: "webRtcOffer" as const,
@@ -217,6 +247,7 @@ class FakeRemoteService implements RemoteService {
         applicationId: "terminal",
         title: "Terminal"
       },
+      encoding: configuredEncoding,
       signaling: {
         kind: "webRtcOffer" as const,
         negotiationState: "awaitingAnswer" as const,
@@ -256,6 +287,22 @@ class FakeRemoteService implements RemoteService {
         applicationId: "terminal",
         title: "Terminal"
       },
+      encoding: {
+        ...configuredEncoding,
+        state: "encoding" as const,
+        output: {
+          framesSubmitted: 1,
+          framesEncoded: 1,
+          keyframesEncoded: 1,
+          bytesProduced: 23032,
+          lastFrame: {
+            sequence: 1,
+            timestampMs: 0,
+            byteLength: 23032,
+            keyframe: true
+          }
+        }
+      },
       signaling: {
         kind: "webRtcOffer" as const,
         negotiationState: "negotiated" as const,
@@ -264,9 +311,9 @@ class FakeRemoteService implements RemoteService {
         iceCandidates: [serverIceCandidate, ...clientIceCandidates]
       },
       stats: {
-        framesEncoded: 0,
-        bitrateKbps: 0,
-        latencyMs: 0,
+        framesEncoded: 1,
+        bitrateKbps: 2764,
+        latencyMs: 33,
         reconnectAttempts: 0
       },
       health: {
@@ -292,6 +339,7 @@ class FakeRemoteService implements RemoteService {
         applicationId: "terminal",
         title: "Terminal"
       },
+      encoding: configuredEncoding,
       signaling: {
         kind: "webRtcOffer" as const,
         negotiationState: "awaitingAnswer" as const,
@@ -414,6 +462,22 @@ describe("RemoteService contract", () => {
           }
         ]
       },
+      encoding: {
+        contract: {
+          codec: "h264",
+          target: {
+            resolution: {
+              width: 1280,
+              height: 720
+            }
+          }
+        },
+        state: "configured",
+        output: {
+          framesEncoded: 0,
+          lastFrame: null
+        }
+      },
       state: "starting"
     });
     await expect(
@@ -433,6 +497,23 @@ describe("RemoteService contract", () => {
       },
       health: {
         message: "WebRTC negotiation completed"
+      },
+      encoding: {
+        state: "encoding",
+        output: {
+          framesSubmitted: 1,
+          framesEncoded: 1,
+          keyframesEncoded: 1,
+          lastFrame: {
+            sequence: 1,
+            keyframe: true
+          }
+        }
+      },
+      stats: {
+        framesEncoded: 1,
+        bitrateKbps: 2764,
+        latencyMs: 33
       },
       state: "streaming"
     });

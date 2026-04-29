@@ -11,6 +11,33 @@ export type WebRtcIceCandidate = {
   sdpMLineIndex?: number;
 };
 
+export type VideoEncodingPipeline = {
+  contract: {
+    codec: "h264";
+    pixelFormat: "rgba";
+    hardwareAcceleration: "none";
+    target: {
+      resolution: ViewportSize;
+      maxFps: number;
+      targetBitrateKbps: number;
+      keyframeIntervalFrames: number;
+    };
+  };
+  state: "configured" | "encoding" | "drained";
+  output: {
+    framesSubmitted: number;
+    framesEncoded: number;
+    keyframesEncoded: number;
+    bytesProduced: number;
+    lastFrame: {
+      sequence: number;
+      timestampMs: number;
+      byteLength: number;
+      keyframe: boolean;
+    } | null;
+  };
+};
+
 export type VideoStreamSession = {
   id: string;
   sessionId: string;
@@ -22,6 +49,7 @@ export type VideoStreamSession = {
     applicationId: string;
     title: string;
   };
+  encoding: VideoEncodingPipeline;
   signaling: {
     kind: "webRtcOffer";
     negotiationState: "awaitingAnswer" | "negotiated";

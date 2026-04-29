@@ -1,7 +1,9 @@
 use apprelay_protocol::{
     AppRelayError, ApplicationSession, Feature, NegotiateVideoStreamRequest, Platform,
     ReconnectVideoStreamRequest, ResizeSessionRequest, SessionState, StartVideoStreamRequest,
-    StopVideoStreamRequest, VideoCaptureScope, VideoCaptureSource, VideoStreamHealth,
+    StopVideoStreamRequest, VideoCaptureScope, VideoCaptureSource, VideoCodec,
+    VideoEncodingContract, VideoEncodingOutput, VideoEncodingPipeline, VideoEncodingPipelineState,
+    VideoEncodingTarget, VideoHardwareAcceleration, VideoPixelFormat, VideoStreamHealth,
     VideoStreamNegotiationState, VideoStreamSession, VideoStreamSignaling,
     VideoStreamSignalingKind, VideoStreamState, VideoStreamStats, WebRtcIceCandidate,
     WebRtcSdpType, WebRtcSessionDescription,
@@ -41,6 +43,122 @@ pub trait WindowCaptureBackend {
 pub struct WindowCaptureStart {
     pub source: VideoCaptureSource,
     pub signaling: VideoStreamSignaling,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InMemoryVideoEncodingPipeline;
+
+impl InMemoryVideoEncodingPipeline {
+    const MAX_FPS: u32 = 30;
+    const KEYFRAME_INTERVAL_FRAMES: u32 = 60;
+
+    pub fn configured(viewport: apprelay_protocol::ViewportSize) -> VideoEncodingPipeline {
+        VideoEncodingPipeline {
+            contract: VideoEncodingContract {
+                codec: VideoCodec::H264,
+                pixel_format: VideoPixelFormat::Rgba,
+                hardware_acceleration: VideoHardwareAcceleration::None,
+                target: VideoEncodingTarget {
+                    target_bitrate_kbps: Self::target_bitrate_kbps(&viewport),
+                    resolution: viewport,
+                    max_fps: Self::MAX_FPS,
+                    keyframe_interval_frames: Self::KEYFRAME_INTERVAL_FRAMES,
+                },
+            },
+            state: VideoEncodingPipelineState::Configured,
+            output: VideoEncodingOutput {
+                frames_submitted: 0,
+                frames_encoded: 0,
+                keyframes_encoded: 0,
+                bytes_produced: 0,
+                last_frame: None,
+            },
+        }
+    }
+
+    pub fn encode_next_frame(pipeline: &mut VideoEncodingPipeline) {
+        let next_sequence = pipeline.output.frames_encoded + 1;
+        let keyframe = next_sequence == 1
+            || (next_sequence - 1)
+                .is_multiple_of(u64::from(pipeline.contract.target.keyframe_interval_frames));
+        let byte_length = Self::encoded_frame_bytes(
+            &pipeline.contract.target.resolution,
+            pipeline.contract.target.target_bitrate_kbps,
+            keyframe,
+        );
+
+        pipeline.state = VideoEncodingPipelineState::Encoding;
+        pipeline.output.frames_submitted += 1;
+        pipeline.output.frames_encoded = next_sequence;
+        pipeline.output.keyframes_encoded += if keyframe { 1 } else { 0 };
+        pipeline.output.bytes_produced += u64::from(byte_length);
+        pipeline.output.last_frame = Some(apprelay_protocol::EncodedVideoFrame {
+            sequence: next_sequence,
+            timestamp_ms: (next_sequence - 1) * 1_000 / u64::from(Self::MAX_FPS),
+            byte_length,
+            keyframe,
+        });
+    }
+
+    pub fn reconfigure(
+        pipeline: &mut VideoEncodingPipeline,
+        viewport: apprelay_protocol::ViewportSize,
+        preserve_encoding_state: bool,
+    ) {
+        let state =
+            if preserve_encoding_state && pipeline.state == VideoEncodingPipelineState::Encoding {
+                VideoEncodingPipelineState::Encoding
+            } else {
+                VideoEncodingPipelineState::Configured
+            };
+
+        pipeline.contract.target.resolution = viewport;
+        pipeline.contract.target.target_bitrate_kbps =
+            Self::target_bitrate_kbps(&pipeline.contract.target.resolution);
+        pipeline.state = state;
+    }
+
+    pub fn reset_for_reconnect(pipeline: &mut VideoEncodingPipeline) {
+        pipeline.state = VideoEncodingPipelineState::Configured;
+        pipeline.output = VideoEncodingOutput {
+            frames_submitted: 0,
+            frames_encoded: 0,
+            keyframes_encoded: 0,
+            bytes_produced: 0,
+            last_frame: None,
+        };
+    }
+
+    pub fn drain(pipeline: &mut VideoEncodingPipeline) {
+        pipeline.state = VideoEncodingPipelineState::Drained;
+    }
+
+    fn target_bitrate_kbps(viewport: &apprelay_protocol::ViewportSize) -> u32 {
+        let pixels_per_second =
+            u64::from(viewport.width) * u64::from(viewport.height) * u64::from(Self::MAX_FPS);
+        (pixels_per_second / 10_000)
+            .max(250)
+            .min(u64::from(u32::MAX)) as u32
+    }
+
+    fn encoded_frame_bytes(
+        viewport: &apprelay_protocol::ViewportSize,
+        target_bitrate_kbps: u32,
+        keyframe: bool,
+    ) -> u32 {
+        let frame_budget = (u64::from(target_bitrate_kbps) * 1_000 / 8) / u64::from(Self::MAX_FPS);
+        let floor = u64::from(viewport.width) * u64::from(viewport.height) / 200;
+        let multiplier = if keyframe { 2 } else { 1 };
+        ((frame_budget.max(floor)) * multiplier).min(u64::from(u32::MAX)) as u32
+    }
+}
+
+fn server_ice_candidates(candidates: &[WebRtcIceCandidate]) -> Vec<WebRtcIceCandidate> {
+    candidates
+        .iter()
+        .filter(|candidate| candidate.candidate.starts_with("candidate:apprelay "))
+        .cloned()
+        .collect()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -142,6 +260,7 @@ impl VideoStreamService for InMemoryVideoStreamService {
             selected_window_id: session.selected_window.id.clone(),
             viewport: session.viewport.clone(),
             capture_source: capture.source,
+            encoding: InMemoryVideoEncodingPipeline::configured(session.viewport.clone()),
             signaling: capture.signaling,
             stats: VideoStreamStats {
                 frames_encoded: 0,
@@ -176,6 +295,7 @@ impl VideoStreamService for InMemoryVideoStreamService {
             })?;
 
         stream.state = VideoStreamState::Stopped;
+        InMemoryVideoEncodingPipeline::drain(&mut stream.encoding);
         stream.health = VideoStreamHealth {
             healthy: false,
             message: Some("stream stopped by client".to_string()),
@@ -203,8 +323,13 @@ impl VideoStreamService for InMemoryVideoStreamService {
         }
 
         stream.state = VideoStreamState::Starting;
+        InMemoryVideoEncodingPipeline::reset_for_reconnect(&mut stream.encoding);
         stream.signaling.negotiation_state = VideoStreamNegotiationState::AwaitingAnswer;
         stream.signaling.answer = None;
+        stream.signaling.ice_candidates = server_ice_candidates(&stream.signaling.ice_candidates);
+        stream.stats.frames_encoded = 0;
+        stream.stats.bitrate_kbps = stream.encoding.contract.target.target_bitrate_kbps;
+        stream.stats.latency_ms = 0;
         stream.stats.reconnect_attempts += 1;
         stream.health = VideoStreamHealth {
             healthy: true,
@@ -251,6 +376,10 @@ impl VideoStreamService for InMemoryVideoStreamService {
             .ice_candidates
             .extend(request.client_ice_candidates);
         stream.signaling.negotiation_state = VideoStreamNegotiationState::Negotiated;
+        InMemoryVideoEncodingPipeline::encode_next_frame(&mut stream.encoding);
+        stream.stats.frames_encoded = stream.encoding.output.frames_encoded;
+        stream.stats.bitrate_kbps = stream.encoding.contract.target.target_bitrate_kbps;
+        stream.stats.latency_ms = 1_000 / stream.encoding.contract.target.max_fps;
         stream.state = VideoStreamState::Streaming;
         stream.health = VideoStreamHealth {
             healthy: true,
@@ -267,6 +396,15 @@ impl VideoStreamService for InMemoryVideoStreamService {
                 && stream.state != VideoStreamState::Failed
         }) {
             stream.viewport = request.viewport.clone();
+            InMemoryVideoEncodingPipeline::reconfigure(
+                &mut stream.encoding,
+                request.viewport.clone(),
+                stream.state == VideoStreamState::Streaming,
+            );
+            stream.stats.bitrate_kbps = stream.encoding.contract.target.target_bitrate_kbps;
+            if stream.state == VideoStreamState::Streaming {
+                stream.stats.latency_ms = 1_000 / stream.encoding.contract.target.max_fps;
+            }
             stream.health = VideoStreamHealth {
                 healthy: true,
                 message: Some("stream viewport updated".to_string()),
@@ -326,6 +464,20 @@ mod tests {
         );
         assert_eq!(stream.viewport, ViewportSize::new(1280, 720));
         assert_eq!(stream.state, VideoStreamState::Starting);
+        assert_eq!(
+            stream.encoding.contract.target.resolution,
+            ViewportSize::new(1280, 720)
+        );
+        assert_eq!(stream.encoding.contract.codec, VideoCodec::H264);
+        assert_eq!(
+            stream.encoding.contract.hardware_acceleration,
+            VideoHardwareAcceleration::None
+        );
+        assert_eq!(
+            stream.encoding.state,
+            VideoEncodingPipelineState::Configured
+        );
+        assert_eq!(stream.encoding.output.frames_encoded, 0);
         assert_eq!(stream.signaling.kind, VideoStreamSignalingKind::WebRtcOffer);
         assert_eq!(
             stream_service
@@ -341,6 +493,7 @@ mod tests {
             .expect("stop stream");
 
         assert_eq!(stopped.state, VideoStreamState::Stopped);
+        assert_eq!(stopped.encoding.state, VideoEncodingPipelineState::Drained);
     }
 
     #[test]
@@ -416,6 +569,25 @@ mod tests {
 
         assert_eq!(negotiated.state, VideoStreamState::Streaming);
         assert_eq!(
+            negotiated.encoding.state,
+            VideoEncodingPipelineState::Encoding
+        );
+        assert_eq!(negotiated.encoding.output.frames_submitted, 1);
+        assert_eq!(negotiated.encoding.output.frames_encoded, 1);
+        assert_eq!(negotiated.encoding.output.keyframes_encoded, 1);
+        assert_eq!(
+            negotiated.encoding.output.last_frame,
+            Some(apprelay_protocol::EncodedVideoFrame {
+                sequence: 1,
+                timestamp_ms: 0,
+                byte_length: 23032,
+                keyframe: true,
+            })
+        );
+        assert_eq!(negotiated.stats.frames_encoded, 1);
+        assert_eq!(negotiated.stats.bitrate_kbps, 2764);
+        assert_eq!(negotiated.stats.latency_ms, 33);
+        assert_eq!(
             negotiated.signaling.negotiation_state,
             VideoStreamNegotiationState::Negotiated
         );
@@ -458,9 +630,167 @@ mod tests {
             .expect("stream status");
         assert_eq!(status.viewport, ViewportSize::new(1440, 900));
         assert_eq!(
+            status.encoding.contract.target.resolution,
+            ViewportSize::new(1440, 900)
+        );
+        assert_eq!(status.encoding.contract.target.target_bitrate_kbps, 3888);
+        assert_eq!(
+            status.encoding.state,
+            VideoEncodingPipelineState::Configured
+        );
+        assert_eq!(
             status.health.message.as_deref(),
             Some("stream viewport updated")
         );
+    }
+
+    #[test]
+    fn video_stream_service_keeps_streaming_encoding_coherent_after_resize() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryVideoStreamService::default();
+        let stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        stream_service
+            .negotiate_stream(NegotiateVideoStreamRequest {
+                stream_id: stream.id.clone(),
+                client_answer: WebRtcSessionDescription {
+                    sdp_type: WebRtcSdpType::Answer,
+                    sdp: "client-answer".to_string(),
+                },
+                client_ice_candidates: Vec::new(),
+            })
+            .expect("negotiate stream");
+
+        stream_service.record_resize(&ResizeSessionRequest {
+            session_id: session.id,
+            viewport: ViewportSize::new(1440, 900),
+        });
+
+        let status = stream_service
+            .stream_status(&stream.id)
+            .expect("stream status");
+        assert_eq!(status.state, VideoStreamState::Streaming);
+        assert_eq!(status.encoding.state, VideoEncodingPipelineState::Encoding);
+        assert_eq!(
+            status.encoding.contract.target.resolution,
+            ViewportSize::new(1440, 900)
+        );
+        assert_eq!(status.stats.frames_encoded, 1);
+        assert_eq!(status.stats.bitrate_kbps, 3888);
+        assert_eq!(status.stats.latency_ms, 33);
+    }
+
+    #[test]
+    fn video_stream_service_reconnect_renegotiation_starts_with_fresh_keyframe() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryVideoStreamService::default();
+        let stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        stream_service
+            .negotiate_stream(NegotiateVideoStreamRequest {
+                stream_id: stream.id.clone(),
+                client_answer: WebRtcSessionDescription {
+                    sdp_type: WebRtcSdpType::Answer,
+                    sdp: "first-client-answer".to_string(),
+                },
+                client_ice_candidates: vec![WebRtcIceCandidate {
+                    candidate: "candidate:first-client stream-1 typ host".to_string(),
+                    sdp_mid: Some("video".to_string()),
+                    sdp_m_line_index: Some(0),
+                }],
+            })
+            .expect("first negotiate stream");
+
+        let reconnected = stream_service
+            .reconnect_stream(ReconnectVideoStreamRequest {
+                stream_id: stream.id.clone(),
+            })
+            .expect("reconnect stream");
+        assert_eq!(
+            reconnected.encoding.state,
+            VideoEncodingPipelineState::Configured
+        );
+        assert_eq!(reconnected.encoding.output.frames_encoded, 0);
+        assert_eq!(reconnected.encoding.output.last_frame, None);
+        assert_eq!(
+            reconnected.signaling.ice_candidates,
+            vec![WebRtcIceCandidate {
+                candidate: "candidate:apprelay stream-1 window-session-1 typ host".to_string(),
+                sdp_mid: Some("video".to_string()),
+                sdp_m_line_index: Some(0),
+            }]
+        );
+
+        let renegotiated = stream_service
+            .negotiate_stream(NegotiateVideoStreamRequest {
+                stream_id: stream.id,
+                client_answer: WebRtcSessionDescription {
+                    sdp_type: WebRtcSdpType::Answer,
+                    sdp: "second-client-answer".to_string(),
+                },
+                client_ice_candidates: vec![WebRtcIceCandidate {
+                    candidate: "candidate:second-client stream-1 typ host".to_string(),
+                    sdp_mid: Some("video".to_string()),
+                    sdp_m_line_index: Some(0),
+                }],
+            })
+            .expect("second negotiate stream");
+
+        assert_eq!(
+            renegotiated.encoding.output.last_frame,
+            Some(apprelay_protocol::EncodedVideoFrame {
+                sequence: 1,
+                timestamp_ms: 0,
+                byte_length: 23032,
+                keyframe: true,
+            })
+        );
+        assert_eq!(renegotiated.encoding.output.keyframes_encoded, 1);
+        assert_eq!(renegotiated.stats.frames_encoded, 1);
+        assert_eq!(renegotiated.stats.reconnect_attempts, 1);
+        assert_eq!(renegotiated.signaling.ice_candidates.len(), 2);
+        assert!(renegotiated
+            .signaling
+            .ice_candidates
+            .iter()
+            .any(|candidate| candidate.candidate
+                == "candidate:apprelay stream-1 window-session-1 typ host"));
+        assert!(renegotiated
+            .signaling
+            .ice_candidates
+            .iter()
+            .any(|candidate| candidate.candidate == "candidate:second-client stream-1 typ host"));
+        assert!(!renegotiated
+            .signaling
+            .ice_candidates
+            .iter()
+            .any(|candidate| candidate.candidate == "candidate:first-client stream-1 typ host"));
     }
 
     #[test]
