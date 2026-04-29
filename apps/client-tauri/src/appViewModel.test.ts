@@ -64,6 +64,10 @@ describe("buildAppViewModel", () => {
         {
           id: "terminal",
           name: "Terminal",
+          launch: {
+            kind: "desktopCommand",
+            value: "/usr/bin/gnome-terminal --new-window",
+          },
         },
       ],
       selectedProfileLabel: "Linux PC",
@@ -93,6 +97,11 @@ describe("buildAppViewModel", () => {
       {
         id: "terminal",
         name: "Terminal",
+        launch: {
+          kind: "desktopCommand",
+          value: "/usr/bin/gnome-terminal --new-window",
+        },
+        launchLabel: "Launch gnome-terminal",
         iconView: {
           kind: "label",
           label: "TE",
@@ -124,5 +133,37 @@ describe("buildAppViewModel", () => {
       label: "Terminal",
       title: "terminal.png",
     });
+  });
+
+  it("labels apps without launch metadata as attach targets", () => {
+    const viewModel = buildAppViewModel({
+      ...baseInput,
+      apps: [
+        {
+          id: "terminal",
+          name: "Terminal",
+        },
+      ],
+    });
+
+    expect(viewModel.apps[0].launchLabel).toBe("Attach to running app");
+  });
+
+  it("labels macOS bundle launch metadata", () => {
+    const viewModel = buildAppViewModel({
+      ...baseInput,
+      apps: [
+        {
+          id: "com.example.Terminal",
+          name: "Terminal",
+          launch: {
+            kind: "macosBundle",
+            value: "/Applications/Terminal.app",
+          },
+        },
+      ],
+    });
+
+    expect(viewModel.apps[0].launchLabel).toBe("Launch macOS app");
   });
 });

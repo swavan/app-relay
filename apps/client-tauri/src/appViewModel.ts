@@ -15,6 +15,7 @@ export type AppViewModel = {
 
 export type AppListItem = AppSummary & {
   iconView: AppIconView;
+  launchLabel: string;
 };
 
 export type AppIconView =
@@ -60,7 +61,20 @@ function buildAppListItem(app: AppSummary): AppListItem {
   return {
     ...app,
     iconView: buildAppIconView(app),
+    launchLabel: buildLaunchLabel(app),
   };
+}
+
+function buildLaunchLabel(app: AppSummary): string {
+  if (!app.launch) {
+    return "Attach to running app";
+  }
+
+  if (app.launch.kind === "macosBundle") {
+    return "Launch macOS app";
+  }
+
+  return `Launch ${commandName(app.launch.value)}`;
 }
 
 function buildAppIconView(app: AppSummary): AppIconView {
@@ -97,6 +111,17 @@ function appInitials(name: string): string {
   }
 
   return `${words[0][0]}${words[1][0]}`.toUpperCase();
+}
+
+function commandName(command: string): string {
+  const firstToken = command.trim().split(/\s+/)[0] ?? "";
+  const parts = firstToken.split("/").filter((part) => part.length > 0);
+
+  return parts.at(-1) ?? appFallbackLabel(command);
+}
+
+function appFallbackLabel(value: string): string {
+  return value.trim() || "application";
 }
 
 function resolveLoadState(input: AppViewModelInput): ClientLoadState {

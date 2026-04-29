@@ -80,7 +80,7 @@ Acceptance criteria:
 
 ## Phase 3: Application Discovery And Window Session
 
-Status: in progress
+Status: complete
 
 Goal: let the client choose one desktop application and create a managed window
 session for it.
@@ -116,8 +116,11 @@ Scope:
 - completed client viewport slice: client session creation and resize actions
   send the requested viewport size through the existing server resize intent
   contract
-- launch or attach-to-running-app flow
-- client list and tile views backed by real API data
+- completed launch or attach-to-running-app slice: sessions use launch intent
+  when discovery exposes launch metadata and attach to an existing-window model
+  when launch metadata is absent
+- completed real-data list and tile slice: the client renders both application
+  views from the server-backed app view model, including launch or attach labels
 
 Out of scope:
 

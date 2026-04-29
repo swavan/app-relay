@@ -176,6 +176,25 @@ h1 {
   text-align: left;
 }
 
+.app-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.app-copy strong,
+.app-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-copy small {
+  color: var(--swavan-muted);
+  font-size: 0.78rem;
+  font-weight: 400;
+}
+
 .icon {
   align-items: center;
   background: #e7f5f2;
