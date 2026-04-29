@@ -320,6 +320,15 @@ class FakeRemoteService implements RemoteService {
         inputDeviceId: options.inputDeviceId
       },
       microphone: options.microphone,
+      microphoneInjection: {
+        requested: options.microphone === "enabled",
+        active: false,
+        readiness: "plannedNative" as const,
+        reason:
+          options.microphone === "enabled"
+            ? "server-side microphone injection backend is not implemented yet"
+            : "microphone input is disabled for this session"
+      },
       mute: {
         systemAudioMuted: options.systemAudioMuted,
         microphoneMuted: options.microphoneMuted
@@ -400,6 +409,12 @@ class FakeRemoteService implements RemoteService {
       },
       devices: {},
       microphone: "disabled" as const,
+      microphoneInjection: {
+        requested: false,
+        active: false,
+        readiness: "plannedNative" as const,
+        reason: "microphone input is disabled for this session"
+      },
       mute: {
         systemAudioMuted: false,
         microphoneMuted: true
@@ -784,6 +799,12 @@ describe("RemoteService contract", () => {
       id: "audio-stream-1",
       sessionId: "session-1",
       microphone: "enabled",
+      microphoneInjection: {
+        requested: true,
+        active: false,
+        readiness: "plannedNative",
+        reason: "server-side microphone injection backend is not implemented yet"
+      },
       mute: {
         systemAudioMuted: false,
         microphoneMuted: true

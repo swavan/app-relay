@@ -8,6 +8,7 @@ Use this checklist before promoting Phase 6 beyond the desktop audio control-pla
 - Confirm desktop capability details name the planned native backend: PipeWire on Linux, CoreAudio on macOS, and WASAPI on Windows.
 - Confirm active audio stream status exposes control-plane-only audio state plus planned capture, playback, and microphone backend fields.
 - Confirm active audio stream status exposes unavailable native backend statuses with typed failures for capture, playback, client microphone capture, and server-side microphone injection.
+- Confirm active audio stream status reports whether server-side microphone injection was requested, whether it is active, the native readiness state, and the reason when inactive.
 - Confirm unsupported platforms return explicit unsupported reasons.
 - Confirm audio can start while video is stopped.
 - Confirm video can start while audio is stopped.

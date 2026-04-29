@@ -36,6 +36,8 @@ pub struct AudioStreamSession {
     pub backend: Option<AudioBackendContract>,
     pub devices: AudioDeviceSelection,
     pub microphone: MicrophoneMode,
+    #[serde(default)]
+    pub microphone_injection: MicrophoneInjectionState,
     pub mute: AudioMuteState,
     pub capabilities: AudioStreamCapabilities,
     pub stats: AudioStreamStats,
@@ -64,6 +66,26 @@ pub enum AudioCaptureScope {
 pub enum MicrophoneMode {
     Disabled,
     Enabled,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrophoneInjectionState {
+    pub requested: bool,
+    pub active: bool,
+    pub readiness: AudioBackendReadiness,
+    pub reason: Option<String>,
+}
+
+impl Default for MicrophoneInjectionState {
+    fn default() -> Self {
+        Self {
+            requested: false,
+            active: false,
+            readiness: AudioBackendReadiness::ControlPlaneOnly,
+            reason: Some("microphone injection state was not reported".to_string()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -288,6 +310,26 @@ mod tests {
     }
 
     #[test]
+    fn microphone_injection_state_serializes_explicit_request_state() {
+        let state = MicrophoneInjectionState {
+            requested: true,
+            active: false,
+            readiness: AudioBackendReadiness::PlannedNative,
+            reason: Some("server-side microphone injection backend is not implemented yet".into()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&state).expect("serialize"),
+            serde_json::json!({
+                "requested": true,
+                "active": false,
+                "readiness": "plannedNative",
+                "reason": "server-side microphone injection backend is not implemented yet"
+            })
+        );
+    }
+
+    #[test]
     fn audio_backend_contract_accepts_legacy_payload_without_statuses() {
         let payload = r#"{
             "controlPlane": "controlPlane",
@@ -348,5 +390,9 @@ mod tests {
             serde_json::from_str::<AudioStreamSession>(payload).expect("deserialize session");
 
         assert_eq!(session.backend, None);
+        assert_eq!(
+            session.microphone_injection,
+            MicrophoneInjectionState::default()
+        );
     }
 }

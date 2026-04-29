@@ -44,6 +44,12 @@ export type AudioStreamSession = {
     inputDeviceId?: string;
   };
   microphone: MicrophoneMode;
+  microphoneInjection: {
+    requested: boolean;
+    active: boolean;
+    readiness: AudioBackendReadiness;
+    reason?: string;
+  };
   mute: {
     systemAudioMuted: boolean;
     microphoneMuted: boolean;
