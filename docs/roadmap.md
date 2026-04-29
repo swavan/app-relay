@@ -290,6 +290,10 @@ Completed:
 - core has backend-owned native media session plumbing that can surface
   transport-neutral packet, byte, and latency counters in tests without claiming
   real OS media in production
+- Linux PipeWire desktop capture has a feature-gated adapter boundary in core
+  that can be configured as capture-only and unavailable until a real PipeWire
+  runtime is wired; playback, client microphone capture, server-side microphone
+  injection, macOS CoreAudio, and Windows WASAPI remain unaffected and planned
 
 Remaining:
 

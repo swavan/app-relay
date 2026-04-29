@@ -4,6 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+pipewire-capture = []
+
 [dependencies]
 apprelay-protocol = { path = "../protocol" }
 

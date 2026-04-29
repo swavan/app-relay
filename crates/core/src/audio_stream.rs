@@ -40,6 +40,8 @@ pub enum AudioBackendService {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AudioBackendNativeReadiness {
     available_legs: Vec<AudioBackendLeg>,
+    #[cfg(any(test, feature = "pipewire-capture"))]
+    pipewire_capture_adapter: Option<PipeWireCaptureAdapterRuntime>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,9 +74,23 @@ struct NativeAudioMediaBackendLeg {
     state: NativeAudioMediaBackendLegState,
 }
 
+#[cfg(any(test, feature = "pipewire-capture"))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PipeWireCaptureAdapterRuntime {
+    state: PipeWireCaptureAdapterState,
+}
+
+#[cfg(any(test, feature = "pipewire-capture"))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PipeWireCaptureAdapterState {
+    BoundaryOnly,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum NativeAudioMediaBackendLegState {
     NotImplemented,
+    #[cfg(any(test, feature = "pipewire-capture"))]
+    PipeWireCaptureAdapterUnavailable(PipeWireCaptureAdapterRuntime),
     #[cfg(test)]
     AvailableForTest,
 }
@@ -84,12 +100,23 @@ impl AudioBackendNativeReadiness {
         Self::default()
     }
 
+    #[cfg(any(test, feature = "pipewire-capture"))]
+    pub fn with_linux_pipewire_capture_adapter_boundary() -> Self {
+        Self {
+            available_legs: Vec::new(),
+            pipewire_capture_adapter: Some(PipeWireCaptureAdapterRuntime::boundary_only()),
+        }
+    }
+
     #[cfg(test)]
     fn with_available_legs(available_legs: impl IntoIterator<Item = AudioBackendLeg>) -> Self {
         let mut available_legs = available_legs.into_iter().collect::<Vec<_>>();
         available_legs.sort_by_key(Self::leg_sort_key);
         available_legs.dedup();
-        Self { available_legs }
+        Self {
+            available_legs,
+            ..Self::default()
+        }
     }
 
     #[cfg(test)]
@@ -159,6 +186,7 @@ impl NativeAudioMediaBackend {
         native_readiness: &AudioBackendNativeReadiness,
     ) -> Option<Self> {
         let mut backend = Self::for_platform(platform)?;
+        backend.apply_pipewire_capture_adapter(native_readiness);
         for leg in &mut backend.legs {
             if native_readiness.is_available(&leg.leg) {
                 leg.state = NativeAudioMediaBackendLegState::AvailableForTest;
@@ -170,9 +198,11 @@ impl NativeAudioMediaBackend {
     #[cfg(not(test))]
     fn for_platform_with_readiness(
         platform: Platform,
-        _native_readiness: &AudioBackendNativeReadiness,
+        native_readiness: &AudioBackendNativeReadiness,
     ) -> Option<Self> {
-        Self::for_platform(platform)
+        let mut backend = Self::for_platform(platform)?;
+        backend.apply_pipewire_capture_adapter(native_readiness);
+        Some(backend)
     }
 
     fn kind(&self) -> AudioBackendKind {
@@ -224,11 +254,8 @@ impl NativeAudioMediaBackend {
                 } else {
                     Some(AudioBackendFailure {
                         kind: AudioBackendFailureKind::NativeBackendNotImplemented,
-                        message: Self::native_backend_gap_message(
-                            &backend_leg.leg,
-                            self.platform,
-                        ),
-                        recovery: "keep the control-plane stream active for state negotiation, but do not expect audio packets until the native backend is implemented".to_string(),
+                        message: backend_leg.unavailable_message(self.platform),
+                        recovery: backend_leg.unavailable_recovery(),
                     })
                 },
             })
@@ -240,6 +267,10 @@ impl NativeAudioMediaBackend {
             vec![
                 "all native audio backend legs are configured available for transport-neutral service tests"
                     .to_string(),
+            ]
+        } else if self.has_pipewire_capture_adapter_boundary() {
+            vec![
+                "Linux PipeWire capture has an adapter boundary configured, but it remains unavailable until a real PipeWire capture runtime is wired; playback, client microphone capture, and server-side microphone injection remain planned".to_string(),
             ]
         } else if self.no_legs_available() {
             vec![
@@ -270,6 +301,48 @@ impl NativeAudioMediaBackend {
 
         format!("{capability} via {backend} is not implemented yet")
     }
+
+    fn apply_pipewire_capture_adapter(&mut self, native_readiness: &AudioBackendNativeReadiness) {
+        #[cfg(not(any(test, feature = "pipewire-capture")))]
+        {
+            let _ = native_readiness;
+        }
+
+        #[cfg(any(test, feature = "pipewire-capture"))]
+        {
+            if self.platform != Platform::Linux {
+                return;
+            }
+
+            let Some(adapter) = native_readiness.pipewire_capture_adapter.clone() else {
+                return;
+            };
+
+            if let Some(capture_leg) = self
+                .legs
+                .iter_mut()
+                .find(|backend_leg| backend_leg.leg == AudioBackendLeg::Capture)
+            {
+                capture_leg.state =
+                    NativeAudioMediaBackendLegState::PipeWireCaptureAdapterUnavailable(adapter);
+            }
+        }
+    }
+
+    fn has_pipewire_capture_adapter_boundary(&self) -> bool {
+        self.legs
+            .iter()
+            .any(NativeAudioMediaBackendLeg::is_pipewire_capture_adapter_boundary)
+    }
+}
+
+#[cfg(any(test, feature = "pipewire-capture"))]
+impl PipeWireCaptureAdapterRuntime {
+    fn boundary_only() -> Self {
+        Self {
+            state: PipeWireCaptureAdapterState::BoundaryOnly,
+        }
+    }
 }
 
 impl NativeAudioMediaBackendLeg {
@@ -290,8 +363,52 @@ impl NativeAudioMediaBackendLeg {
     fn is_available(&self) -> bool {
         match self.state {
             NativeAudioMediaBackendLegState::NotImplemented => false,
+            #[cfg(any(test, feature = "pipewire-capture"))]
+            NativeAudioMediaBackendLegState::PipeWireCaptureAdapterUnavailable(_) => false,
             #[cfg(test)]
             NativeAudioMediaBackendLegState::AvailableForTest => true,
+        }
+    }
+
+    fn is_pipewire_capture_adapter_boundary(&self) -> bool {
+        match self.state {
+            #[cfg(any(test, feature = "pipewire-capture"))]
+            NativeAudioMediaBackendLegState::PipeWireCaptureAdapterUnavailable(_) => true,
+            #[cfg(test)]
+            NativeAudioMediaBackendLegState::AvailableForTest => false,
+            NativeAudioMediaBackendLegState::NotImplemented => false,
+        }
+    }
+
+    fn unavailable_message(&self, platform: Platform) -> String {
+        match self.state {
+            #[cfg(any(test, feature = "pipewire-capture"))]
+            NativeAudioMediaBackendLegState::PipeWireCaptureAdapterUnavailable(_) => {
+                "desktop audio capture has a Linux PipeWire adapter boundary, but the real PipeWire capture runtime is not wired yet".to_string()
+            }
+            NativeAudioMediaBackendLegState::NotImplemented => {
+                NativeAudioMediaBackend::native_backend_gap_message(&self.leg, platform)
+            }
+            #[cfg(test)]
+            NativeAudioMediaBackendLegState::AvailableForTest => {
+                NativeAudioMediaBackend::native_backend_gap_message(&self.leg, platform)
+            }
+        }
+    }
+
+    fn unavailable_recovery(&self) -> String {
+        match self.state {
+            #[cfg(any(test, feature = "pipewire-capture"))]
+            NativeAudioMediaBackendLegState::PipeWireCaptureAdapterUnavailable(_) => {
+                "keep the control-plane stream active for state negotiation, but do not expect PipeWire audio packets until the capture runtime is implemented and enabled".to_string()
+            }
+            NativeAudioMediaBackendLegState::NotImplemented => {
+                "keep the control-plane stream active for state negotiation, but do not expect audio packets until the native backend is implemented".to_string()
+            }
+            #[cfg(test)]
+            NativeAudioMediaBackendLegState::AvailableForTest => {
+                "keep the control-plane stream active for state negotiation, but do not expect audio packets until the native backend is implemented".to_string()
+            }
         }
     }
 }
@@ -1015,6 +1132,122 @@ mod tests {
                     && status.media == AudioBackendMediaStats::default()
                     && status.failure.as_ref().is_some_and(|failure| {
                         failure.kind == AudioBackendFailureKind::NativeBackendNotImplemented
+                    })
+            }));
+        }
+    }
+
+    #[test]
+    fn audio_backend_linux_pipewire_capture_adapter_boundary_is_capture_only() {
+        let native_backend = NativeAudioMediaBackend::for_platform_with_readiness(
+            Platform::Linux,
+            &AudioBackendNativeReadiness::with_linux_pipewire_capture_adapter_boundary(),
+        )
+        .expect("linux pipewire backend");
+
+        assert_eq!(
+            native_backend
+                .legs
+                .iter()
+                .filter(|leg| leg.is_pipewire_capture_adapter_boundary())
+                .map(|leg| leg.leg.clone())
+                .collect::<Vec<_>>(),
+            vec![AudioBackendLeg::Capture]
+        );
+        assert!(native_backend.legs.iter().all(|leg| !leg.is_available()));
+
+        let contract = AudioBackendService::for_platform_with_native_readiness(
+            Platform::Linux,
+            AudioBackendNativeReadiness::with_linux_pipewire_capture_adapter_boundary(),
+        )
+        .backend_contract();
+
+        assert_eq!(contract.readiness, AudioBackendReadiness::ControlPlaneOnly);
+        assert!(contract
+            .notes
+            .iter()
+            .any(|note| note.contains("PipeWire capture has an adapter boundary")));
+
+        for status in &contract.statuses {
+            assert!(!status.available);
+            assert_eq!(status.readiness, AudioBackendReadiness::PlannedNative);
+            assert_eq!(status.media, AudioBackendMediaStats::default());
+            assert_eq!(
+                status.failure.as_ref().map(|failure| &failure.kind),
+                Some(&AudioBackendFailureKind::NativeBackendNotImplemented)
+            );
+        }
+
+        let capture = contract
+            .statuses
+            .iter()
+            .find(|status| status.leg == AudioBackendLeg::Capture)
+            .expect("capture status");
+        assert!(capture
+            .failure
+            .as_ref()
+            .expect("capture failure")
+            .message
+            .contains("PipeWire adapter boundary"));
+
+        for planned_leg in [
+            AudioBackendLeg::Playback,
+            AudioBackendLeg::ClientMicrophoneCapture,
+            AudioBackendLeg::ServerMicrophoneInjection,
+        ] {
+            let status = contract
+                .statuses
+                .iter()
+                .find(|status| status.leg == planned_leg)
+                .expect("planned leg status");
+            assert!(status
+                .failure
+                .as_ref()
+                .expect("planned leg failure")
+                .message
+                .contains("is not implemented yet"));
+            assert!(!status
+                .failure
+                .as_ref()
+                .expect("planned leg failure")
+                .message
+                .contains("adapter boundary"));
+        }
+    }
+
+    #[test]
+    fn audio_backend_pipewire_capture_adapter_boundary_does_not_affect_macos_or_windows() {
+        for (platform, expected_backend) in [
+            (Platform::Macos, AudioBackendKind::CoreAudio),
+            (Platform::Windows, AudioBackendKind::Wasapi),
+        ] {
+            let native_backend = NativeAudioMediaBackend::for_platform_with_readiness(
+                platform,
+                &AudioBackendNativeReadiness::with_linux_pipewire_capture_adapter_boundary(),
+            )
+            .expect("desktop backend");
+
+            assert_eq!(native_backend.kind(), expected_backend);
+            assert!(native_backend
+                .legs
+                .iter()
+                .all(|leg| leg.state == NativeAudioMediaBackendLegState::NotImplemented));
+
+            let contract = AudioBackendService::for_platform_with_native_readiness(
+                platform,
+                AudioBackendNativeReadiness::with_linux_pipewire_capture_adapter_boundary(),
+            )
+            .backend_contract();
+
+            assert_eq!(contract.readiness, AudioBackendReadiness::ControlPlaneOnly);
+            assert!(contract.statuses.iter().all(|status| {
+                status.backend == expected_backend
+                    && !status.available
+                    && status.readiness == AudioBackendReadiness::PlannedNative
+                    && status.media == AudioBackendMediaStats::default()
+                    && status.failure.as_ref().is_some_and(|failure| {
+                        failure.kind == AudioBackendFailureKind::NativeBackendNotImplemented
+                            && !failure.message.contains("adapter boundary")
                     })
             }));
         }
