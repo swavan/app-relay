@@ -8,12 +8,12 @@ used by foreground and service runners.
 
 Default service runners should use platform-native application data paths:
 
-- Linux: `$XDG_CONFIG_HOME/swavan/app-relay/server.conf` and
-  `$XDG_STATE_HOME/swavan/app-relay/server.log`
-- macOS: `~/Library/Application Support/Swavan/AppRelay/server.conf` and
-  `~/Library/Logs/Swavan/AppRelay/server.log`
-- Windows: `%ProgramData%\Swavan\AppRelay\server.conf` and
-  `%ProgramData%\Swavan\AppRelay\server.log`
+- Linux: `$XDG_CONFIG_HOME/apprelay/server.conf` and
+  `$XDG_STATE_HOME/apprelay/server.log`
+- macOS: `~/Library/Application Support/AppRelay/server.conf` and
+  `~/Library/Logs/AppRelay/server.log`
+- Windows: `%ProgramData%\AppRelay\server.conf` and
+  `%ProgramData%\AppRelay\server.log`
 
 The config file is owned by `FileServerConfigRepository`. Structured service
 events are written through `FileEventSink`.
@@ -24,10 +24,10 @@ The Linux service target is a user-level systemd unit by default:
 
 ```ini
 [Unit]
-Description=Swavan AppRelay server
+Description=AppRelay server
 
 [Service]
-ExecStart=/usr/bin/swavan-app-relay-server --config %h/.config/swavan/app-relay/server.conf
+ExecStart=/usr/bin/apprelay-server --config %h/.config/apprelay/server.conf
 Restart=on-failure
 RestartSec=3
 
@@ -37,11 +37,11 @@ WantedBy=default.target
 
 Expected lifecycle commands:
 
-- install: `swavan-server install-service linux`, then run
+- install: `apprelay-server install-service linux`, then run
   `systemctl --user daemon-reload`
-- start: `systemctl --user start swavan-app-relay`
-- stop: `systemctl --user stop swavan-app-relay`
-- status: `systemctl --user status swavan-app-relay`
+- start: `systemctl --user start apprelay`
+- stop: `systemctl --user stop apprelay`
+- status: `systemctl --user status apprelay`
 - uninstall: stop, disable, remove the unit, and reload systemd
 
 System-level installation can be added later for shared machines, but the first
@@ -55,12 +55,12 @@ The macOS service target is a per-user launchd agent:
 <plist version="1.0">
   <dict>
     <key>Label</key>
-    <string>com.swavan.apprelay.server</string>
+    <string>dev.apprelay.server</string>
     <key>ProgramArguments</key>
     <array>
-      <string>/Applications/Swavan AppRelay.app/Contents/MacOS/swavan-app-relay-server</string>
+      <string>/Applications/AppRelay.app/Contents/MacOS/apprelay-server</string>
       <string>--config</string>
-      <string>~/Library/Application Support/Swavan/AppRelay/server.conf</string>
+      <string>~/Library/Application Support/AppRelay/server.conf</string>
     </array>
     <key>KeepAlive</key>
     <true/>
@@ -72,10 +72,10 @@ The macOS service target is a per-user launchd agent:
 
 Expected lifecycle commands:
 
-- install: `swavan-server install-service macos`
+- install: `apprelay-server install-service macos`
 - start: `launchctl bootstrap gui/$UID <plist>`
 - stop: `launchctl bootout gui/$UID <plist>`
-- status: `launchctl print gui/$UID/com.swavan.apprelay.server`
+- status: `launchctl print gui/$UID/dev.apprelay.server`
 - uninstall: stop and remove the plist
 
 ## Windows
@@ -84,11 +84,11 @@ Windows server support is planned after Linux and macOS discovery are stable.
 The expected service model is a native Windows service registered with `sc.exe`
 through a generated PowerShell installer script:
 
-- install: `swavan-server install-service windows`, then run the generated
+- install: `apprelay-server install-service windows`, then run the generated
   `install-service.ps1` as an elevated user
-- start: `sc start SwavanAppRelay`
-- stop: `sc stop SwavanAppRelay`
-- status: `sc query SwavanAppRelay`
+- start: `sc start AppRelay`
+- stop: `sc stop AppRelay`
+- status: `sc query AppRelay`
 - uninstall: stop and delete the service registration
 
 Windows application discovery remains unsupported in the current code and

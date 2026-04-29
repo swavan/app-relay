@@ -3,10 +3,25 @@
 version = 4
 
 [[package]]
+name = "apprelay-core"
+version = "0.1.0"
+dependencies = [
+ "apprelay-protocol",
+]
+
+[[package]]
 name = "apprelay-protocol"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "apprelay-server"
+version = "0.1.0"
+dependencies = [
+ "apprelay-core",
+ "apprelay-protocol",
 ]
 
 [[package]]
@@ -55,21 +70,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "swavan-core"
-version = "0.1.0"
-dependencies = [
- "apprelay-protocol",
-]
-
-[[package]]
-name = "swavan-server"
-version = "0.1.0"
-dependencies = [
- "apprelay-protocol",
- "swavan-core",
 ]
 
 [[package]]

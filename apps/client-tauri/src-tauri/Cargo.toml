@@ -1,17 +1,17 @@
 [package]
-name = "swavan-app-relay-client"
+name = "apprelay-client"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "swavan_app_relay_client"
+name = "apprelay_client"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-swavan-core = { path = "../../../crates/core" }
-swavan-protocol = { package = "apprelay-protocol", path = "../../../crates/protocol" }
-swavan-server = { path = "../../../crates/server" }
+apprelay-core = { path = "../../../crates/core" }
+apprelay-protocol = { path = "../../../crates/protocol" }
+apprelay-server = { path = "../../../crates/server" }
 tauri = { version = "2", features = [] }
 
 [build-dependencies]

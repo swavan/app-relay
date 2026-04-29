@@ -1,12 +1,12 @@
 use std::net::TcpListener;
 use std::path::PathBuf;
 
-use swavan_core::{
+use apprelay_core::{
     EventSink, FileEventSink, FileServerConfigRepository, InMemoryEventSink, ServerConfig,
     ServerConfigRepository,
 };
-use swavan_protocol::Platform;
-use swavan_server::{
+use apprelay_protocol::Platform;
+use apprelay_server::{
     DaemonServiceInstaller, ForegroundControlServer, ServerControlPlane, ServerServices,
 };
 
@@ -37,7 +37,7 @@ fn run_foreground(args: &[String]) {
     let bind_address = server.bind_address();
     let listener = TcpListener::bind(&bind_address).expect("failed to bind control listener");
 
-    println!("swavan-server listening on {bind_address}");
+    println!("apprelay-server listening on {bind_address}");
     match log_path {
         Some(path) => {
             let mut events = FileEventSink::new(path);

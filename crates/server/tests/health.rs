@@ -1,5 +1,5 @@
-use swavan_protocol::{HealthStatus, Platform};
-use swavan_server::ServerServices;
+use apprelay_protocol::{HealthStatus, Platform};
+use apprelay_server::ServerServices;
 
 #[test]
 fn server_health_contract_is_stable() {
@@ -7,6 +7,6 @@ fn server_health_contract_is_stable() {
 
     assert_eq!(
         services.health(),
-        HealthStatus::healthy("swavan-server", "integration-test")
+        HealthStatus::healthy("apprelay-server", "integration-test")
     );
 }

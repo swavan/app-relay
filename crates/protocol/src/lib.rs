@@ -1,4 +1,4 @@
-//! Shared protocol types for Swavan AppRelay.
+//! Shared protocol types for AppRelay.
 //!
 //! Phase 1 intentionally keeps these types transport-neutral. The server can
 //! expose them over SSH-tunneled HTTP, WebSocket, gRPC, or another control
@@ -230,7 +230,7 @@ pub enum SessionState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SwavanError {
+pub enum AppRelayError {
     UnsupportedPlatform {
         platform: Platform,
         feature: Feature,
@@ -241,7 +241,7 @@ pub enum SwavanError {
     NotFound(String),
 }
 
-impl SwavanError {
+impl AppRelayError {
     pub fn unsupported(platform: Platform, feature: Feature) -> Self {
         Self::UnsupportedPlatform { platform, feature }
     }
@@ -276,11 +276,11 @@ impl ControlAuth {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControlError {
     Unauthorized,
-    Service(SwavanError),
+    Service(AppRelayError),
 }
 
-impl From<SwavanError> for ControlError {
-    fn from(error: SwavanError) -> Self {
+impl From<AppRelayError> for ControlError {
+    fn from(error: AppRelayError) -> Self {
         Self::Service(error)
     }
 }

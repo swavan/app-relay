@@ -1,16 +1,16 @@
 [package]
-name = "swavan-server"
+name = "apprelay-server"
 version = "0.1.0"
 edition.workspace = true
 repository.workspace = true
 
 [dependencies]
-swavan-core = { path = "../core" }
-swavan-protocol = { package = "apprelay-protocol", path = "../protocol" }
+apprelay-core = { path = "../core" }
+apprelay-protocol = { path = "../protocol" }
 
 [lib]
 path = "src/lib.rs"
 
 [[bin]]
-name = "swavan-server"
+name = "apprelay-server"
 path = "src/main.rs"

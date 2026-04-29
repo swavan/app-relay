@@ -1,10 +1,10 @@
-use swavan_core::ServerConfig;
-use swavan_protocol::{
-    ControlAuth, ControlError, CreateSessionRequest, Feature, Platform,
+use apprelay_core::ServerConfig;
+use apprelay_protocol::{
+    AppRelayError, ControlAuth, ControlError, CreateSessionRequest, Feature, Platform,
     ReconnectVideoStreamRequest, ResizeSessionRequest, ServerVersion, SessionState,
-    StartVideoStreamRequest, StopVideoStreamRequest, SwavanError, VideoStreamState, ViewportSize,
+    StartVideoStreamRequest, StopVideoStreamRequest, VideoStreamState, ViewportSize,
 };
-use swavan_server::{ServerControlPlane, ServerServices};
+use apprelay_server::{ServerControlPlane, ServerServices};
 
 #[test]
 fn control_plane_rejects_unauthorized_requests() {
@@ -29,7 +29,7 @@ fn control_plane_exposes_version_for_authorized_requests() {
     assert_eq!(
         control_plane.version(&ControlAuth::new("correct-token")),
         Ok(ServerVersion::new(
-            "swavan-server",
+            "apprelay-server",
             "integration-test",
             Platform::Macos
         ))
@@ -75,7 +75,7 @@ fn control_plane_maps_unsupported_application_discovery_errors() {
 
     assert_eq!(
         control_plane.available_applications(&ControlAuth::new("correct-token")),
-        Err(ControlError::Service(SwavanError::unsupported(
+        Err(ControlError::Service(AppRelayError::unsupported(
             Platform::Windows,
             Feature::AppDiscovery
         )))

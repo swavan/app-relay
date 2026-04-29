@@ -76,7 +76,7 @@
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
       health = {
-        service: "swavan-server",
+        service: "apprelay-server",
         healthy: false,
         version: "unconnected"
       };
@@ -89,7 +89,7 @@
     try {
       sessionMessage = "";
       if (!hasPermission(app)) {
-        const granted = window.confirm(`Allow Swavan AppRelay to open ${app.name}?`);
+        const granted = window.confirm(`Allow AppRelay to open ${app.name}?`);
         if (!granted) {
           sessionMessage = `Permission denied for ${app.name}`;
           return;
@@ -227,7 +227,7 @@
 <main class="shell">
   <section class="toolbar" aria-label="Remote controls">
     <div>
-      <h1>Swavan AppRelay</h1>
+      <h1>AppRelay</h1>
       <p>{health?.healthy ? "Connected" : "No server connection"}</p>
     </div>
 
@@ -242,7 +242,7 @@
   </section>
 
   <section class="status" aria-label="Server health">
-    <span>{health?.service ?? "swavan-server"}</span>
+    <span>{health?.service ?? "apprelay-server"}</span>
     <strong>{appView.healthText}</strong>
   </section>
 

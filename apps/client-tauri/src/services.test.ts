@@ -4,7 +4,7 @@ import type { RemoteService, ViewportSize } from "./services";
 class FakeRemoteService implements RemoteService {
   async health() {
     return {
-      service: "swavan-server",
+      service: "apprelay-server",
       healthy: true,
       version: "test"
     };
@@ -138,7 +138,7 @@ class FakeRemoteService implements RemoteService {
       },
       signaling: {
         kind: "webRtcOffer" as const,
-        offer: "swavan-webrtc-offer:stream-1:window-session-1"
+        offer: "apprelay-webrtc-offer:stream-1:window-session-1"
       },
       stats: {
         framesEncoded: 0,
@@ -170,7 +170,7 @@ class FakeRemoteService implements RemoteService {
       },
       signaling: {
         kind: "webRtcOffer" as const,
-        offer: "swavan-webrtc-offer:stream-1:window-session-1"
+        offer: "apprelay-webrtc-offer:stream-1:window-session-1"
       },
       stats: {
         framesEncoded: 0,
@@ -203,7 +203,7 @@ class FakeRemoteService implements RemoteService {
       },
       signaling: {
         kind: "webRtcOffer" as const,
-        offer: "swavan-webrtc-offer:stream-1:window-session-1"
+        offer: "apprelay-webrtc-offer:stream-1:window-session-1"
       },
       stats: {
         framesEncoded: 0,
@@ -236,7 +236,7 @@ class FakeRemoteService implements RemoteService {
       },
       signaling: {
         kind: "webRtcOffer" as const,
-        offer: "swavan-webrtc-offer:stream-1:window-session-1"
+        offer: "apprelay-webrtc-offer:stream-1:window-session-1"
       },
       stats: {
         framesEncoded: 0,
@@ -257,7 +257,7 @@ describe("RemoteService contract", () => {
     const service = new FakeRemoteService();
 
     await expect(service.health()).resolves.toEqual({
-      service: "swavan-server",
+      service: "apprelay-server",
       healthy: true,
       version: "test"
     });
