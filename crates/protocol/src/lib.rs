@@ -9,9 +9,10 @@ mod input;
 mod video_stream;
 
 pub use audio_stream::{
-    AudioBackendContract, AudioBackendKind, AudioBackendReadiness, AudioCapability,
-    AudioCaptureScope, AudioDeviceSelection, AudioMuteState, AudioSource, AudioStreamCapabilities,
-    AudioStreamHealth, AudioStreamSession, AudioStreamState, AudioStreamStats, MicrophoneMode,
+    AudioBackendContract, AudioBackendFailure, AudioBackendFailureKind, AudioBackendKind,
+    AudioBackendLeg, AudioBackendReadiness, AudioBackendStatus, AudioCapability, AudioCaptureScope,
+    AudioDeviceSelection, AudioMuteState, AudioSource, AudioStreamCapabilities, AudioStreamHealth,
+    AudioStreamSession, AudioStreamState, AudioStreamStats, MicrophoneMode,
     StartAudioStreamRequest, StopAudioStreamRequest, UpdateAudioStreamRequest,
 };
 pub use input::{

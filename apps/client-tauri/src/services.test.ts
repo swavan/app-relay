@@ -55,6 +55,26 @@ const configuredEncoding = {
   }
 };
 
+const nativeAudioBackendStatuses = [
+  "capture",
+  "playback",
+  "clientMicrophoneCapture",
+  "serverMicrophoneInjection"
+] as const;
+
+const pipeWireAudioBackendStatuses = nativeAudioBackendStatuses.map((leg) => ({
+  leg,
+  backend: "pipeWire" as const,
+  available: false,
+  readiness: "plannedNative" as const,
+  failure: {
+    kind: "nativeBackendNotImplemented" as const,
+    message: `${leg} via PipeWire is not implemented yet`,
+    recovery:
+      "keep the control-plane stream active for state negotiation, but do not expect audio packets until the native backend is implemented"
+  }
+}));
+
 class FakeRemoteService implements RemoteService {
   async health() {
     return {
@@ -289,9 +309,10 @@ class FakeRemoteService implements RemoteService {
         plannedCapture: "pipeWire" as const,
         plannedPlayback: "pipeWire" as const,
         plannedMicrophone: "pipeWire" as const,
+        statuses: pipeWireAudioBackendStatuses,
         readiness: "controlPlaneOnly" as const,
         notes: [
-          "current stream enforces control-plane state only; native audio backend fields are planned"
+          "current stream enforces control-plane state only; native capture, playback, client microphone capture, and server microphone injection are not implemented"
         ]
       },
       devices: {
@@ -371,9 +392,10 @@ class FakeRemoteService implements RemoteService {
         plannedCapture: "pipeWire" as const,
         plannedPlayback: "pipeWire" as const,
         plannedMicrophone: "pipeWire" as const,
+        statuses: pipeWireAudioBackendStatuses,
         readiness: "controlPlaneOnly" as const,
         notes: [
-          "current stream enforces control-plane state only; native audio backend fields are planned"
+          "current stream enforces control-plane state only; native capture, playback, client microphone capture, and server microphone injection are not implemented"
         ]
       },
       devices: {},
@@ -779,6 +801,40 @@ describe("RemoteService contract", () => {
         plannedCapture: "pipeWire",
         plannedPlayback: "pipeWire",
         plannedMicrophone: "pipeWire",
+        statuses: [
+          expect.objectContaining({
+            leg: "capture",
+            backend: "pipeWire",
+            available: false,
+            failure: expect.objectContaining({
+              kind: "nativeBackendNotImplemented"
+            })
+          }),
+          expect.objectContaining({
+            leg: "playback",
+            backend: "pipeWire",
+            available: false,
+            failure: expect.objectContaining({
+              kind: "nativeBackendNotImplemented"
+            })
+          }),
+          expect.objectContaining({
+            leg: "clientMicrophoneCapture",
+            backend: "pipeWire",
+            available: false,
+            failure: expect.objectContaining({
+              kind: "nativeBackendNotImplemented"
+            })
+          }),
+          expect.objectContaining({
+            leg: "serverMicrophoneInjection",
+            backend: "pipeWire",
+            available: false,
+            failure: expect.objectContaining({
+              kind: "nativeBackendNotImplemented"
+            })
+          })
+        ],
         readiness: "controlPlaneOnly"
       },
       state: "streaming"

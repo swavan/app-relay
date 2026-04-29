@@ -270,6 +270,9 @@ Completed:
   active streams remain control-plane-only
 - desktop audio capability reasons identify the planned native backend per
   platform
+- active audio backend contracts report per-leg status and typed native backend
+  failures for desktop capture, client playback, client microphone capture, and
+  server-side microphone injection
 
 Remaining:
 
