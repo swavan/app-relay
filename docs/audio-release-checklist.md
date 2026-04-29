@@ -10,6 +10,7 @@ Use this checklist before promoting Phase 6 beyond the desktop audio control-pla
 - Confirm active audio stream status exposes unavailable native backend statuses with typed failures for capture, playback, client microphone capture, and server-side microphone injection.
 - Confirm native backend readiness test configuration can mark individual backend legs available while default production startup keeps every native leg unavailable.
 - Confirm every backend leg reports media counters for packets, bytes, and latency as zero/unavailable until live media telemetry is implemented.
+- Confirm test-only native media sessions can surface nonzero packet, byte, and latency counters without enabling real PipeWire, CoreAudio, or WASAPI media in production.
 - Confirm active audio stream status reports whether server-side microphone injection was requested, whether it is active, the native readiness state, and the reason when inactive.
 - Confirm unsupported platforms return explicit unsupported reasons.
 - Confirm audio can start while video is stopped.

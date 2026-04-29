@@ -49,6 +49,23 @@ struct NativeAudioMediaBackend {
     legs: Vec<NativeAudioMediaBackendLeg>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct NativeAudioMediaRuntime {
+    sessions: Vec<NativeAudioMediaSession>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NativeAudioMediaSession {
+    stream_id: String,
+    legs: Vec<NativeAudioMediaSessionLeg>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NativeAudioMediaSessionLeg {
+    leg: AudioBackendLeg,
+    media: AudioBackendMediaStats,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NativeAudioMediaBackendLeg {
     leg: AudioBackendLeg,
@@ -189,7 +206,7 @@ impl NativeAudioMediaBackend {
         }
     }
 
-    fn statuses(&self) -> Vec<AudioBackendStatus> {
+    fn statuses(&self, media_session: Option<&NativeAudioMediaSession>) -> Vec<AudioBackendStatus> {
         self.legs
             .iter()
             .map(|backend_leg| AudioBackendStatus {
@@ -201,7 +218,7 @@ impl NativeAudioMediaBackend {
                 } else {
                     AudioBackendReadiness::PlannedNative
                 },
-                media: AudioBackendMediaStats::default(),
+                media: backend_leg.media_stats(media_session),
                 failure: if backend_leg.is_available() {
                     None
                 } else {
@@ -256,12 +273,70 @@ impl NativeAudioMediaBackend {
 }
 
 impl NativeAudioMediaBackendLeg {
+    fn media_stats(
+        &self,
+        media_session: Option<&NativeAudioMediaSession>,
+    ) -> AudioBackendMediaStats {
+        if !self.is_available() {
+            return AudioBackendMediaStats::default();
+        }
+
+        media_session
+            .and_then(|session| session.media_stats(&self.leg))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     fn is_available(&self) -> bool {
         match self.state {
             NativeAudioMediaBackendLegState::NotImplemented => false,
             #[cfg(test)]
             NativeAudioMediaBackendLegState::AvailableForTest => true,
         }
+    }
+}
+
+impl NativeAudioMediaRuntime {
+    fn session_for_stream(&self, stream_id: &str) -> Option<&NativeAudioMediaSession> {
+        self.sessions
+            .iter()
+            .find(|session| session.stream_id == stream_id)
+    }
+
+    fn clear_stream(&mut self, stream_id: &str) {
+        self.sessions
+            .retain(|session| session.stream_id != stream_id);
+    }
+
+    #[cfg(test)]
+    fn start_test_session(
+        &mut self,
+        stream_id: impl Into<String>,
+        legs: impl IntoIterator<Item = (AudioBackendLeg, AudioBackendMediaStats)>,
+    ) {
+        let stream_id = stream_id.into();
+        self.sessions
+            .retain(|session| session.stream_id != stream_id);
+        self.sessions.push(NativeAudioMediaSession {
+            stream_id,
+            legs: legs
+                .into_iter()
+                .filter_map(|(leg, media)| {
+                    media
+                        .available
+                        .then_some(NativeAudioMediaSessionLeg { leg, media })
+                })
+                .collect(),
+        });
+    }
+}
+
+impl NativeAudioMediaSession {
+    fn media_stats(&self, leg: &AudioBackendLeg) -> Option<&AudioBackendMediaStats> {
+        self.legs
+            .iter()
+            .find(|session_leg| &session_leg.leg == leg)
+            .map(|session_leg| &session_leg.media)
     }
 }
 
@@ -354,6 +429,13 @@ impl AudioBackendService {
     }
 
     pub fn backend_contract(&self) -> AudioBackendContract {
+        self.backend_contract_for_media_session(None)
+    }
+
+    fn backend_contract_for_media_session(
+        &self,
+        media_session: Option<&NativeAudioMediaSession>,
+    ) -> AudioBackendContract {
         match self {
             Self::DesktopControl {
                 platform,
@@ -372,7 +454,7 @@ impl AudioBackendService {
                     planned_capture: native_backend_kind.clone(),
                     planned_playback: native_backend_kind.clone(),
                     planned_microphone: native_backend_kind,
-                    statuses: native_backend.statuses(),
+                    statuses: native_backend.statuses(media_session),
                     readiness: native_backend.readiness(),
                     notes: native_backend.notes(),
                 }
@@ -516,6 +598,7 @@ impl AudioBackendService {
 #[derive(Clone, Debug)]
 pub struct InMemoryAudioStreamService {
     backend: AudioBackendService,
+    native_runtime: NativeAudioMediaRuntime,
     streams: Vec<AudioStreamSession>,
     next_stream_number: u64,
 }
@@ -524,6 +607,7 @@ impl InMemoryAudioStreamService {
     pub fn new(backend: AudioBackendService) -> Self {
         Self {
             backend,
+            native_runtime: NativeAudioMediaRuntime::default(),
             streams: Vec::new(),
             next_stream_number: 1,
         }
@@ -532,6 +616,16 @@ impl InMemoryAudioStreamService {
     #[cfg(test)]
     fn configure_native_readiness(&mut self, native_readiness: AudioBackendNativeReadiness) {
         self.backend.configure_native_readiness(native_readiness);
+        self.refresh_active_stream_backend_state();
+    }
+
+    #[cfg(test)]
+    fn start_native_media_session_for_test(
+        &mut self,
+        stream_id: &str,
+        legs: impl IntoIterator<Item = (AudioBackendLeg, AudioBackendMediaStats)>,
+    ) {
+        self.native_runtime.start_test_session(stream_id, legs);
         self.refresh_active_stream_backend_state();
     }
 
@@ -553,14 +647,15 @@ impl InMemoryAudioStreamService {
     #[cfg(test)]
     fn refresh_active_stream_backend_state(&mut self) {
         let backend = self.backend.clone();
-        let backend_contract = self.backend.backend_contract();
         let capabilities = self.backend.capabilities();
         for stream in self
             .streams
             .iter_mut()
             .filter(|stream| stream.state != AudioStreamState::Stopped)
         {
-            stream.backend = Some(backend_contract.clone());
+            stream.backend = Some(self.backend.backend_contract_for_media_session(
+                self.native_runtime.session_for_stream(&stream.id),
+            ));
             stream.capabilities = capabilities.clone();
             stream.microphone_injection =
                 backend.microphone_injection_state(&stream.microphone, &capabilities);
@@ -609,13 +704,16 @@ impl AudioStreamService for InMemoryAudioStreamService {
         let microphone_injection = self
             .backend
             .microphone_injection_state(&request.microphone, &capabilities);
+        let stream_id = self.next_stream_id();
 
         let stream = AudioStreamSession {
-            id: self.next_stream_id(),
+            backend: Some(self.backend.backend_contract_for_media_session(
+                self.native_runtime.session_for_stream(&stream_id),
+            )),
+            id: stream_id,
             session_id: session.id.clone(),
             selected_window_id: session.selected_window.id.clone(),
             source: Self::source_from_session(session),
-            backend: Some(self.backend.backend_contract()),
             devices: AudioDeviceSelection {
                 output_device_id: request.output_device_id,
                 input_device_id: request.input_device_id,
@@ -658,6 +756,8 @@ impl AudioStreamService for InMemoryAudioStreamService {
             })?;
 
         stream.state = AudioStreamState::Stopped;
+        self.native_runtime.clear_stream(&stream.id);
+        stream.backend = Some(self.backend.backend_contract_for_media_session(None));
         stream.health = AudioStreamHealth {
             healthy: false,
             message: Some("audio stream stopped by client".to_string()),
@@ -714,6 +814,8 @@ impl AudioStreamService for InMemoryAudioStreamService {
             stream.session_id == session_id && stream.state != AudioStreamState::Stopped
         }) {
             stream.state = AudioStreamState::Stopped;
+            self.native_runtime.clear_stream(&stream.id);
+            stream.backend = Some(self.backend.backend_contract_for_media_session(None));
             stream.health = AudioStreamHealth {
                 healthy: false,
                 message: Some(format!("application session {session_id} closed")),
@@ -901,6 +1003,24 @@ mod tests {
     }
 
     #[test]
+    fn audio_backend_default_production_media_status_stays_unavailable() {
+        for platform in [Platform::Linux, Platform::Macos, Platform::Windows] {
+            let contract = AudioBackendService::for_platform(platform).backend_contract();
+
+            assert_eq!(contract.readiness, AudioBackendReadiness::ControlPlaneOnly);
+            assert_eq!(contract.statuses.len(), 4);
+            assert!(contract.statuses.iter().all(|status| {
+                !status.available
+                    && status.readiness == AudioBackendReadiness::PlannedNative
+                    && status.media == AudioBackendMediaStats::default()
+                    && status.failure.as_ref().is_some_and(|failure| {
+                        failure.kind == AudioBackendFailureKind::NativeBackendNotImplemented
+                    })
+            }));
+        }
+    }
+
+    #[test]
     fn audio_backend_contract_can_model_native_leg_readiness() {
         let contract = AudioBackendService::for_platform_with_native_readiness(
             Platform::Linux,
@@ -945,6 +1065,178 @@ mod tests {
             AudioBackendReadiness::PlannedNative
         );
         assert!(microphone_injection.failure.is_some());
+    }
+
+    #[test]
+    fn audio_backend_runtime_media_session_reports_test_telemetry() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::default();
+        stream_service.configure_native_readiness(
+            AudioBackendNativeReadiness::with_available_legs(
+                AudioBackendNativeReadiness::native_legs(),
+            ),
+        );
+        let stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Enabled,
+                    system_audio_muted: false,
+                    microphone_muted: false,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+                &session,
+            )
+            .expect("start audio stream");
+
+        stream_service.start_native_media_session_for_test(
+            &stream.id,
+            AudioBackendNativeReadiness::native_legs()
+                .into_iter()
+                .enumerate()
+                .map(|(index, leg)| {
+                    let offset = index as u64 + 1;
+                    (
+                        leg,
+                        AudioBackendMediaStats {
+                            available: true,
+                            packets_sent: 10 * offset,
+                            packets_received: 20 * offset,
+                            bytes_sent: 1000 * offset,
+                            bytes_received: 2000 * offset,
+                            latency_ms: 12 + index as u32,
+                        },
+                    )
+                }),
+        );
+
+        let refreshed = stream_service
+            .stream_status(&stream.id)
+            .expect("stream status after media session start");
+        let backend = refreshed.backend.expect("backend contract");
+
+        assert_eq!(backend.readiness, AudioBackendReadiness::NativeAvailable);
+        assert!(backend.statuses.iter().all(|status| {
+            status.available
+                && status.readiness == AudioBackendReadiness::NativeAvailable
+                && status.failure.is_none()
+                && status.media.available
+                && status.media.packets_sent > 0
+                && status.media.packets_received > 0
+                && status.media.bytes_sent > 0
+                && status.media.bytes_received > 0
+                && status.media.latency_ms > 0
+        }));
+        assert!(refreshed.microphone_injection.active);
+    }
+
+    #[test]
+    fn audio_stream_stop_clears_native_media_session_status() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::default();
+        stream_service.configure_native_readiness(
+            AudioBackendNativeReadiness::with_available_legs(
+                AudioBackendNativeReadiness::native_legs(),
+            ),
+        );
+        let stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Enabled,
+                    system_audio_muted: false,
+                    microphone_muted: false,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+                &session,
+            )
+            .expect("start audio stream");
+        stream_service
+            .start_native_media_session_for_test(&stream.id, native_media_stats_for_test());
+
+        let stopped = stream_service
+            .stop_stream(StopAudioStreamRequest {
+                stream_id: stream.id.clone(),
+            })
+            .expect("stop audio stream");
+
+        assert_eq!(stopped.state, AudioStreamState::Stopped);
+        assert_backend_media_cleared(&stopped);
+        let status = stream_service
+            .stream_status(&stream.id)
+            .expect("stopped stream status");
+        assert_backend_media_cleared(&status);
+    }
+
+    #[test]
+    fn audio_stream_session_close_clears_native_media_session_status() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::default();
+        stream_service.configure_native_readiness(
+            AudioBackendNativeReadiness::with_available_legs(
+                AudioBackendNativeReadiness::native_legs(),
+            ),
+        );
+        let stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Enabled,
+                    system_audio_muted: false,
+                    microphone_muted: false,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+                &session,
+            )
+            .expect("start audio stream");
+        let second_stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Enabled,
+                    system_audio_muted: false,
+                    microphone_muted: false,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+                &session,
+            )
+            .expect("start second audio stream");
+        stream_service
+            .start_native_media_session_for_test(&stream.id, native_media_stats_for_test());
+        stream_service
+            .start_native_media_session_for_test(&second_stream.id, native_media_stats_for_test());
+
+        stream_service.record_session_closed(&session.id);
+
+        for stream_id in [stream.id, second_stream.id] {
+            let status = stream_service
+                .stream_status(&stream_id)
+                .expect("closed session stream status");
+            assert_eq!(status.state, AudioStreamState::Stopped);
+            assert_backend_media_cleared(&status);
+        }
     }
 
     #[test]
@@ -1008,6 +1300,38 @@ mod tests {
             refreshed.health.message.as_deref(),
             Some("audio backend readiness updated")
         );
+    }
+
+    fn native_media_stats_for_test(
+    ) -> impl Iterator<Item = (AudioBackendLeg, AudioBackendMediaStats)> {
+        AudioBackendNativeReadiness::native_legs()
+            .into_iter()
+            .enumerate()
+            .map(|(index, leg)| {
+                let offset = index as u64 + 1;
+                (
+                    leg,
+                    AudioBackendMediaStats {
+                        available: true,
+                        packets_sent: 10 * offset,
+                        packets_received: 20 * offset,
+                        bytes_sent: 1000 * offset,
+                        bytes_received: 2000 * offset,
+                        latency_ms: 12 + index as u32,
+                    },
+                )
+            })
+    }
+
+    fn assert_backend_media_cleared(stream: &AudioStreamSession) {
+        let backend = stream.backend.as_ref().expect("backend contract");
+        assert_eq!(backend.readiness, AudioBackendReadiness::NativeAvailable);
+        assert!(backend.statuses.iter().all(|status| {
+            status.available
+                && status.readiness == AudioBackendReadiness::NativeAvailable
+                && status.failure.is_none()
+                && status.media == AudioBackendMediaStats::default()
+        }));
     }
 
     #[test]

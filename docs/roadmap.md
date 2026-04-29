@@ -287,6 +287,9 @@ Completed:
   macOS CoreAudio, and Windows WASAPI across capture, playback, client
   microphone capture, and server-side microphone injection, with every leg still
   reporting not implemented by default
+- core has backend-owned native media session plumbing that can surface
+  transport-neutral packet, byte, and latency counters in tests without claiming
+  real OS media in production
 
 Remaining:
 
