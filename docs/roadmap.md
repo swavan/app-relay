@@ -111,8 +111,9 @@ Scope:
 - completed selected-window identity slice: sessions expose application id and
   selection method for the selected window across protocol, Tauri, and client
   contracts
+- completed active session client slice: Tauri exposes server-tracked active
+  sessions and the client initializes from the Rust session lifecycle state
 - launch or attach-to-running-app flow
-- server-side session lifecycle
 - requested client viewport size and server-side resize intent
 - client list and tile views backed by real API data
 
