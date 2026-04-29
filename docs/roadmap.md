@@ -113,8 +113,10 @@ Scope:
   contracts
 - completed active session client slice: Tauri exposes server-tracked active
   sessions and the client initializes from the Rust session lifecycle state
+- completed client viewport slice: client session creation and resize actions
+  send the requested viewport size through the existing server resize intent
+  contract
 - launch or attach-to-running-app flow
-- requested client viewport size and server-side resize intent
 - client list and tile views backed by real API data
 
 Out of scope:

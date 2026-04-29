@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RemoteService } from "./services";
+import type { RemoteService, ViewportSize } from "./services";
 
 class FakeRemoteService implements RemoteService {
   async health() {
@@ -58,7 +58,7 @@ class FakeRemoteService implements RemoteService {
     ];
   }
 
-  async createSession(applicationId: string) {
+  async createSession(applicationId: string, viewport: ViewportSize) {
     return {
       id: "session-1",
       applicationId,
@@ -77,15 +77,12 @@ class FakeRemoteService implements RemoteService {
         },
         status: "recorded" as const
       },
-      viewport: {
-        width: 1280,
-        height: 720
-      },
+      viewport,
       state: "ready" as const
     };
   }
 
-  async resizeSession(sessionId: string) {
+  async resizeSession(sessionId: string, viewport: ViewportSize) {
     return {
       id: sessionId,
       applicationId: "terminal",
@@ -95,17 +92,11 @@ class FakeRemoteService implements RemoteService {
         selectionMethod: "synthetic" as const,
         title: "terminal"
       },
-      viewport: {
-        width: 1440,
-        height: 900
-      },
+      viewport,
       resizeIntent: {
         sessionId,
         selectedWindowId: "window-session-1",
-        viewport: {
-          width: 1440,
-          height: 900
-        },
+        viewport,
         status: "recorded" as const
       },
       state: "ready" as const
@@ -186,6 +177,7 @@ describe("RemoteService contract", () => {
     await expect(service.createSession("terminal", { width: 1280, height: 720 })).resolves.toMatchObject({
       id: "session-1",
       applicationId: "terminal",
+      viewport: { width: 1280, height: 720 },
       selectedWindow: {
         applicationId: "terminal",
         selectionMethod: "launchIntent"

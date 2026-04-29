@@ -55,7 +55,9 @@ h1 {
 }
 
 .actions button,
-.app {
+.app,
+.presets button,
+.session-actions button {
   background: var(--swavan-panel);
   border: 1px solid var(--swavan-border);
   border-radius: var(--swavan-radius);
@@ -63,15 +65,23 @@ h1 {
   cursor: pointer;
 }
 
-.actions button {
+.actions button,
+.presets button,
+.session-actions button {
   min-width: 64px;
   padding: 8px 12px;
 }
 
-.actions button.active {
+.actions button.active,
+.presets button.active {
   background: var(--swavan-accent);
   border-color: var(--swavan-accent);
   color: var(--swavan-accent-text);
+}
+
+.session-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
 }
 
 .status {
@@ -90,9 +100,59 @@ h1 {
   text-align: right;
 }
 
+.status small {
+  color: var(--swavan-muted);
+  display: block;
+  font-size: 0.82rem;
+  margin-top: 2px;
+}
+
 .status.error {
   border-color: #b42318;
   color: #7a271a;
+}
+
+.session-actions,
+.presets,
+.viewport-fields {
+  display: flex;
+  gap: 8px;
+}
+
+.viewport-controls {
+  align-items: end;
+  background: var(--swavan-panel);
+  border: 1px solid var(--swavan-border);
+  border-radius: var(--swavan-radius);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  margin: 20px 0;
+  padding: 12px;
+}
+
+.viewport-fields label {
+  color: var(--swavan-muted);
+  display: grid;
+  font-size: 0.78rem;
+  gap: 4px;
+}
+
+.viewport-fields input {
+  background: var(--swavan-bg);
+  border: 1px solid var(--swavan-border);
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: var(--swavan-text);
+  font: inherit;
+  min-height: 38px;
+  padding: 8px;
+  width: 96px;
+}
+
+.presets {
+  flex-wrap: wrap;
 }
 
 .grid {
@@ -147,5 +207,16 @@ h1 {
 
   .actions button {
     flex: 1;
+  }
+
+  .viewport-controls,
+  .viewport-fields,
+  .presets {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .viewport-fields input {
+    width: 100%;
   }
 }
