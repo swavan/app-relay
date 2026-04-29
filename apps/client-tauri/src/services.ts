@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { VideoStreamSession } from "./videoStreams";
 
 export type HealthStatus = {
   service: string;
@@ -68,6 +69,9 @@ export interface RemoteService {
   createSession(applicationId: string, viewport: ViewportSize): Promise<ApplicationSession>;
   resizeSession(sessionId: string, viewport: ViewportSize): Promise<ApplicationSession>;
   closeSession(sessionId: string): Promise<ApplicationSession>;
+  startVideoStream(sessionId: string): Promise<VideoStreamSession>;
+  stopVideoStream(streamId: string): Promise<VideoStreamSession>;
+  videoStreamStatus(streamId: string): Promise<VideoStreamSession>;
 }
 
 export class TauriRemoteService implements RemoteService {
@@ -116,6 +120,27 @@ export class TauriRemoteService implements RemoteService {
     return invoke<ApplicationSession>("close_application_session", {
       authToken: this.authToken,
       sessionId
+    });
+  }
+
+  async startVideoStream(sessionId: string): Promise<VideoStreamSession> {
+    return invoke<VideoStreamSession>("start_video_stream", {
+      authToken: this.authToken,
+      request: { sessionId }
+    });
+  }
+
+  async stopVideoStream(streamId: string): Promise<VideoStreamSession> {
+    return invoke<VideoStreamSession>("stop_video_stream", {
+      authToken: this.authToken,
+      request: { streamId }
+    });
+  }
+
+  async videoStreamStatus(streamId: string): Promise<VideoStreamSession> {
+    return invoke<VideoStreamSession>("video_stream_status", {
+      authToken: this.authToken,
+      streamId
     });
   }
 }

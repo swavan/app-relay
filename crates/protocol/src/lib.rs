@@ -4,6 +4,13 @@
 //! expose them over SSH-tunneled HTTP, WebSocket, gRPC, or another control
 //! protocol without changing the domain model.
 
+mod video_stream;
+
+pub use video_stream::{
+    StartVideoStreamRequest, StopVideoStreamRequest, VideoStreamSession, VideoStreamSignaling,
+    VideoStreamSignalingKind, VideoStreamState, VideoStreamStats,
+};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HealthStatus {
     pub service: String,

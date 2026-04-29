@@ -1,7 +1,8 @@
 use swavan_core::ServerConfig;
 use swavan_protocol::{
     ControlAuth, ControlError, CreateSessionRequest, Feature, Platform, ResizeSessionRequest,
-    ServerVersion, SessionState, SwavanError, ViewportSize,
+    ServerVersion, SessionState, StartVideoStreamRequest, StopVideoStreamRequest, SwavanError,
+    VideoStreamState, ViewportSize,
 };
 use swavan_server::{ServerControlPlane, ServerServices};
 
@@ -134,4 +135,50 @@ fn control_plane_manages_application_session_lifecycle() {
     assert_eq!(resized.viewport, ViewportSize::new(1440, 900));
     assert_eq!(closed.state, SessionState::Closed);
     assert_eq!(control_plane.active_sessions(&auth), Ok(Vec::new()));
+}
+
+#[test]
+fn control_plane_manages_video_stream_lifecycle() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+
+    let stream = control_plane
+        .start_video_stream(
+            &auth,
+            StartVideoStreamRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .expect("start video stream");
+
+    assert_eq!(stream.session_id, session.id);
+    assert_eq!(stream.selected_window_id, session.selected_window.id);
+    assert_eq!(stream.state, VideoStreamState::Starting);
+    assert_eq!(
+        control_plane.video_stream_status(&auth, &stream.id),
+        Ok(stream.clone())
+    );
+
+    let stopped = control_plane
+        .stop_video_stream(
+            &auth,
+            StopVideoStreamRequest {
+                stream_id: stream.id,
+            },
+        )
+        .expect("stop video stream");
+
+    assert_eq!(stopped.state, VideoStreamState::Stopped);
 }

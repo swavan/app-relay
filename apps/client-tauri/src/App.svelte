@@ -17,6 +17,7 @@
     type HealthStatus,
     type ViewportSize
   } from "./services";
+  import type { VideoStreamSession } from "./videoStreams";
 
   const profilesService = new TauriConnectionProfileService();
   const permissionService = new UIApplicationPermissionService();
@@ -28,12 +29,14 @@
   let permissions: ApplicationPermission[] = [];
   let selectedProfile: ConnectionProfile | null = null;
   let activeSession: ApplicationSession | null = null;
+  let activeStream: VideoStreamSession | null = null;
   let apps: AppSummary[] = [];
   let view: "tile" | "list" = "tile";
   let viewportWidth = "1280";
   let viewportHeight = "720";
   let errorMessage = "";
   let sessionMessage = "";
+  let streamMessage = "";
   let loading = true;
 
   const viewportPresets: ViewportSize[] = [
@@ -136,10 +139,40 @@
 
     try {
       sessionMessage = "";
+      if (activeStream) {
+        await remote.stopVideoStream(activeStream.id);
+        activeStream = null;
+      }
       await remote.closeSession(activeSession.id);
       activeSession = null;
     } catch (error) {
       sessionMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function startStream() {
+    if (!activeSession) {
+      return;
+    }
+
+    try {
+      streamMessage = "";
+      activeStream = await remote.startVideoStream(activeSession.id);
+    } catch (error) {
+      streamMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function stopStream() {
+    if (!activeStream) {
+      return;
+    }
+
+    try {
+      streamMessage = "";
+      activeStream = await remote.stopVideoStream(activeStream.id);
+    } catch (error) {
+      streamMessage = error instanceof Error ? error.message : String(error);
     }
   }
 
@@ -259,7 +292,26 @@
       </span>
       <div class="session-actions">
         <button disabled={!viewportValid} on:click={resizeSession} type="button">Resize</button>
+        {#if activeStream && activeStream.state !== "stopped"}
+          <button on:click={stopStream} type="button">Stop Stream</button>
+        {:else}
+          <button on:click={startStream} type="button">Stream</button>
+        {/if}
         <button on:click={closeSession} type="button">Close</button>
+      </div>
+    </section>
+  {/if}
+
+  {#if activeStream}
+    <section class="stream-panel" aria-label="Video stream">
+      <div>
+        <strong>{activeStream.state}</strong>
+        <span>{activeStream.viewport.width} x {activeStream.viewport.height}</span>
+      </div>
+      <div>
+        <span>{activeStream.stats.framesEncoded} frames</span>
+        <span>{activeStream.stats.bitrateKbps} kbps</span>
+        <span>{activeStream.stats.latencyMs} ms</span>
       </div>
     </section>
   {/if}
@@ -268,6 +320,13 @@
     <section class="status error" aria-label="Session error">
       <span>Session error</span>
       <strong>{sessionMessage}</strong>
+    </section>
+  {/if}
+
+  {#if streamMessage}
+    <section class="status error" aria-label="Stream error">
+      <span>Stream error</span>
+      <strong>{streamMessage}</strong>
     </section>
   {/if}
 
