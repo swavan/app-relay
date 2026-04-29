@@ -77,6 +77,15 @@ export type VideoStreamSession = {
     healthy: boolean;
     message?: string;
   };
+  failure?: {
+    kind: "appClosed" | "captureFailed";
+    message: string;
+    recovery: {
+      action: "reconnectStream" | "restartApplicationSession" | "none";
+      message: string;
+      retryable: boolean;
+    };
+  };
   state: "starting" | "streaming" | "stopped" | "failed";
   failureReason?: string;
 };

@@ -1,9 +1,11 @@
 use apprelay_core::ServerConfig;
 use apprelay_protocol::{
-    AppRelayError, ControlAuth, ControlError, CreateSessionRequest, Feature,
-    NegotiateVideoStreamRequest, Platform, ReconnectVideoStreamRequest, ResizeSessionRequest,
-    ServerVersion, SessionState, StartVideoStreamRequest, StopVideoStreamRequest,
-    VideoEncodingPipelineState, VideoResolutionAdaptationReason, VideoStreamNegotiationState,
+    AppRelayError, ButtonAction, ClientPoint, ControlAuth, ControlError, CreateSessionRequest,
+    Feature, ForwardInputRequest, InputDeliveryStatus, InputEvent, MappedInputEvent,
+    NegotiateVideoStreamRequest, Platform, PointerButton, ReconnectVideoStreamRequest,
+    ResizeSessionRequest, ServerPoint, ServerVersion, SessionState, StartVideoStreamRequest,
+    StopVideoStreamRequest, VideoEncodingPipelineState, VideoResolutionAdaptationReason,
+    VideoStreamFailureKind, VideoStreamNegotiationState, VideoStreamRecoveryAction,
     VideoStreamState, ViewportSize, WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription,
 };
 use apprelay_server::{ServerControlPlane, ServerServices};
@@ -137,6 +139,102 @@ fn control_plane_manages_application_session_lifecycle() {
     assert_eq!(resized.viewport, ViewportSize::new(1440, 900));
     assert_eq!(closed.state, SessionState::Closed);
     assert_eq!(control_plane.active_sessions(&auth), Ok(Vec::new()));
+}
+
+#[test]
+fn control_plane_authorizes_and_forwards_input_to_session() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1920, 1080),
+            },
+        )
+        .expect("create session");
+
+    let focused = control_plane
+        .forward_input(
+            &auth,
+            ForwardInputRequest {
+                session_id: session.id.clone(),
+                client_viewport: ViewportSize::new(960, 540),
+                event: InputEvent::Focus,
+            },
+        )
+        .expect("focus input");
+    let clicked = control_plane
+        .forward_input(
+            &auth,
+            ForwardInputRequest {
+                session_id: session.id,
+                client_viewport: ViewportSize::new(960, 540),
+                event: InputEvent::PointerButton {
+                    position: ClientPoint::new(480.0, 270.0),
+                    button: PointerButton::Primary,
+                    action: ButtonAction::Press,
+                },
+            },
+        )
+        .expect("forward input");
+
+    assert_eq!(focused.status, InputDeliveryStatus::Focused);
+    assert_eq!(
+        clicked.mapped_event,
+        MappedInputEvent::PointerButton {
+            position: ServerPoint::new(960, 540),
+            button: PointerButton::Primary,
+            action: ButtonAction::Press,
+        }
+    );
+    assert_eq!(clicked.status, InputDeliveryStatus::Delivered);
+}
+
+#[test]
+fn control_plane_rejects_unauthorized_input_requests() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+
+    assert_eq!(
+        control_plane.forward_input(
+            &ControlAuth::new("wrong-token"),
+            ForwardInputRequest {
+                session_id: "session-1".to_string(),
+                client_viewport: ViewportSize::new(1280, 720),
+                event: InputEvent::Focus,
+            },
+        ),
+        Err(ControlError::Unauthorized)
+    );
+}
+
+#[test]
+fn control_plane_rejects_input_for_unknown_session() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+
+    assert_eq!(
+        control_plane.forward_input(
+            &ControlAuth::new("correct-token"),
+            ForwardInputRequest {
+                session_id: "session-unknown".to_string(),
+                client_viewport: ViewportSize::new(1280, 720),
+                event: InputEvent::Focus,
+            },
+        ),
+        Err(ControlError::Service(AppRelayError::PermissionDenied(
+            "input is not authorized for session session-unknown".to_string()
+        )))
+    );
 }
 
 #[test]
@@ -400,4 +498,67 @@ fn control_plane_keeps_negotiated_video_encoding_coherent_after_resize() {
         VideoResolutionAdaptationReason::CappedToLimits
     );
     assert_eq!(status.stats.bitrate_kbps, 6220);
+}
+
+#[test]
+fn control_plane_marks_stream_failed_when_session_closes() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let stream = control_plane
+        .start_video_stream(
+            &auth,
+            StartVideoStreamRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .expect("start video stream");
+
+    control_plane
+        .close_session(&auth, &session.id)
+        .expect("close session");
+
+    let status = control_plane
+        .video_stream_status(&auth, &stream.id)
+        .expect("stream status");
+    assert_eq!(status.state, VideoStreamState::Failed);
+    assert_eq!(status.encoding.state, VideoEncodingPipelineState::Drained);
+    assert_eq!(status.stats.bitrate_kbps, 0);
+    assert_eq!(status.stats.latency_ms, 0);
+    assert_eq!(
+        status.failure.as_ref().map(|failure| &failure.kind),
+        Some(&VideoStreamFailureKind::AppClosed)
+    );
+    assert_eq!(
+        status
+            .failure
+            .as_ref()
+            .map(|failure| &failure.recovery.action),
+        Some(&VideoStreamRecoveryAction::RestartApplicationSession)
+    );
+    assert_eq!(
+        control_plane.reconnect_video_stream(
+            &auth,
+            ReconnectVideoStreamRequest {
+                stream_id: stream.id
+            }
+        ),
+        Err(apprelay_protocol::ControlError::Service(
+            AppRelayError::InvalidRequest(
+                "stream stream-1 cannot reconnect because its application session closed"
+                    .to_string()
+            )
+        ))
+    );
 }

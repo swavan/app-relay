@@ -22,6 +22,7 @@ export type VideoRendererView = {
   healthLabel: string;
   reconnectsLabel: string;
   latencyLabel: string;
+  recoveryLabel: string;
   emptyHeading: string;
   emptyDetail: string;
   hasEncodedFrame: boolean;
@@ -64,6 +65,7 @@ export function buildVideoRendererView(
       healthLabel: "Waiting for stream start",
       reconnectsLabel: "0 reconnects",
       latencyLabel: "0 ms",
+      recoveryLabel: "No recovery action",
       emptyHeading: "Stream not started",
       emptyDetail: "Start a stream to show selected-window stream metadata.",
       hasEncodedFrame: false,
@@ -74,9 +76,13 @@ export function buildVideoRendererView(
   const adaptation = stream.encoding.contract.adaptation;
   const lastFrame = stream.encoding.output.lastFrame;
   const healthLabel =
+    stream.failure?.message ??
     stream.failureReason ??
     stream.health.message ??
     (stream.health.healthy ? "Stream metadata healthy" : "Stream metadata unhealthy");
+  const recoveryLabel = stream.failure
+    ? stream.failure.recovery.message
+    : "No recovery action";
 
   return {
     state: stream.state,
@@ -99,13 +105,28 @@ export function buildVideoRendererView(
     healthLabel,
     reconnectsLabel: `${stream.stats.reconnectAttempts} reconnects`,
     latencyLabel: `${stream.stats.latencyMs} ms latency`,
-    emptyHeading: stream.state === "stopped" ? "Stream stopped" : "No decoded frame",
-    emptyDetail:
+    recoveryLabel,
+    emptyHeading:
       stream.state === "stopped"
-        ? "The last stream metadata is retained after stop."
-        : "Current pipeline exposes encoded metadata only.",
+        ? "Stream stopped"
+        : stream.state === "failed"
+          ? "Stream failed"
+          : "No decoded frame",
+    emptyDetail: streamEmptyDetail(stream, recoveryLabel),
     hasEncodedFrame: lastFrame !== null && stream.state !== "stopped" && stream.state !== "failed",
   };
+}
+
+function streamEmptyDetail(stream: VideoStreamSession, recoveryLabel: string): string {
+  if (stream.state === "stopped") {
+    return "The last stream metadata is retained after stop.";
+  }
+
+  if (stream.state === "failed") {
+    return recoveryLabel;
+  }
+
+  return "Current pipeline exposes encoded metadata only.";
 }
 
 function streamStateLabel(state: VideoRendererState): string {

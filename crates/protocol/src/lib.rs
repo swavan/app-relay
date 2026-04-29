@@ -4,15 +4,22 @@
 //! expose them over SSH-tunneled HTTP, WebSocket, gRPC, or another control
 //! protocol without changing the domain model.
 
+mod input;
 mod video_stream;
 
+pub use input::{
+    ButtonAction, ClientPoint, ForwardInputRequest, InputBackendKind, InputDelivery,
+    InputDeliveryStatus, InputEvent, KeyAction, KeyModifiers, MappedInputEvent, PointerButton,
+    ServerPoint,
+};
 pub use video_stream::{
     EncodedVideoFrame, NegotiateVideoStreamRequest, ReconnectVideoStreamRequest,
     StartVideoStreamRequest, StopVideoStreamRequest, VideoCaptureScope, VideoCaptureSource,
     VideoCodec, VideoEncodingContract, VideoEncodingOutput, VideoEncodingPipeline,
     VideoEncodingPipelineState, VideoEncodingTarget, VideoHardwareAcceleration, VideoPixelFormat,
     VideoResolutionAdaptation, VideoResolutionAdaptationReason, VideoResolutionLimits,
-    VideoStreamHealth, VideoStreamNegotiationState, VideoStreamSession, VideoStreamSignaling,
+    VideoStreamFailure, VideoStreamFailureKind, VideoStreamHealth, VideoStreamNegotiationState,
+    VideoStreamRecovery, VideoStreamRecoveryAction, VideoStreamSession, VideoStreamSignaling,
     VideoStreamSignalingKind, VideoStreamState, VideoStreamStats, WebRtcIceCandidate,
     WebRtcSdpType, WebRtcSessionDescription,
 };
@@ -251,6 +258,22 @@ impl AppRelayError {
         Self::UnsupportedPlatform { platform, feature }
     }
 }
+
+impl std::fmt::Display for AppRelayError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedPlatform { platform, feature } => {
+                write!(formatter, "{feature:?} is unsupported on {platform:?}")
+            }
+            Self::ServiceUnavailable(message)
+            | Self::InvalidRequest(message)
+            | Self::PermissionDenied(message)
+            | Self::NotFound(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for AppRelayError {}
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct ControlAuth {

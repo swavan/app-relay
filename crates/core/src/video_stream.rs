@@ -1,13 +1,19 @@
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
 use apprelay_protocol::{
     AppRelayError, ApplicationSession, Feature, NegotiateVideoStreamRequest, Platform,
-    ReconnectVideoStreamRequest, ResizeSessionRequest, SessionState, StartVideoStreamRequest,
-    StopVideoStreamRequest, VideoCaptureScope, VideoCaptureSource, VideoCodec,
-    VideoEncodingContract, VideoEncodingOutput, VideoEncodingPipeline, VideoEncodingPipelineState,
-    VideoEncodingTarget, VideoHardwareAcceleration, VideoPixelFormat, VideoResolutionAdaptation,
-    VideoResolutionAdaptationReason, VideoResolutionLimits, VideoStreamHealth,
-    VideoStreamNegotiationState, VideoStreamSession, VideoStreamSignaling,
+    ReconnectVideoStreamRequest, ResizeSessionRequest, SelectedWindow, SessionState,
+    StartVideoStreamRequest, StopVideoStreamRequest, VideoCaptureScope, VideoCaptureSource,
+    VideoCodec, VideoEncodingContract, VideoEncodingOutput, VideoEncodingPipeline,
+    VideoEncodingPipelineState, VideoEncodingTarget, VideoHardwareAcceleration, VideoPixelFormat,
+    VideoResolutionAdaptation, VideoResolutionAdaptationReason, VideoResolutionLimits,
+    VideoStreamFailure, VideoStreamFailureKind, VideoStreamHealth, VideoStreamNegotiationState,
+    VideoStreamRecovery, VideoStreamRecoveryAction, VideoStreamSession, VideoStreamSignaling,
     VideoStreamSignalingKind, VideoStreamState, VideoStreamStats, WebRtcIceCandidate,
-    WebRtcSdpType, WebRtcSessionDescription,
+    WebRtcSdpType, WebRtcSessionDescription, WindowSelectionMethod,
 };
 
 pub trait VideoStreamService {
@@ -29,6 +35,7 @@ pub trait VideoStreamService {
         request: NegotiateVideoStreamRequest,
     ) -> Result<VideoStreamSession, AppRelayError>;
     fn record_resize(&mut self, request: &ResizeSessionRequest);
+    fn record_session_closed(&mut self, session_id: &str);
     fn stream_status(&self, stream_id: &str) -> Result<VideoStreamSession, AppRelayError>;
 }
 
@@ -232,10 +239,28 @@ fn server_ice_candidates(candidates: &[WebRtcIceCandidate]) -> Vec<WebRtcIceCand
         .collect()
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum WindowCaptureBackendService {
     LinuxSelectedWindow,
-    Unsupported { platform: Platform },
+    FailingSelectedWindow {
+        message: String,
+    },
+    FailsOnceSelectedWindow {
+        failed: Arc<AtomicBool>,
+        message: String,
+    },
+    Unsupported {
+        platform: Platform,
+    },
+}
+
+impl WindowCaptureBackendService {
+    pub fn fails_once(message: impl Into<String>) -> Self {
+        Self::FailsOnceSelectedWindow {
+            failed: Arc::new(AtomicBool::new(false)),
+            message: message.into(),
+        }
+    }
 }
 
 impl WindowCaptureBackend for WindowCaptureBackendService {
@@ -246,33 +271,28 @@ impl WindowCaptureBackend for WindowCaptureBackendService {
     ) -> Result<WindowCaptureStart, AppRelayError> {
         match self {
             Self::LinuxSelectedWindow => Ok(WindowCaptureStart {
-                source: VideoCaptureSource {
-                    scope: VideoCaptureScope::SelectedWindow,
-                    selected_window_id: session.selected_window.id.clone(),
-                    application_id: session.selected_window.application_id.clone(),
-                    title: session.selected_window.title.clone(),
-                },
-                signaling: VideoStreamSignaling {
-                    kind: VideoStreamSignalingKind::WebRtcOffer,
-                    negotiation_state: VideoStreamNegotiationState::AwaitingAnswer,
-                    offer: Some(WebRtcSessionDescription {
-                        sdp_type: WebRtcSdpType::Offer,
-                        sdp: format!(
-                            "apprelay-webrtc-offer:{stream_id}:{}",
-                            session.selected_window.id
-                        ),
-                    }),
-                    answer: None,
-                    ice_candidates: vec![WebRtcIceCandidate {
-                        candidate: format!(
-                            "candidate:apprelay {stream_id} {} typ host",
-                            session.selected_window.id
-                        ),
-                        sdp_mid: Some("video".to_string()),
-                        sdp_m_line_index: Some(0),
-                    }],
-                },
+                source: InMemoryVideoStreamService::capture_source_from_session(session),
+                signaling: InMemoryVideoStreamService::signaling_for_stream(
+                    stream_id,
+                    &session.selected_window.id,
+                ),
             }),
+            Self::FailingSelectedWindow { message } => {
+                Err(AppRelayError::InvalidRequest(message.clone()))
+            }
+            Self::FailsOnceSelectedWindow { failed, message } => {
+                if failed.swap(true, Ordering::Relaxed) {
+                    Ok(WindowCaptureStart {
+                        source: InMemoryVideoStreamService::capture_source_from_session(session),
+                        signaling: InMemoryVideoStreamService::signaling_for_stream(
+                            stream_id,
+                            &session.selected_window.id,
+                        ),
+                    })
+                } else {
+                    Err(AppRelayError::InvalidRequest(message.clone()))
+                }
+            }
             Self::Unsupported { platform } => Err(AppRelayError::unsupported(
                 *platform,
                 Feature::WindowVideoStream,
@@ -281,7 +301,7 @@ impl WindowCaptureBackend for WindowCaptureBackendService {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct InMemoryVideoStreamService {
     capture_backend: WindowCaptureBackendService,
     streams: Vec<VideoStreamSession>,
@@ -314,6 +334,106 @@ impl InMemoryVideoStreamService {
             && viewport.width <= Self::MAX_VIEWPORT_WIDTH
             && viewport.height <= Self::MAX_VIEWPORT_HEIGHT
     }
+
+    fn capture_source_from_session(session: &ApplicationSession) -> VideoCaptureSource {
+        VideoCaptureSource {
+            scope: VideoCaptureScope::SelectedWindow,
+            selected_window_id: session.selected_window.id.clone(),
+            application_id: session.selected_window.application_id.clone(),
+            title: session.selected_window.title.clone(),
+        }
+    }
+
+    fn signaling_for_stream(stream_id: &str, selected_window_id: &str) -> VideoStreamSignaling {
+        VideoStreamSignaling {
+            kind: VideoStreamSignalingKind::WebRtcOffer,
+            negotiation_state: VideoStreamNegotiationState::AwaitingAnswer,
+            offer: Some(WebRtcSessionDescription {
+                sdp_type: WebRtcSdpType::Offer,
+                sdp: format!("apprelay-webrtc-offer:{stream_id}:{selected_window_id}"),
+            }),
+            answer: None,
+            ice_candidates: vec![WebRtcIceCandidate {
+                candidate: format!("candidate:apprelay {stream_id} {selected_window_id} typ host"),
+                sdp_mid: Some("video".to_string()),
+                sdp_m_line_index: Some(0),
+            }],
+        }
+    }
+
+    fn capture_failure(message: impl Into<String>) -> VideoStreamFailure {
+        let message = message.into();
+        VideoStreamFailure {
+            kind: VideoStreamFailureKind::CaptureFailed,
+            message: message.clone(),
+            recovery: VideoStreamRecovery {
+                action: VideoStreamRecoveryAction::ReconnectStream,
+                message: "fix the capture backend and reconnect the stream".to_string(),
+                retryable: true,
+            },
+        }
+    }
+
+    fn capture_error_message(error: &AppRelayError) -> String {
+        match error {
+            AppRelayError::ServiceUnavailable(message)
+            | AppRelayError::InvalidRequest(message)
+            | AppRelayError::PermissionDenied(message)
+            | AppRelayError::NotFound(message) => message.clone(),
+            AppRelayError::UnsupportedPlatform { platform, feature } => {
+                format!("{feature:?} is unsupported on {platform:?}")
+            }
+        }
+    }
+
+    fn app_closed_failure(session_id: &str) -> VideoStreamFailure {
+        let message = format!("application session {session_id} closed");
+        VideoStreamFailure {
+            kind: VideoStreamFailureKind::AppClosed,
+            message: message.clone(),
+            recovery: VideoStreamRecovery {
+                action: VideoStreamRecoveryAction::RestartApplicationSession,
+                message: "start a new application session before streaming again".to_string(),
+                retryable: false,
+            },
+        }
+    }
+
+    fn apply_failure(stream: &mut VideoStreamSession, failure: VideoStreamFailure) {
+        stream.state = VideoStreamState::Failed;
+        InMemoryVideoEncodingPipeline::drain(&mut stream.encoding);
+        stream.stats.frames_encoded = stream.encoding.output.frames_encoded;
+        stream.stats.bitrate_kbps = 0;
+        stream.stats.latency_ms = 0;
+        stream.health = VideoStreamHealth {
+            healthy: false,
+            message: Some(failure.message.clone()),
+        };
+        stream.failure_reason = Some(failure.message.clone());
+        stream.failure = Some(failure);
+    }
+
+    fn clear_failure(stream: &mut VideoStreamSession) {
+        stream.failure = None;
+        stream.failure_reason = None;
+    }
+
+    fn session_snapshot_from_stream(stream: &VideoStreamSession) -> ApplicationSession {
+        ApplicationSession {
+            id: stream.session_id.clone(),
+            application_id: stream.capture_source.application_id.clone(),
+            selected_window: SelectedWindow {
+                id: stream.selected_window_id.clone(),
+                application_id: stream.capture_source.application_id.clone(),
+                title: stream.capture_source.title.clone(),
+                selection_method: WindowSelectionMethod::ExistingWindow,
+            },
+            launch_intent: None,
+            viewport: stream.viewport.clone(),
+            resize_intent: None,
+            state: SessionState::Ready,
+        }
+    }
 }
 
 impl Default for InMemoryVideoStreamService {
@@ -336,15 +456,25 @@ impl VideoStreamService for InMemoryVideoStreamService {
         }
 
         let stream_id = self.next_stream_id();
-        let capture = self.capture_backend.start_capture(&stream_id, session)?;
-        let stream = VideoStreamSession {
+        let capture = self.capture_backend.start_capture(&stream_id, session);
+        let (capture_source, signaling, failure) = match capture {
+            Ok(capture) => (capture.source, capture.signaling, None),
+            Err(error @ AppRelayError::UnsupportedPlatform { .. }) => return Err(error),
+            Err(error) => (
+                Self::capture_source_from_session(session),
+                Self::signaling_for_stream(&stream_id, &session.selected_window.id),
+                Some(Self::capture_failure(Self::capture_error_message(&error))),
+            ),
+        };
+
+        let mut stream = VideoStreamSession {
             id: stream_id,
             session_id: session.id.clone(),
             selected_window_id: session.selected_window.id.clone(),
             viewport: session.viewport.clone(),
-            capture_source: capture.source,
+            capture_source,
             encoding: InMemoryVideoEncodingPipeline::configured(session.viewport.clone()),
-            signaling: capture.signaling,
+            signaling,
             stats: VideoStreamStats {
                 frames_encoded: 0,
                 bitrate_kbps: 0,
@@ -355,9 +485,14 @@ impl VideoStreamService for InMemoryVideoStreamService {
                 healthy: true,
                 message: None,
             },
+            failure: None,
             state: VideoStreamState::Starting,
             failure_reason: None,
         };
+
+        if let Some(failure) = failure {
+            Self::apply_failure(&mut stream, failure);
+        }
 
         self.streams.push(stream.clone());
         Ok(stream)
@@ -383,6 +518,7 @@ impl VideoStreamService for InMemoryVideoStreamService {
             healthy: false,
             message: Some("stream stopped by client".to_string()),
         };
+        Self::clear_failure(stream);
         Ok(stream.clone())
     }
 
@@ -390,6 +526,7 @@ impl VideoStreamService for InMemoryVideoStreamService {
         &mut self,
         request: ReconnectVideoStreamRequest,
     ) -> Result<VideoStreamSession, AppRelayError> {
+        let capture_backend = self.capture_backend.clone();
         let stream = self
             .streams
             .iter_mut()
@@ -405,19 +542,53 @@ impl VideoStreamService for InMemoryVideoStreamService {
             )));
         }
 
+        if matches!(
+            stream.failure.as_ref().map(|failure| &failure.kind),
+            Some(VideoStreamFailureKind::AppClosed)
+        ) {
+            return Err(AppRelayError::InvalidRequest(format!(
+                "stream {} cannot reconnect because its application session closed",
+                request.stream_id
+            )));
+        }
+
+        let requires_capture_retry = matches!(
+            stream.failure.as_ref(),
+            Some(failure)
+                if failure.kind == VideoStreamFailureKind::CaptureFailed
+                    && failure.recovery.retryable
+        );
+
+        if requires_capture_retry {
+            let session = Self::session_snapshot_from_stream(stream);
+            match capture_backend.start_capture(&stream.id, &session) {
+                Ok(capture) => {
+                    stream.capture_source = capture.source;
+                    stream.signaling = capture.signaling;
+                }
+                Err(error) => {
+                    stream.stats.reconnect_attempts += 1;
+                    let failure = Self::capture_failure(Self::capture_error_message(&error));
+                    Self::apply_failure(stream, failure);
+                    return Ok(stream.clone());
+                }
+            }
+        }
+
         stream.state = VideoStreamState::Starting;
         InMemoryVideoEncodingPipeline::reset_for_reconnect(&mut stream.encoding);
         stream.signaling.negotiation_state = VideoStreamNegotiationState::AwaitingAnswer;
         stream.signaling.answer = None;
         stream.signaling.ice_candidates = server_ice_candidates(&stream.signaling.ice_candidates);
         stream.stats.frames_encoded = 0;
-        stream.stats.bitrate_kbps = stream.encoding.contract.target.target_bitrate_kbps;
+        stream.stats.bitrate_kbps = 0;
         stream.stats.latency_ms = 0;
         stream.stats.reconnect_attempts += 1;
         stream.health = VideoStreamHealth {
             healthy: true,
             message: Some("reconnect requested".to_string()),
         };
+        Self::clear_failure(stream);
         Ok(stream.clone())
     }
 
@@ -446,6 +617,13 @@ impl VideoStreamService for InMemoryVideoStreamService {
             )));
         }
 
+        if stream.state == VideoStreamState::Failed {
+            return Err(AppRelayError::InvalidRequest(format!(
+                "stream {} is failed and must be reconnected before negotiation",
+                request.stream_id
+            )));
+        }
+
         if stream.signaling.negotiation_state == VideoStreamNegotiationState::Negotiated {
             return Err(AppRelayError::InvalidRequest(format!(
                 "stream {} has already been negotiated",
@@ -468,6 +646,7 @@ impl VideoStreamService for InMemoryVideoStreamService {
             healthy: true,
             message: Some("WebRTC negotiation completed".to_string()),
         };
+        Self::clear_failure(stream);
 
         Ok(stream.clone())
     }
@@ -496,6 +675,16 @@ impl VideoStreamService for InMemoryVideoStreamService {
                 healthy: true,
                 message: Some("stream viewport updated".to_string()),
             };
+            Self::clear_failure(stream);
+        }
+    }
+
+    fn record_session_closed(&mut self, session_id: &str) {
+        for stream in self.streams.iter_mut().filter(|stream| {
+            stream.session_id == session_id && stream.state != VideoStreamState::Stopped
+        }) {
+            let failure = Self::app_closed_failure(session_id);
+            Self::apply_failure(stream, failure);
         }
     }
 
@@ -1004,6 +1193,281 @@ mod tests {
             .ice_candidates
             .iter()
             .any(|candidate| candidate.candidate == "candidate:first-client stream-1 typ host"));
+    }
+
+    #[test]
+    fn video_stream_service_marks_active_stream_failed_when_session_closes() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryVideoStreamService::default();
+        let stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        stream_service.record_session_closed(&session.id);
+
+        let status = stream_service
+            .stream_status(&stream.id)
+            .expect("stream status");
+        assert_eq!(status.state, VideoStreamState::Failed);
+        assert_eq!(status.encoding.state, VideoEncodingPipelineState::Drained);
+        assert_eq!(
+            status.stats.frames_encoded,
+            status.encoding.output.frames_encoded
+        );
+        assert_eq!(status.stats.bitrate_kbps, 0);
+        assert_eq!(status.stats.latency_ms, 0);
+        assert_eq!(
+            status.failure.as_ref().map(|failure| &failure.kind),
+            Some(&VideoStreamFailureKind::AppClosed)
+        );
+        assert_eq!(
+            status
+                .failure
+                .as_ref()
+                .map(|failure| &failure.recovery.action),
+            Some(&VideoStreamRecoveryAction::RestartApplicationSession)
+        );
+        assert!(!status.failure.as_ref().unwrap().recovery.retryable);
+    }
+
+    #[test]
+    fn video_stream_service_rejects_reconnect_after_session_close() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryVideoStreamService::default();
+        let stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+        stream_service.record_session_closed(&session.id);
+
+        assert_eq!(
+            stream_service.reconnect_stream(ReconnectVideoStreamRequest {
+                stream_id: stream.id,
+            }),
+            Err(AppRelayError::InvalidRequest(
+                "stream stream-1 cannot reconnect because its application session closed"
+                    .to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn video_stream_service_returns_actionable_capture_failure_state() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service =
+            InMemoryVideoStreamService::new(WindowCaptureBackendService::FailingSelectedWindow {
+                message: "capture backend failed".to_string(),
+            });
+
+        let failed = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        assert_eq!(failed.state, VideoStreamState::Failed);
+        assert_eq!(failed.encoding.state, VideoEncodingPipelineState::Drained);
+        assert!(!failed.health.healthy);
+        assert_eq!(
+            failed.failure.as_ref().map(|failure| &failure.kind),
+            Some(&VideoStreamFailureKind::CaptureFailed)
+        );
+        assert_eq!(
+            failed
+                .failure
+                .as_ref()
+                .map(|failure| &failure.recovery.action),
+            Some(&VideoStreamRecoveryAction::ReconnectStream)
+        );
+        assert!(failed.failure.as_ref().unwrap().recovery.retryable);
+        assert_eq!(
+            failed.failure_reason.as_deref(),
+            Some("capture backend failed")
+        );
+        assert_eq!(
+            failed.stats.frames_encoded,
+            failed.encoding.output.frames_encoded
+        );
+    }
+
+    #[test]
+    fn video_stream_service_reconnect_keeps_retryable_capture_failure_when_recapture_fails() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service =
+            InMemoryVideoStreamService::new(WindowCaptureBackendService::FailingSelectedWindow {
+                message: "capture backend failed".to_string(),
+            });
+        let failed = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        let reconnected = stream_service
+            .reconnect_stream(ReconnectVideoStreamRequest {
+                stream_id: failed.id,
+            })
+            .expect("reconnect stream");
+
+        assert_eq!(reconnected.state, VideoStreamState::Failed);
+        assert_eq!(
+            reconnected.encoding.state,
+            VideoEncodingPipelineState::Drained
+        );
+        assert_eq!(
+            reconnected.failure.as_ref().map(|failure| &failure.kind),
+            Some(&VideoStreamFailureKind::CaptureFailed)
+        );
+        assert_eq!(
+            reconnected.failure_reason.as_deref(),
+            Some("capture backend failed")
+        );
+        assert!(!reconnected.health.healthy);
+        assert_eq!(reconnected.stats.bitrate_kbps, 0);
+        assert_eq!(reconnected.stats.latency_ms, 0);
+        assert_eq!(reconnected.stats.reconnect_attempts, 1);
+        assert_eq!(
+            stream_service.negotiate_stream(NegotiateVideoStreamRequest {
+                stream_id: reconnected.id,
+                client_answer: WebRtcSessionDescription {
+                    sdp_type: WebRtcSdpType::Answer,
+                    sdp: "client-answer".to_string(),
+                },
+                client_ice_candidates: Vec::new(),
+            }),
+            Err(AppRelayError::InvalidRequest(
+                "stream stream-1 is failed and must be reconnected before negotiation".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn video_stream_service_reconnect_clears_capture_failure_after_successful_recapture() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryVideoStreamService::new(
+            WindowCaptureBackendService::fails_once("capture backend failed"),
+        );
+        let failed = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        let reconnected = stream_service
+            .reconnect_stream(ReconnectVideoStreamRequest {
+                stream_id: failed.id,
+            })
+            .expect("reconnect stream");
+
+        assert_eq!(reconnected.state, VideoStreamState::Starting);
+        assert_eq!(
+            reconnected.encoding.state,
+            VideoEncodingPipelineState::Configured
+        );
+        assert_eq!(reconnected.failure, None);
+        assert_eq!(reconnected.failure_reason, None);
+        assert!(reconnected.health.healthy);
+        assert_eq!(
+            reconnected.health.message.as_deref(),
+            Some("reconnect requested")
+        );
+        assert_eq!(reconnected.stats.frames_encoded, 0);
+        assert_eq!(reconnected.stats.bitrate_kbps, 0);
+        assert_eq!(reconnected.stats.latency_ms, 0);
+        assert_eq!(reconnected.stats.reconnect_attempts, 1);
+        assert_eq!(
+            reconnected.signaling.ice_candidates,
+            vec![WebRtcIceCandidate {
+                candidate: "candidate:apprelay stream-1 window-session-1 typ host".to_string(),
+                sdp_mid: Some("video".to_string()),
+                sdp_m_line_index: Some(0),
+            }]
+        );
+    }
+
+    #[test]
+    fn video_stream_service_rejects_negotiation_while_failed() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service =
+            InMemoryVideoStreamService::new(WindowCaptureBackendService::FailingSelectedWindow {
+                message: "capture backend failed".to_string(),
+            });
+        let failed = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        assert_eq!(
+            stream_service.negotiate_stream(NegotiateVideoStreamRequest {
+                stream_id: failed.id,
+                client_answer: WebRtcSessionDescription {
+                    sdp_type: WebRtcSdpType::Answer,
+                    sdp: "client-answer".to_string(),
+                },
+                client_ice_candidates: Vec::new(),
+            }),
+            Err(AppRelayError::InvalidRequest(
+                "stream stream-1 is failed and must be reconnected before negotiation".to_string()
+            ))
+        );
     }
 
     #[test]

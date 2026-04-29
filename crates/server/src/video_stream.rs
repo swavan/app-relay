@@ -72,6 +72,10 @@ impl VideoStreamControl {
         self.stream_service.record_resize(request);
     }
 
+    pub fn record_session_closed(&mut self, session_id: &str) {
+        self.stream_service.record_session_closed(session_id);
+    }
+
     pub fn status(&self, stream_id: &str) -> Result<VideoStreamSession, AppRelayError> {
         self.stream_service.stream_status(stream_id)
     }

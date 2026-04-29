@@ -9,10 +9,10 @@ use apprelay_core::{
     FileConnectionProfileRepository, ServerConfig,
 };
 use apprelay_protocol::{
-    AppIcon, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession, ControlAuth,
-    CreateSessionRequest, Feature, LaunchIntentStatus, Platform, PlatformCapability,
-    ResizeIntentStatus, ResizeSessionRequest, SelectedWindow, SessionState, AppRelayError,
-    ViewportSize, WindowResizeIntent, WindowSelectionMethod,
+    AppIcon, AppRelayError, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession,
+    ControlAuth, CreateSessionRequest, Feature, ForwardInputRequest, InputDelivery,
+    LaunchIntentStatus, Platform, PlatformCapability, ResizeIntentStatus, ResizeSessionRequest,
+    SelectedWindow, SessionState, ViewportSize, WindowResizeIntent, WindowSelectionMethod,
 };
 use apprelay_server::{ServerControlPlane, ServerServices};
 
@@ -253,6 +253,16 @@ fn close_application_session(
         control_plane
             .close_session(&ControlAuth::new(auth_token), &session_id)
             .map(Into::into)
+    })
+}
+
+#[tauri::command]
+fn forward_input(
+    auth_token: String,
+    request: ForwardInputRequest,
+) -> Result<InputDelivery, String> {
+    with_control_plane(|control_plane| {
+        control_plane.forward_input(&ControlAuth::new(auth_token), request)
     })
 }
 
@@ -610,6 +620,7 @@ pub fn run() {
             create_application_session,
             resize_application_session,
             close_application_session,
+            forward_input,
             video_stream::start_video_stream,
             video_stream::stop_video_stream,
             video_stream::reconnect_video_stream,

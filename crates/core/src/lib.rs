@@ -1,7 +1,12 @@
 //! Core service contracts for AppRelay.
 
+mod input;
 mod video_stream;
 
+pub use input::{
+    map_point, InMemoryInputForwardingService, InputBackend, InputBackendService,
+    InputForwardingService,
+};
 pub use video_stream::{
     InMemoryVideoStreamService, VideoStreamService, WindowCaptureBackend,
     WindowCaptureBackendService,
