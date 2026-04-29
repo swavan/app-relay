@@ -1,8 +1,10 @@
 use apprelay_protocol::{
-    AppRelayError, ApplicationSession, Feature, Platform, ReconnectVideoStreamRequest,
-    ResizeSessionRequest, SessionState, StartVideoStreamRequest, StopVideoStreamRequest,
-    VideoCaptureScope, VideoCaptureSource, VideoStreamHealth, VideoStreamSession,
-    VideoStreamSignaling, VideoStreamSignalingKind, VideoStreamState, VideoStreamStats,
+    AppRelayError, ApplicationSession, Feature, NegotiateVideoStreamRequest, Platform,
+    ReconnectVideoStreamRequest, ResizeSessionRequest, SessionState, StartVideoStreamRequest,
+    StopVideoStreamRequest, VideoCaptureScope, VideoCaptureSource, VideoStreamHealth,
+    VideoStreamNegotiationState, VideoStreamSession, VideoStreamSignaling,
+    VideoStreamSignalingKind, VideoStreamState, VideoStreamStats, WebRtcIceCandidate,
+    WebRtcSdpType, WebRtcSessionDescription,
 };
 
 pub trait VideoStreamService {
@@ -18,6 +20,10 @@ pub trait VideoStreamService {
     fn reconnect_stream(
         &mut self,
         request: ReconnectVideoStreamRequest,
+    ) -> Result<VideoStreamSession, AppRelayError>;
+    fn negotiate_stream(
+        &mut self,
+        request: NegotiateVideoStreamRequest,
     ) -> Result<VideoStreamSession, AppRelayError>;
     fn record_resize(&mut self, request: &ResizeSessionRequest);
     fn stream_status(&self, stream_id: &str) -> Result<VideoStreamSession, AppRelayError>;
@@ -59,10 +65,23 @@ impl WindowCaptureBackend for WindowCaptureBackendService {
                 },
                 signaling: VideoStreamSignaling {
                     kind: VideoStreamSignalingKind::WebRtcOffer,
-                    offer: Some(format!(
-                        "apprelay-webrtc-offer:{stream_id}:{}",
-                        session.selected_window.id
-                    )),
+                    negotiation_state: VideoStreamNegotiationState::AwaitingAnswer,
+                    offer: Some(WebRtcSessionDescription {
+                        sdp_type: WebRtcSdpType::Offer,
+                        sdp: format!(
+                            "apprelay-webrtc-offer:{stream_id}:{}",
+                            session.selected_window.id
+                        ),
+                    }),
+                    answer: None,
+                    ice_candidates: vec![WebRtcIceCandidate {
+                        candidate: format!(
+                            "candidate:apprelay {stream_id} {} typ host",
+                            session.selected_window.id
+                        ),
+                        sdp_mid: Some("video".to_string()),
+                        sdp_m_line_index: Some(0),
+                    }],
                 },
             }),
             Self::Unsupported { platform } => Err(AppRelayError::unsupported(
@@ -184,11 +203,60 @@ impl VideoStreamService for InMemoryVideoStreamService {
         }
 
         stream.state = VideoStreamState::Starting;
+        stream.signaling.negotiation_state = VideoStreamNegotiationState::AwaitingAnswer;
+        stream.signaling.answer = None;
         stream.stats.reconnect_attempts += 1;
         stream.health = VideoStreamHealth {
             healthy: true,
             message: Some("reconnect requested".to_string()),
         };
+        Ok(stream.clone())
+    }
+
+    fn negotiate_stream(
+        &mut self,
+        request: NegotiateVideoStreamRequest,
+    ) -> Result<VideoStreamSession, AppRelayError> {
+        if request.client_answer.sdp_type != WebRtcSdpType::Answer {
+            return Err(AppRelayError::InvalidRequest(
+                "video stream negotiation requires a WebRTC answer".to_string(),
+            ));
+        }
+
+        let stream = self
+            .streams
+            .iter_mut()
+            .find(|stream| stream.id == request.stream_id)
+            .ok_or_else(|| {
+                AppRelayError::NotFound(format!("stream {} was not found", request.stream_id))
+            })?;
+
+        if stream.state == VideoStreamState::Stopped {
+            return Err(AppRelayError::InvalidRequest(format!(
+                "stream {} has been stopped",
+                request.stream_id
+            )));
+        }
+
+        if stream.signaling.negotiation_state == VideoStreamNegotiationState::Negotiated {
+            return Err(AppRelayError::InvalidRequest(format!(
+                "stream {} has already been negotiated",
+                request.stream_id
+            )));
+        }
+
+        stream.signaling.answer = Some(request.client_answer);
+        stream
+            .signaling
+            .ice_candidates
+            .extend(request.client_ice_candidates);
+        stream.signaling.negotiation_state = VideoStreamNegotiationState::Negotiated;
+        stream.state = VideoStreamState::Streaming;
+        stream.health = VideoStreamHealth {
+            healthy: true,
+            message: Some("WebRTC negotiation completed".to_string()),
+        };
+
         Ok(stream.clone())
     }
 
@@ -301,11 +369,64 @@ mod tests {
             .expect("reconnect stream");
 
         assert_eq!(reconnected.state, VideoStreamState::Starting);
+        assert_eq!(
+            reconnected.signaling.negotiation_state,
+            VideoStreamNegotiationState::AwaitingAnswer
+        );
         assert_eq!(reconnected.stats.reconnect_attempts, 1);
         assert_eq!(
             reconnected.health.message.as_deref(),
             Some("reconnect requested")
         );
+    }
+
+    #[test]
+    fn video_stream_service_negotiates_webrtc_answer() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryVideoStreamService::default();
+        let stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        let negotiated = stream_service
+            .negotiate_stream(NegotiateVideoStreamRequest {
+                stream_id: stream.id.clone(),
+                client_answer: WebRtcSessionDescription {
+                    sdp_type: WebRtcSdpType::Answer,
+                    sdp: "client-answer".to_string(),
+                },
+                client_ice_candidates: vec![WebRtcIceCandidate {
+                    candidate: "candidate:client stream-1 typ host".to_string(),
+                    sdp_mid: Some("video".to_string()),
+                    sdp_m_line_index: Some(0),
+                }],
+            })
+            .expect("negotiate stream");
+
+        assert_eq!(negotiated.state, VideoStreamState::Streaming);
+        assert_eq!(
+            negotiated.signaling.negotiation_state,
+            VideoStreamNegotiationState::Negotiated
+        );
+        assert_eq!(
+            negotiated.signaling.answer,
+            Some(WebRtcSessionDescription {
+                sdp_type: WebRtcSdpType::Answer,
+                sdp: "client-answer".to_string(),
+            })
+        );
+        assert_eq!(negotiated.signaling.ice_candidates.len(), 2);
     }
 
     #[test]

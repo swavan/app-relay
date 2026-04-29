@@ -1,8 +1,10 @@
 use apprelay_core::ServerConfig;
 use apprelay_protocol::{
-    AppRelayError, ControlAuth, ControlError, CreateSessionRequest, Feature, Platform,
-    ReconnectVideoStreamRequest, ResizeSessionRequest, ServerVersion, SessionState,
-    StartVideoStreamRequest, StopVideoStreamRequest, VideoStreamState, ViewportSize,
+    AppRelayError, ControlAuth, ControlError, CreateSessionRequest, Feature,
+    NegotiateVideoStreamRequest, Platform, ReconnectVideoStreamRequest, ResizeSessionRequest,
+    ServerVersion, SessionState, StartVideoStreamRequest, StopVideoStreamRequest,
+    VideoStreamNegotiationState, VideoStreamState, ViewportSize, WebRtcIceCandidate, WebRtcSdpType,
+    WebRtcSessionDescription,
 };
 use apprelay_server::{ServerControlPlane, ServerServices};
 
@@ -181,6 +183,64 @@ fn control_plane_manages_video_stream_lifecycle() {
         .expect("stop video stream");
 
     assert_eq!(stopped.state, VideoStreamState::Stopped);
+}
+
+#[test]
+fn control_plane_negotiates_video_stream() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let stream = control_plane
+        .start_video_stream(
+            &auth,
+            StartVideoStreamRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .expect("start video stream");
+
+    let negotiated = control_plane
+        .negotiate_video_stream(
+            &auth,
+            NegotiateVideoStreamRequest {
+                stream_id: stream.id.clone(),
+                client_answer: WebRtcSessionDescription {
+                    sdp_type: WebRtcSdpType::Answer,
+                    sdp: "client-answer".to_string(),
+                },
+                client_ice_candidates: vec![WebRtcIceCandidate {
+                    candidate: "candidate:client stream-1 typ host".to_string(),
+                    sdp_mid: Some("video".to_string()),
+                    sdp_m_line_index: Some(0),
+                }],
+            },
+        )
+        .expect("negotiate video stream");
+
+    assert_eq!(negotiated.state, VideoStreamState::Streaming);
+    assert_eq!(
+        negotiated.signaling.negotiation_state,
+        VideoStreamNegotiationState::Negotiated
+    );
+    assert_eq!(
+        negotiated.signaling.answer,
+        Some(WebRtcSessionDescription {
+            sdp_type: WebRtcSdpType::Answer,
+            sdp: "client-answer".to_string(),
+        })
+    );
+    assert_eq!(negotiated.signaling.ice_candidates.len(), 2);
 }
 
 #[test]

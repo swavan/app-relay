@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { RemoteService, ViewportSize } from "./services";
+import type { WebRtcIceCandidate, WebRtcSessionDescription } from "./videoStreams";
+
+const streamOffer = {
+  sdpType: "offer" as const,
+  sdp: "apprelay-webrtc-offer:stream-1:window-session-1"
+};
+
+const serverIceCandidate = {
+  candidate: "candidate:apprelay stream-1 window-session-1 typ host",
+  sdpMid: "video",
+  sdpMLineIndex: 0
+};
 
 class FakeRemoteService implements RemoteService {
   async health() {
@@ -138,7 +150,9 @@ class FakeRemoteService implements RemoteService {
       },
       signaling: {
         kind: "webRtcOffer" as const,
-        offer: "apprelay-webrtc-offer:stream-1:window-session-1"
+        negotiationState: "awaitingAnswer" as const,
+        offer: streamOffer,
+        iceCandidates: [serverIceCandidate]
       },
       stats: {
         framesEncoded: 0,
@@ -170,7 +184,9 @@ class FakeRemoteService implements RemoteService {
       },
       signaling: {
         kind: "webRtcOffer" as const,
-        offer: "apprelay-webrtc-offer:stream-1:window-session-1"
+        negotiationState: "awaitingAnswer" as const,
+        offer: streamOffer,
+        iceCandidates: [serverIceCandidate]
       },
       stats: {
         framesEncoded: 0,
@@ -203,7 +219,9 @@ class FakeRemoteService implements RemoteService {
       },
       signaling: {
         kind: "webRtcOffer" as const,
-        offer: "apprelay-webrtc-offer:stream-1:window-session-1"
+        negotiationState: "awaitingAnswer" as const,
+        offer: streamOffer,
+        iceCandidates: [serverIceCandidate]
       },
       stats: {
         framesEncoded: 0,
@@ -216,6 +234,46 @@ class FakeRemoteService implements RemoteService {
         message: "reconnect requested"
       },
       state: "starting" as const
+    };
+  }
+
+  async negotiateVideoStream(
+    streamId: string,
+    clientAnswer: WebRtcSessionDescription,
+    clientIceCandidates: WebRtcIceCandidate[]
+  ) {
+    return {
+      id: streamId,
+      sessionId: "session-1",
+      selectedWindowId: "window-session-1",
+      viewport: {
+        width: 1280,
+        height: 720
+      },
+      captureSource: {
+        scope: "selectedWindow" as const,
+        selectedWindowId: "window-session-1",
+        applicationId: "terminal",
+        title: "Terminal"
+      },
+      signaling: {
+        kind: "webRtcOffer" as const,
+        negotiationState: "negotiated" as const,
+        offer: streamOffer,
+        answer: clientAnswer,
+        iceCandidates: [serverIceCandidate, ...clientIceCandidates]
+      },
+      stats: {
+        framesEncoded: 0,
+        bitrateKbps: 0,
+        latencyMs: 0,
+        reconnectAttempts: 0
+      },
+      health: {
+        healthy: true,
+        message: "WebRTC negotiation completed"
+      },
+      state: "streaming" as const
     };
   }
 
@@ -236,7 +294,9 @@ class FakeRemoteService implements RemoteService {
       },
       signaling: {
         kind: "webRtcOffer" as const,
-        offer: "apprelay-webrtc-offer:stream-1:window-session-1"
+        negotiationState: "awaitingAnswer" as const,
+        offer: streamOffer,
+        iceCandidates: [serverIceCandidate]
       },
       stats: {
         framesEncoded: 0,
@@ -343,9 +403,38 @@ describe("RemoteService contract", () => {
         scope: "selectedWindow"
       },
       signaling: {
-        kind: "webRtcOffer"
+        kind: "webRtcOffer",
+        negotiationState: "awaitingAnswer",
+        offer: {
+          sdpType: "offer"
+        },
+        iceCandidates: [
+          {
+            sdpMid: "video"
+          }
+        ]
       },
       state: "starting"
+    });
+    await expect(
+      service.negotiateVideoStream(
+        "stream-1",
+        { sdpType: "answer", sdp: "client-answer" },
+        [{ candidate: "candidate:client stream-1 typ host", sdpMid: "video", sdpMLineIndex: 0 }]
+      )
+    ).resolves.toMatchObject({
+      id: "stream-1",
+      signaling: {
+        negotiationState: "negotiated",
+        answer: {
+          sdpType: "answer",
+          sdp: "client-answer"
+        }
+      },
+      health: {
+        message: "WebRTC negotiation completed"
+      },
+      state: "streaming"
     });
     await expect(service.videoStreamStatus("stream-1")).resolves.toMatchObject({
       id: "stream-1",
