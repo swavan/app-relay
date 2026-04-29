@@ -14,6 +14,7 @@ Use this checklist before promoting Phase 6 beyond the desktop audio control-pla
 - Confirm the feature-gated PipeWire capture runtime contract can start and stop a fake capture session in tests and clears capture telemetry on stream stop or session close.
 - Confirm active streams reconcile PipeWire capture runtime readiness changes: upgrading from the unavailable adapter boundary starts capture telemetry in tests, and downgrading clears it.
 - Confirm the test-only server microphone injection runtime starts media telemetry only when the stream opts into microphone input and clears telemetry when readiness is downgraded.
+- Confirm the test-only client playback runtime starts media telemetry for active streams and clears telemetry when readiness is downgraded.
 - Confirm the optional `pipewire-capture` feature is treated as a Linux capture adapter boundary only: it must not claim live PipeWire packets until the real runtime is wired, and playback/client microphone/server microphone legs must remain planned unless separately implemented.
 - Confirm enabling the server `pipewire-capture` feature only changes Linux capture status messaging to the unavailable PipeWire adapter boundary; default server builds and macOS/Windows feature builds must keep the planned native status without PipeWire boundary messaging.
 - Confirm active audio stream status reports whether server-side microphone injection was requested, whether it is active, the native readiness state, and the reason when inactive.

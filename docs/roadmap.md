@@ -304,6 +304,9 @@ Completed:
 - server-side microphone injection has a test-only runtime contract that starts
   media telemetry only for streams that opt into microphone input and clears
   injection telemetry when native readiness is downgraded
+- client playback has a test-only runtime contract that starts playback media
+  telemetry for active streams and clears playback telemetry when native
+  readiness is downgraded
 - server composition has an optional `pipewire-capture` feature that forwards
   to the core boundary and reports the Linux PipeWire capture adapter boundary
   as unavailable without changing default server behavior or affecting macOS
