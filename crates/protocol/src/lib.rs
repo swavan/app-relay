@@ -11,6 +11,7 @@ pub use video_stream::{
     StartVideoStreamRequest, StopVideoStreamRequest, VideoCaptureScope, VideoCaptureSource,
     VideoCodec, VideoEncodingContract, VideoEncodingOutput, VideoEncodingPipeline,
     VideoEncodingPipelineState, VideoEncodingTarget, VideoHardwareAcceleration, VideoPixelFormat,
+    VideoResolutionAdaptation, VideoResolutionAdaptationReason, VideoResolutionLimits,
     VideoStreamHealth, VideoStreamNegotiationState, VideoStreamSession, VideoStreamSignaling,
     VideoStreamSignalingKind, VideoStreamState, VideoStreamStats, WebRtcIceCandidate,
     WebRtcSdpType, WebRtcSessionDescription,

@@ -163,7 +163,10 @@ Scope:
 - completed video encoding pipeline slice: streams now expose a
   transport-neutral encoding contract, deterministic in-memory H.264/RGBA
   pipeline state, encoded frame metadata, and resize-aware encoding targets
-- adaptive resolution based on client viewport
+- completed adaptive resolution slice: encoding contracts now expose
+  transport-neutral adaptation metadata, deterministic in-memory 1080p target
+  limits, the requested viewport, current target, and the reason applied across
+  negotiated and non-negotiated resize flows
 - client video renderer
 - session health and stream statistics
 - graceful recovery when the app closes or capture fails

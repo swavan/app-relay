@@ -3,8 +3,8 @@ use apprelay_protocol::{
     AppRelayError, ControlAuth, ControlError, CreateSessionRequest, Feature,
     NegotiateVideoStreamRequest, Platform, ReconnectVideoStreamRequest, ResizeSessionRequest,
     ServerVersion, SessionState, StartVideoStreamRequest, StopVideoStreamRequest,
-    VideoEncodingPipelineState, VideoStreamNegotiationState, VideoStreamState, ViewportSize,
-    WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription,
+    VideoEncodingPipelineState, VideoResolutionAdaptationReason, VideoStreamNegotiationState,
+    VideoStreamState, ViewportSize, WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription,
 };
 use apprelay_server::{ServerControlPlane, ServerServices};
 
@@ -177,6 +177,14 @@ fn control_plane_manages_video_stream_lifecycle() {
         ViewportSize::new(1280, 720)
     );
     assert_eq!(
+        stream.encoding.contract.adaptation.current_target,
+        ViewportSize::new(1280, 720)
+    );
+    assert_eq!(
+        stream.encoding.contract.adaptation.reason,
+        VideoResolutionAdaptationReason::MatchesViewport
+    );
+    assert_eq!(
         control_plane.video_stream_status(&auth, &stream.id),
         Ok(stream.clone())
     );
@@ -300,7 +308,7 @@ fn control_plane_reconnects_and_resizes_video_stream() {
             &auth,
             ResizeSessionRequest {
                 session_id: session.id,
-                viewport: ViewportSize::new(1440, 900),
+                viewport: ViewportSize::new(2560, 1440),
             },
         )
         .expect("resize session");
@@ -308,12 +316,20 @@ fn control_plane_reconnects_and_resizes_video_stream() {
     let status = control_plane
         .video_stream_status(&auth, &stream.id)
         .expect("stream status");
-    assert_eq!(status.viewport, ViewportSize::new(1440, 900));
+    assert_eq!(status.viewport, ViewportSize::new(2560, 1440));
     assert_eq!(
         status.encoding.contract.target.resolution,
-        ViewportSize::new(1440, 900)
+        ViewportSize::new(1920, 1080)
     );
-    assert_eq!(status.encoding.contract.target.target_bitrate_kbps, 3888);
+    assert_eq!(status.encoding.contract.target.target_bitrate_kbps, 6220);
+    assert_eq!(
+        status.encoding.contract.adaptation.requested_viewport,
+        ViewportSize::new(2560, 1440)
+    );
+    assert_eq!(
+        status.encoding.contract.adaptation.reason,
+        VideoResolutionAdaptationReason::CappedToLimits
+    );
     assert_eq!(
         status.health.message.as_deref(),
         Some("stream viewport updated")
@@ -364,7 +380,7 @@ fn control_plane_keeps_negotiated_video_encoding_coherent_after_resize() {
             &auth,
             ResizeSessionRequest {
                 session_id: session.id,
-                viewport: ViewportSize::new(1440, 900),
+                viewport: ViewportSize::new(2560, 1440),
             },
         )
         .expect("resize session");
@@ -374,9 +390,14 @@ fn control_plane_keeps_negotiated_video_encoding_coherent_after_resize() {
         .expect("stream status");
     assert_eq!(status.state, VideoStreamState::Streaming);
     assert_eq!(status.encoding.state, VideoEncodingPipelineState::Encoding);
+    assert_eq!(status.viewport, ViewportSize::new(2560, 1440));
     assert_eq!(
         status.encoding.contract.target.resolution,
-        ViewportSize::new(1440, 900)
+        ViewportSize::new(1920, 1080)
     );
-    assert_eq!(status.stats.bitrate_kbps, 3888);
+    assert_eq!(
+        status.encoding.contract.adaptation.reason,
+        VideoResolutionAdaptationReason::CappedToLimits
+    );
+    assert_eq!(status.stats.bitrate_kbps, 6220);
 }

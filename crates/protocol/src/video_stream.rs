@@ -57,6 +57,7 @@ pub struct VideoEncodingContract {
     pub pixel_format: VideoPixelFormat,
     pub hardware_acceleration: VideoHardwareAcceleration,
     pub target: VideoEncodingTarget,
+    pub adaptation: VideoResolutionAdaptation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -66,6 +67,30 @@ pub struct VideoEncodingTarget {
     pub max_fps: u32,
     pub target_bitrate_kbps: u32,
     pub keyframe_interval_frames: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoResolutionAdaptation {
+    pub requested_viewport: ViewportSize,
+    pub current_target: ViewportSize,
+    pub limits: VideoResolutionLimits,
+    pub reason: VideoResolutionAdaptationReason,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoResolutionLimits {
+    pub max_width: u32,
+    pub max_height: u32,
+    pub max_pixels: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoResolutionAdaptationReason {
+    MatchesViewport,
+    CappedToLimits,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -225,6 +250,16 @@ mod tests {
                         max_fps: 30,
                         target_bitrate_kbps: 2_764,
                         keyframe_interval_frames: 60,
+                    },
+                    adaptation: VideoResolutionAdaptation {
+                        requested_viewport: ViewportSize::new(1280, 720),
+                        current_target: ViewportSize::new(1280, 720),
+                        limits: VideoResolutionLimits {
+                            max_width: 1920,
+                            max_height: 1080,
+                            max_pixels: 2_073_600,
+                        },
+                        reason: VideoResolutionAdaptationReason::MatchesViewport,
                     },
                 },
                 state: VideoEncodingPipelineState::Configured,

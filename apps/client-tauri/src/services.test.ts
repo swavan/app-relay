@@ -26,6 +26,22 @@ const configuredEncoding = {
       maxFps: 30,
       targetBitrateKbps: 2764,
       keyframeIntervalFrames: 60
+    },
+    adaptation: {
+      requestedViewport: {
+        width: 1280,
+        height: 720
+      },
+      currentTarget: {
+        width: 1280,
+        height: 720
+      },
+      limits: {
+        maxWidth: 1920,
+        maxHeight: 1080,
+        maxPixels: 2073600
+      },
+      reason: "matchesViewport" as const
     }
   },
   state: "configured" as const,
@@ -470,6 +486,13 @@ describe("RemoteService contract", () => {
               width: 1280,
               height: 720
             }
+          },
+          adaptation: {
+            currentTarget: {
+              width: 1280,
+              height: 720
+            },
+            reason: "matchesViewport"
           }
         },
         state: "configured",
