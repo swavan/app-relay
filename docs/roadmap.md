@@ -265,10 +265,15 @@ Completed:
 - control-plane and client service tests for audio stream state
 - client controls for independent audio start, stop, mute, microphone opt-in, and device IDs
 - manual latency, mute, device, and permission release checklist
+- transport-neutral native audio backend contract with planned Linux PipeWire,
+  macOS CoreAudio, and Windows WASAPI capture/playback/microphone fields while
+  active streams remain control-plane-only
+- desktop audio capability reasons identify the planned native backend per
+  platform
 
 Remaining:
 
-- native platform capture and playback backends
+- real native platform capture, playback, and client microphone implementations
 - server-side microphone injection backend
 
 ## Phase 7: Cross-Platform Hardening

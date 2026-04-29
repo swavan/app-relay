@@ -284,6 +284,16 @@ class FakeRemoteService implements RemoteService {
         applicationId: "terminal",
         title: "Terminal"
       },
+      backend: {
+        controlPlane: "controlPlane" as const,
+        plannedCapture: "pipeWire" as const,
+        plannedPlayback: "pipeWire" as const,
+        plannedMicrophone: "pipeWire" as const,
+        readiness: "controlPlaneOnly" as const,
+        notes: [
+          "current stream enforces control-plane state only; native audio backend fields are planned"
+        ]
+      },
       devices: {
         outputDeviceId: options.outputDeviceId,
         inputDeviceId: options.inputDeviceId
@@ -355,6 +365,16 @@ class FakeRemoteService implements RemoteService {
         selectedWindowId: "window-session-1",
         applicationId: "terminal",
         title: "Terminal"
+      },
+      backend: {
+        controlPlane: "controlPlane" as const,
+        plannedCapture: "pipeWire" as const,
+        plannedPlayback: "pipeWire" as const,
+        plannedMicrophone: "pipeWire" as const,
+        readiness: "controlPlaneOnly" as const,
+        notes: [
+          "current stream enforces control-plane state only; native audio backend fields are planned"
+        ]
       },
       devices: {},
       microphone: "disabled" as const,
@@ -753,6 +773,13 @@ describe("RemoteService contract", () => {
         microphoneCapture: {
           supported: true
         }
+      },
+      backend: {
+        controlPlane: "controlPlane",
+        plannedCapture: "pipeWire",
+        plannedPlayback: "pipeWire",
+        plannedMicrophone: "pipeWire",
+        readiness: "controlPlaneOnly"
       },
       state: "streaming"
     });

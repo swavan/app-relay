@@ -1,5 +1,6 @@
 use apprelay_protocol::{
-    AppRelayError, ApplicationSession, AudioCapability, AudioCaptureScope, AudioDeviceSelection,
+    AppRelayError, ApplicationSession, AudioBackendContract, AudioBackendKind,
+    AudioBackendReadiness, AudioCapability, AudioCaptureScope, AudioDeviceSelection,
     AudioMuteState, AudioSource, AudioStreamCapabilities, AudioStreamHealth, AudioStreamSession,
     AudioStreamState, AudioStreamStats, Feature, MicrophoneMode, Platform, SessionState,
     StartAudioStreamRequest, StopAudioStreamRequest, UpdateAudioStreamRequest,
@@ -39,7 +40,7 @@ impl AudioBackendService {
         }
     }
 
-    fn capabilities(&self) -> AudioStreamCapabilities {
+    pub fn capabilities(&self) -> AudioStreamCapabilities {
         match self {
             Self::DesktopControl { .. } => AudioStreamCapabilities {
                 system_audio: AudioCapability {
@@ -93,6 +94,43 @@ impl AudioBackendService {
                     },
                 }
             }
+        }
+    }
+
+    pub fn backend_contract(&self) -> AudioBackendContract {
+        match self {
+            Self::DesktopControl { platform } => {
+                let native_backend = match platform {
+                    Platform::Linux => AudioBackendKind::PipeWire,
+                    Platform::Macos => AudioBackendKind::CoreAudio,
+                    Platform::Windows => AudioBackendKind::Wasapi,
+                    Platform::Android | Platform::Ios | Platform::Unknown => {
+                        AudioBackendKind::Unsupported
+                    }
+                };
+
+                AudioBackendContract {
+                    control_plane: AudioBackendKind::ControlPlane,
+                    planned_capture: native_backend.clone(),
+                    planned_playback: native_backend.clone(),
+                    planned_microphone: native_backend,
+                    readiness: AudioBackendReadiness::ControlPlaneOnly,
+                    notes: vec![
+                        "current stream enforces control-plane state only; native audio backend fields are planned"
+                            .to_string(),
+                    ],
+                }
+            }
+            Self::Unsupported { platform } => AudioBackendContract {
+                control_plane: AudioBackendKind::Unsupported,
+                planned_capture: AudioBackendKind::Unsupported,
+                planned_playback: AudioBackendKind::Unsupported,
+                planned_microphone: AudioBackendKind::Unsupported,
+                readiness: AudioBackendReadiness::Unsupported,
+                notes: vec![format!(
+                    "audio native backend contract is unsupported on {platform:?}"
+                )],
+            },
         }
     }
 
@@ -177,6 +215,7 @@ impl AudioStreamService for InMemoryAudioStreamService {
             session_id: session.id.clone(),
             selected_window_id: session.selected_window.id.clone(),
             source: Self::source_from_session(session),
+            backend: Some(self.backend.backend_contract()),
             devices: AudioDeviceSelection {
                 output_device_id: request.output_device_id,
                 input_device_id: request.input_device_id,
@@ -318,7 +357,43 @@ mod tests {
         assert!(!stream.mute.system_audio_muted);
         assert!(stream.mute.microphone_muted);
         assert!(stream.capabilities.system_audio.supported);
+        let backend = stream.backend.as_ref().expect("backend contract");
+        assert_eq!(backend.control_plane, AudioBackendKind::ControlPlane);
+        assert_eq!(backend.planned_capture, AudioBackendKind::PipeWire);
+        assert_eq!(backend.planned_playback, AudioBackendKind::PipeWire);
+        assert_eq!(backend.planned_microphone, AudioBackendKind::PipeWire);
+        assert_eq!(backend.readiness, AudioBackendReadiness::ControlPlaneOnly);
         assert_eq!(stream.state, AudioStreamState::Streaming);
+    }
+
+    #[test]
+    fn audio_backend_contract_maps_native_backends_by_platform() {
+        let cases = [
+            (Platform::Linux, AudioBackendKind::PipeWire),
+            (Platform::Macos, AudioBackendKind::CoreAudio),
+            (Platform::Windows, AudioBackendKind::Wasapi),
+        ];
+
+        for (platform, expected_backend) in cases {
+            let contract = AudioBackendService::for_platform(platform).backend_contract();
+
+            assert_eq!(contract.control_plane, AudioBackendKind::ControlPlane);
+            assert_eq!(contract.planned_capture, expected_backend);
+            assert_eq!(contract.planned_playback, expected_backend);
+            assert_eq!(contract.planned_microphone, expected_backend);
+            assert_eq!(contract.readiness, AudioBackendReadiness::ControlPlaneOnly);
+        }
+    }
+
+    #[test]
+    fn audio_backend_contract_marks_mobile_platforms_unsupported() {
+        let contract = AudioBackendService::for_platform(Platform::Ios).backend_contract();
+
+        assert_eq!(contract.control_plane, AudioBackendKind::Unsupported);
+        assert_eq!(contract.planned_capture, AudioBackendKind::Unsupported);
+        assert_eq!(contract.planned_playback, AudioBackendKind::Unsupported);
+        assert_eq!(contract.planned_microphone, AudioBackendKind::Unsupported);
+        assert_eq!(contract.readiness, AudioBackendReadiness::Unsupported);
     }
 
     #[test]

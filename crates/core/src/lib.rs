@@ -1302,8 +1302,14 @@ impl CapabilityService for DefaultCapabilityService {
     fn platform_capabilities(&self) -> Vec<PlatformCapability> {
         let unsupported_reason = "feature planned but not implemented in Phase 1";
         let audio_reason = match self.platform {
-            Platform::Linux | Platform::Macos | Platform::Windows => {
-                "desktop audio control-plane backend is available for negotiation"
+            Platform::Linux => {
+                "Linux desktop audio control-plane is available; native PipeWire capture/playback backend is planned"
+            }
+            Platform::Macos => {
+                "macOS desktop audio control-plane is available; native CoreAudio capture/playback backend is planned"
+            }
+            Platform::Windows => {
+                "Windows desktop audio control-plane is available; native WASAPI capture/playback backend is planned"
             }
             Platform::Android | Platform::Ios => {
                 "mobile platforms are client targets and do not expose desktop audio control-plane capture"
@@ -1352,7 +1358,11 @@ impl CapabilityService for DefaultCapabilityService {
                 self.platform,
                 Platform::Linux | Platform::Macos | Platform::Windows
             ) {
-                PlatformCapability::supported(self.platform, Feature::SystemAudioStream)
+                PlatformCapability::supported_with_reason(
+                    self.platform,
+                    Feature::SystemAudioStream,
+                    audio_reason,
+                )
             } else {
                 PlatformCapability::unsupported(
                     self.platform,
@@ -1364,7 +1374,11 @@ impl CapabilityService for DefaultCapabilityService {
                 self.platform,
                 Platform::Linux | Platform::Macos | Platform::Windows
             ) {
-                PlatformCapability::supported(self.platform, Feature::ClientMicrophoneInput)
+                PlatformCapability::supported_with_reason(
+                    self.platform,
+                    Feature::ClientMicrophoneInput,
+                    audio_reason,
+                )
             } else {
                 PlatformCapability::unsupported(
                     self.platform,
@@ -1673,6 +1687,36 @@ mod tests {
         assert!(capabilities
             .iter()
             .any(|capability| capability.feature == Feature::AppDiscovery && capability.supported));
+    }
+
+    #[test]
+    fn desktop_audio_capabilities_report_planned_native_backend() {
+        let cases = [
+            (Platform::Linux, "PipeWire"),
+            (Platform::Macos, "CoreAudio"),
+            (Platform::Windows, "WASAPI"),
+        ];
+
+        for (platform, expected_backend) in cases {
+            let service = DefaultCapabilityService::new(platform);
+            let capabilities = service.platform_capabilities();
+            let system_audio = capabilities
+                .iter()
+                .find(|capability| capability.feature == Feature::SystemAudioStream)
+                .expect("system audio capability");
+            let microphone = capabilities
+                .iter()
+                .find(|capability| capability.feature == Feature::ClientMicrophoneInput)
+                .expect("microphone capability");
+
+            assert!(system_audio.supported);
+            assert!(microphone.supported);
+            assert!(system_audio
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains(expected_backend)));
+            assert_eq!(system_audio.reason, microphone.reason);
+        }
     }
 
     #[test]
