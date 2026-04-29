@@ -11,7 +11,7 @@ export interface ApplicationPermissionService {
   remove(applicationId: string): Promise<void>;
 }
 
-export class TauriApplicationPermissionService implements ApplicationPermissionService {
+export class UIApplicationPermissionService implements ApplicationPermissionService {
   async list(): Promise<ApplicationPermission[]> {
     return invoke<ApplicationPermission[]>("list_application_permissions");
   }

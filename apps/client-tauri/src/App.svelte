@@ -5,7 +5,7 @@
     type ConnectionProfile
   } from "./connectionProfiles";
   import {
-    TauriApplicationPermissionService,
+    UIApplicationPermissionService,
     type ApplicationPermission
   } from "./applicationPermissions";
   import { buildAppViewModel } from "./appViewModel";
@@ -18,7 +18,7 @@
   } from "./services";
 
   const profilesService = new TauriConnectionProfileService();
-  const permissionService = new TauriApplicationPermissionService();
+  const permissionService = new UIApplicationPermissionService();
   let remote = new TauriRemoteService();
 
   let health: HealthStatus | null = null;
