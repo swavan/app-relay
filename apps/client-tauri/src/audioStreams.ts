@@ -17,6 +17,14 @@ export type AudioBackendStatus = {
   backend: AudioBackendKind;
   available: boolean;
   readiness: AudioBackendReadiness;
+  media?: {
+    available: boolean;
+    packetsSent: number;
+    packetsReceived: number;
+    bytesSent: number;
+    bytesReceived: number;
+    latencyMs: number;
+  };
   failure?: {
     kind: AudioBackendFailureKind;
     message: string;

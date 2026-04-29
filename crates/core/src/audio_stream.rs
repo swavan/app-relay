@@ -1,10 +1,11 @@
 use apprelay_protocol::{
     AppRelayError, ApplicationSession, AudioBackendContract, AudioBackendFailure,
-    AudioBackendFailureKind, AudioBackendKind, AudioBackendLeg, AudioBackendReadiness,
-    AudioBackendStatus, AudioCapability, AudioCaptureScope, AudioDeviceSelection, AudioMuteState,
-    AudioSource, AudioStreamCapabilities, AudioStreamHealth, AudioStreamSession, AudioStreamState,
-    AudioStreamStats, Feature, MicrophoneInjectionState, MicrophoneMode, Platform, SessionState,
-    StartAudioStreamRequest, StopAudioStreamRequest, UpdateAudioStreamRequest,
+    AudioBackendFailureKind, AudioBackendKind, AudioBackendLeg, AudioBackendMediaStats,
+    AudioBackendReadiness, AudioBackendStatus, AudioCapability, AudioCaptureScope,
+    AudioDeviceSelection, AudioMuteState, AudioSource, AudioStreamCapabilities, AudioStreamHealth,
+    AudioStreamSession, AudioStreamState, AudioStreamStats, Feature, MicrophoneInjectionState,
+    MicrophoneMode, Platform, SessionState, StartAudioStreamRequest, StopAudioStreamRequest,
+    UpdateAudioStreamRequest,
 };
 
 pub trait AudioStreamService {
@@ -275,6 +276,7 @@ impl AudioBackendService {
             } else {
                 AudioBackendReadiness::PlannedNative
             },
+            media: AudioBackendMediaStats::default(),
             failure: if native_readiness.is_available(&leg) {
                 None
             } else {
@@ -301,6 +303,7 @@ impl AudioBackendService {
             backend: AudioBackendKind::Unsupported,
             available: false,
             readiness: AudioBackendReadiness::Unsupported,
+            media: AudioBackendMediaStats::default(),
             failure: Some(AudioBackendFailure {
                 kind: AudioBackendFailureKind::UnsupportedPlatform,
                 message: format!("audio native backend is unsupported on {platform:?}"),
@@ -644,6 +647,17 @@ mod tests {
         assert_eq!(backend.statuses.len(), 4);
         assert!(backend.statuses.iter().all(|status| !status.available));
         assert!(backend.statuses.iter().all(|status| {
+            status.media
+                == AudioBackendMediaStats {
+                    available: false,
+                    packets_sent: 0,
+                    packets_received: 0,
+                    bytes_sent: 0,
+                    bytes_received: 0,
+                    latency_ms: 0,
+                }
+        }));
+        assert!(backend.statuses.iter().all(|status| {
             status.failure.as_ref().is_some_and(|failure| {
                 failure.kind == AudioBackendFailureKind::NativeBackendNotImplemented
             })
@@ -721,6 +735,12 @@ mod tests {
                 status.backend == expected_backend
                     && !status.available
                     && status.readiness == AudioBackendReadiness::PlannedNative
+                    && !status.media.available
+                    && status.media.packets_sent == 0
+                    && status.media.packets_received == 0
+                    && status.media.bytes_sent == 0
+                    && status.media.bytes_received == 0
+                    && status.media.latency_ms == 0
                     && status.failure.as_ref().is_some_and(|failure| {
                         failure.kind == AudioBackendFailureKind::NativeBackendNotImplemented
                     })
@@ -753,6 +773,12 @@ mod tests {
                 .expect("available leg status");
             assert!(status.available);
             assert_eq!(status.readiness, AudioBackendReadiness::NativeAvailable);
+            assert!(!status.media.available);
+            assert_eq!(status.media.packets_sent, 0);
+            assert_eq!(status.media.packets_received, 0);
+            assert_eq!(status.media.bytes_sent, 0);
+            assert_eq!(status.media.bytes_received, 0);
+            assert_eq!(status.media.latency_ms, 0);
             assert_eq!(status.failure, None);
         }
 
@@ -811,6 +837,12 @@ mod tests {
         assert!(backend.statuses.iter().all(|status| {
             status.available
                 && status.readiness == AudioBackendReadiness::NativeAvailable
+                && !status.media.available
+                && status.media.packets_sent == 0
+                && status.media.packets_received == 0
+                && status.media.bytes_sent == 0
+                && status.media.bytes_received == 0
+                && status.media.latency_ms == 0
                 && status.failure.is_none()
         }));
         assert!(refreshed.capabilities.microphone_injection.supported);
@@ -840,6 +872,7 @@ mod tests {
             status.backend == AudioBackendKind::Unsupported
                 && !status.available
                 && status.readiness == AudioBackendReadiness::Unsupported
+                && status.media == AudioBackendMediaStats::default()
                 && status.failure.as_ref().is_some_and(|failure| {
                     failure.kind == AudioBackendFailureKind::UnsupportedPlatform
                 })

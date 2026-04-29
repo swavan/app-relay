@@ -10,10 +10,11 @@ mod video_stream;
 
 pub use audio_stream::{
     AudioBackendContract, AudioBackendFailure, AudioBackendFailureKind, AudioBackendKind,
-    AudioBackendLeg, AudioBackendReadiness, AudioBackendStatus, AudioCapability, AudioCaptureScope,
-    AudioDeviceSelection, AudioMuteState, AudioSource, AudioStreamCapabilities, AudioStreamHealth,
-    AudioStreamSession, AudioStreamState, AudioStreamStats, MicrophoneInjectionState,
-    MicrophoneMode, StartAudioStreamRequest, StopAudioStreamRequest, UpdateAudioStreamRequest,
+    AudioBackendLeg, AudioBackendMediaStats, AudioBackendReadiness, AudioBackendStatus,
+    AudioCapability, AudioCaptureScope, AudioDeviceSelection, AudioMuteState, AudioSource,
+    AudioStreamCapabilities, AudioStreamHealth, AudioStreamSession, AudioStreamState,
+    AudioStreamStats, MicrophoneInjectionState, MicrophoneMode, StartAudioStreamRequest,
+    StopAudioStreamRequest, UpdateAudioStreamRequest,
 };
 pub use input::{
     ButtonAction, ClientPoint, ForwardInputRequest, InputBackendKind, InputDelivery,
