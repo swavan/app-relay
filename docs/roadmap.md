@@ -276,6 +276,10 @@ Completed:
 - active audio stream status exposes transport-neutral server-side microphone
   injection request state, readiness, active state, and reason without claiming
   native media injection
+- audio backend service has a transport-neutral native readiness configuration
+  hook so tests can model capture, playback, client microphone capture, and
+  server-side microphone injection legs becoming available without adding OS
+  media dependencies or changing production defaults
 
 Remaining:
 

@@ -4,7 +4,10 @@ mod audio_stream;
 mod input;
 mod video_stream;
 
-pub use audio_stream::{AudioBackendService, AudioStreamService, InMemoryAudioStreamService};
+pub use audio_stream::{
+    AudioBackendNativeReadiness, AudioBackendService, AudioStreamService,
+    InMemoryAudioStreamService,
+};
 pub use input::{
     map_point, InMemoryInputForwardingService, InputBackend, InputBackendService,
     InputForwardingService,

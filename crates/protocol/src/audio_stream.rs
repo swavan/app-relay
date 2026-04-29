@@ -150,6 +150,7 @@ pub enum AudioBackendKind {
 pub enum AudioBackendReadiness {
     ControlPlaneOnly,
     PlannedNative,
+    NativeAvailable,
     Unsupported,
 }
 
@@ -294,6 +295,10 @@ mod tests {
                 "\"controlPlaneOnly\"",
             ),
             (AudioBackendReadiness::PlannedNative, "\"plannedNative\""),
+            (
+                AudioBackendReadiness::NativeAvailable,
+                "\"nativeAvailable\"",
+            ),
             (AudioBackendReadiness::Unsupported, "\"unsupported\""),
         ];
 
