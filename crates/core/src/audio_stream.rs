@@ -43,6 +43,8 @@ pub struct AudioBackendNativeReadiness {
     #[cfg(test)]
     playback_runtime: Option<ClientPlaybackRuntime>,
     #[cfg(test)]
+    microphone_capture_runtime: Option<ClientMicrophoneCaptureRuntime>,
+    #[cfg(test)]
     microphone_injection_runtime: Option<ServerMicrophoneInjectionRuntime>,
     #[cfg(any(test, feature = "pipewire-capture"))]
     pipewire_capture_adapter: Option<PipeWireCaptureAdapterRuntime>,
@@ -87,6 +89,12 @@ pub(crate) struct PipeWireCaptureAdapterRuntime {
 #[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ClientPlaybackRuntime {
+    media: AudioBackendMediaStats,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ClientMicrophoneCaptureRuntime {
     media: AudioBackendMediaStats,
 }
 
@@ -172,6 +180,15 @@ impl AudioBackendNativeReadiness {
         Self {
             available_legs: vec![AudioBackendLeg::Playback],
             playback_runtime: Some(ClientPlaybackRuntime { media }),
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
+    fn with_client_microphone_capture_runtime_for_test(media: AudioBackendMediaStats) -> Self {
+        Self {
+            available_legs: vec![AudioBackendLeg::ClientMicrophoneCapture],
+            microphone_capture_runtime: Some(ClientMicrophoneCaptureRuntime { media }),
             ..Self::default()
         }
     }
@@ -972,6 +989,41 @@ impl AudioBackendService {
 
     #[cfg(test)]
     fn stop_client_playback(&self, _stream_id: &str) {}
+
+    #[cfg(test)]
+    fn start_client_microphone_capture(
+        &self,
+        stream_id: &str,
+        microphone: &MicrophoneMode,
+    ) -> Option<NativeAudioMediaSession> {
+        if microphone != &MicrophoneMode::Enabled {
+            return None;
+        }
+
+        let Self::DesktopControl {
+            native_readiness, ..
+        } = self
+        else {
+            return None;
+        };
+
+        native_readiness
+            .microphone_capture_runtime
+            .as_ref()
+            .map(|runtime| NativeAudioMediaSession {
+                stream_id: stream_id.to_string(),
+                legs: vec![NativeAudioMediaSessionLeg {
+                    leg: AudioBackendLeg::ClientMicrophoneCapture,
+                    media: AudioBackendMediaStats {
+                        available: true,
+                        ..runtime.media.clone()
+                    },
+                }],
+            })
+    }
+
+    #[cfg(test)]
+    fn stop_client_microphone_capture(&self, _stream_id: &str) {}
 }
 
 #[derive(Clone, Debug)]
@@ -997,6 +1049,7 @@ impl InMemoryAudioStreamService {
         self.backend.configure_native_readiness(native_readiness);
         self.reconcile_pipewire_capture_sessions();
         self.reconcile_client_playback_sessions();
+        self.reconcile_client_microphone_capture_sessions();
         self.reconcile_server_microphone_injection_sessions();
         self.refresh_active_stream_backend_state();
     }
@@ -1090,6 +1143,29 @@ impl InMemoryAudioStreamService {
     }
 
     #[cfg(test)]
+    fn reconcile_client_microphone_capture_sessions(&mut self) {
+        let active_streams = self
+            .streams
+            .iter()
+            .filter(|stream| stream.state != AudioStreamState::Stopped)
+            .map(|stream| (stream.id.clone(), stream.microphone.clone()))
+            .collect::<Vec<_>>();
+
+        for (stream_id, microphone) in active_streams {
+            if let Some(native_session) = self
+                .backend
+                .start_client_microphone_capture(&stream_id, &microphone)
+            {
+                self.native_runtime.start_session(native_session);
+            } else {
+                self.backend.stop_client_microphone_capture(&stream_id);
+                self.native_runtime
+                    .clear_stream_leg(&stream_id, &AudioBackendLeg::ClientMicrophoneCapture);
+            }
+        }
+    }
+
+    #[cfg(test)]
     fn refresh_active_stream_backend_state(&mut self) {
         let backend = self.backend.clone();
         let capabilities = self.backend.capabilities();
@@ -1160,6 +1236,13 @@ impl AudioStreamService for InMemoryAudioStreamService {
         #[cfg(test)]
         if let Some(native_session) = self
             .backend
+            .start_client_microphone_capture(&stream_id, &request.microphone)
+        {
+            self.native_runtime.start_session(native_session);
+        }
+        #[cfg(test)]
+        if let Some(native_session) = self
+            .backend
             .start_server_microphone_injection(&stream_id, &request.microphone)
         {
             self.native_runtime.start_session(native_session);
@@ -1219,6 +1302,8 @@ impl AudioStreamService for InMemoryAudioStreamService {
         self.backend.stop_pipewire_capture(&stream.id);
         #[cfg(test)]
         self.backend.stop_client_playback(&stream.id);
+        #[cfg(test)]
+        self.backend.stop_client_microphone_capture(&stream.id);
         #[cfg(test)]
         self.backend.stop_server_microphone_injection(&stream.id);
         self.native_runtime.clear_stream(&stream.id);
@@ -1282,6 +1367,8 @@ impl AudioStreamService for InMemoryAudioStreamService {
             self.backend.stop_pipewire_capture(&stream.id);
             #[cfg(test)]
             self.backend.stop_client_playback(&stream.id);
+            #[cfg(test)]
+            self.backend.stop_client_microphone_capture(&stream.id);
             #[cfg(test)]
             self.backend.stop_server_microphone_injection(&stream.id);
             self.native_runtime.clear_stream(&stream.id);
@@ -2197,6 +2284,182 @@ mod tests {
     }
 
     #[test]
+    fn client_microphone_capture_runtime_starts_for_opt_in_streams() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::new(
+            AudioBackendService::for_platform_with_native_readiness(
+                Platform::Linux,
+                AudioBackendNativeReadiness::with_client_microphone_capture_runtime_for_test(
+                    microphone_capture_media_for_test(),
+                ),
+            ),
+        );
+
+        let stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Enabled,
+                    system_audio_muted: false,
+                    microphone_muted: false,
+                    output_device_id: None,
+                    input_device_id: Some("mic".to_string()),
+                },
+                &session,
+            )
+            .expect("start audio stream");
+
+        let backend = stream.backend.as_ref().expect("backend contract");
+        assert_eq!(backend.readiness, AudioBackendReadiness::ControlPlaneOnly);
+        assert_client_microphone_capture_runtime_status(backend);
+    }
+
+    #[test]
+    fn client_microphone_capture_runtime_respects_session_opt_in() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::new(
+            AudioBackendService::for_platform_with_native_readiness(
+                Platform::Linux,
+                AudioBackendNativeReadiness::with_client_microphone_capture_runtime_for_test(
+                    microphone_capture_media_for_test(),
+                ),
+            ),
+        );
+
+        let stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Disabled,
+                    system_audio_muted: false,
+                    microphone_muted: true,
+                    output_device_id: None,
+                    input_device_id: Some("mic".to_string()),
+                },
+                &session,
+            )
+            .expect("start audio stream");
+
+        let capture = stream
+            .backend
+            .as_ref()
+            .expect("backend contract")
+            .statuses
+            .iter()
+            .find(|status| status.leg == AudioBackendLeg::ClientMicrophoneCapture)
+            .expect("client microphone capture status");
+        assert!(capture.available);
+        assert_eq!(capture.readiness, AudioBackendReadiness::NativeAvailable);
+        assert_eq!(capture.failure, None);
+        assert_eq!(capture.media, AudioBackendMediaStats::default());
+        assert!(!stream.microphone_injection.requested);
+    }
+
+    #[test]
+    fn client_microphone_capture_runtime_refresh_starts_active_opt_in_streams() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::default();
+        let stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Enabled,
+                    system_audio_muted: false,
+                    microphone_muted: false,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+                &session,
+            )
+            .expect("start audio stream");
+
+        stream_service.configure_native_readiness(
+            AudioBackendNativeReadiness::with_client_microphone_capture_runtime_for_test(
+                microphone_capture_media_for_test(),
+            ),
+        );
+
+        let refreshed = stream_service
+            .stream_status(&stream.id)
+            .expect("refreshed stream status");
+        assert_client_microphone_capture_runtime_status(
+            refreshed.backend.as_ref().expect("backend contract"),
+        );
+        assert_eq!(
+            refreshed.health.message.as_deref(),
+            Some("audio backend readiness updated")
+        );
+    }
+
+    #[test]
+    fn client_microphone_capture_runtime_refresh_clears_downgraded_media() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::new(
+            AudioBackendService::for_platform_with_native_readiness(
+                Platform::Linux,
+                AudioBackendNativeReadiness::with_client_microphone_capture_runtime_for_test(
+                    microphone_capture_media_for_test(),
+                ),
+            ),
+        );
+        let stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Enabled,
+                    system_audio_muted: false,
+                    microphone_muted: false,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+                &session,
+            )
+            .expect("start audio stream");
+
+        stream_service.configure_native_readiness(AudioBackendNativeReadiness::unavailable());
+
+        let refreshed = stream_service
+            .stream_status(&stream.id)
+            .expect("refreshed stream status");
+        let capture = refreshed
+            .backend
+            .as_ref()
+            .expect("backend contract")
+            .statuses
+            .iter()
+            .find(|status| status.leg == AudioBackendLeg::ClientMicrophoneCapture)
+            .expect("client microphone capture status");
+        assert!(!capture.available);
+        assert_eq!(capture.readiness, AudioBackendReadiness::PlannedNative);
+        assert_eq!(capture.media, AudioBackendMediaStats::default());
+        assert!(capture.failure.is_some());
+    }
+
+    #[test]
     fn audio_stream_stop_clears_native_media_session_status() {
         let mut session_service = InMemoryApplicationSessionService::default();
         let session = session_service
@@ -2404,6 +2667,17 @@ mod tests {
         }
     }
 
+    fn microphone_capture_media_for_test() -> AudioBackendMediaStats {
+        AudioBackendMediaStats {
+            available: true,
+            packets_sent: 53,
+            packets_received: 59,
+            bytes_sent: 5300,
+            bytes_received: 5900,
+            latency_ms: 8,
+        }
+    }
+
     fn assert_client_playback_runtime_status(backend: &AudioBackendContract) {
         let playback = backend
             .statuses
@@ -2423,6 +2697,42 @@ mod tests {
         for planned_leg in [
             AudioBackendLeg::Capture,
             AudioBackendLeg::ClientMicrophoneCapture,
+            AudioBackendLeg::ServerMicrophoneInjection,
+        ] {
+            let status = backend
+                .statuses
+                .iter()
+                .find(|status| status.leg == planned_leg)
+                .expect("planned status");
+            assert!(!status.available);
+            assert_eq!(status.readiness, AudioBackendReadiness::PlannedNative);
+            assert_eq!(status.media, AudioBackendMediaStats::default());
+            assert_eq!(
+                status.failure.as_ref().map(|failure| &failure.kind),
+                Some(&AudioBackendFailureKind::NativeBackendNotImplemented)
+            );
+        }
+    }
+
+    fn assert_client_microphone_capture_runtime_status(backend: &AudioBackendContract) {
+        let capture = backend
+            .statuses
+            .iter()
+            .find(|status| status.leg == AudioBackendLeg::ClientMicrophoneCapture)
+            .expect("client microphone capture status");
+        assert!(capture.available);
+        assert_eq!(capture.readiness, AudioBackendReadiness::NativeAvailable);
+        assert_eq!(capture.failure, None);
+        assert!(capture.media.available);
+        assert!(capture.media.packets_sent > 0);
+        assert!(capture.media.packets_received > 0);
+        assert!(capture.media.bytes_sent > 0);
+        assert!(capture.media.bytes_received > 0);
+        assert!(capture.media.latency_ms > 0);
+
+        for planned_leg in [
+            AudioBackendLeg::Capture,
+            AudioBackendLeg::Playback,
             AudioBackendLeg::ServerMicrophoneInjection,
         ] {
             let status = backend
