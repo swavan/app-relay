@@ -65,6 +65,15 @@ class FakeRemoteService implements RemoteService {
         width: 1440,
         height: 900
       },
+      resizeIntent: {
+        sessionId,
+        selectedWindowId: "window-session-1",
+        viewport: {
+          width: 1440,
+          height: 900
+        },
+        status: "recorded" as const
+      },
       state: "ready" as const
     };
   }
@@ -127,7 +136,11 @@ describe("RemoteService contract", () => {
     });
     await expect(service.resizeSession("session-1", { width: 1440, height: 900 })).resolves.toMatchObject({
       id: "session-1",
-      viewport: { width: 1440, height: 900 }
+      viewport: { width: 1440, height: 900 },
+      resizeIntent: {
+        selectedWindowId: "window-session-1",
+        status: "recorded"
+      }
     });
     await expect(service.closeSession("session-1")).resolves.toMatchObject({
       id: "session-1",

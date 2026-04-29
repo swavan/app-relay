@@ -157,11 +157,27 @@ pub struct ResizeSessionRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WindowResizeIntent {
+    pub session_id: String,
+    pub selected_window_id: String,
+    pub viewport: ViewportSize,
+    pub status: ResizeIntentStatus,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ResizeIntentStatus {
+    Recorded,
+    Applied,
+    Unsupported,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ApplicationSession {
     pub id: String,
     pub application_id: String,
     pub selected_window: SelectedWindow,
     pub viewport: ViewportSize,
+    pub resize_intent: Option<WindowResizeIntent>,
     pub state: SessionState,
 }
 

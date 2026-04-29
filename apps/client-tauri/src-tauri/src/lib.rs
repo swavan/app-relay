@@ -6,7 +6,8 @@ use swavan_core::{
 };
 use swavan_protocol::{
     AppIcon, ApplicationLaunch, ApplicationSession, ControlAuth, CreateSessionRequest, Feature,
-    Platform, PlatformCapability, ResizeSessionRequest, SelectedWindow, SessionState, ViewportSize,
+    Platform, PlatformCapability, ResizeIntentStatus, ResizeSessionRequest, SelectedWindow,
+    SessionState, ViewportSize, WindowResizeIntent,
 };
 use swavan_server::{ServerControlPlane, ServerServices};
 
@@ -99,7 +100,17 @@ pub struct ApplicationSessionDto {
     pub application_id: String,
     pub selected_window: SelectedWindowDto,
     pub viewport: ViewportSizeDto,
+    pub resize_intent: Option<WindowResizeIntentDto>,
     pub state: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowResizeIntentDto {
+    pub session_id: String,
+    pub selected_window_id: String,
+    pub viewport: ViewportSizeDto,
+    pub status: String,
 }
 
 #[tauri::command]
@@ -354,8 +365,28 @@ impl From<ApplicationSession> for ApplicationSessionDto {
             application_id: session.application_id,
             selected_window: session.selected_window.into(),
             viewport: session.viewport.into(),
+            resize_intent: session.resize_intent.map(Into::into),
             state: session_state_name(&session.state).to_string(),
         }
+    }
+}
+
+impl From<WindowResizeIntent> for WindowResizeIntentDto {
+    fn from(intent: WindowResizeIntent) -> Self {
+        Self {
+            session_id: intent.session_id,
+            selected_window_id: intent.selected_window_id,
+            viewport: intent.viewport.into(),
+            status: resize_intent_status_name(&intent.status).to_string(),
+        }
+    }
+}
+
+fn resize_intent_status_name(status: &ResizeIntentStatus) -> &'static str {
+    match status {
+        ResizeIntentStatus::Recorded => "recorded",
+        ResizeIntentStatus::Applied => "applied",
+        ResizeIntentStatus::Unsupported => "unsupported",
     }
 }
 

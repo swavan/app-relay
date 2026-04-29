@@ -39,6 +39,12 @@ export type ApplicationSession = {
     title: string;
   };
   viewport: ViewportSize;
+  resizeIntent?: {
+    sessionId: string;
+    selectedWindowId: string;
+    viewport: ViewportSize;
+    status: "recorded" | "applied" | "unsupported";
+  };
   state: "starting" | "ready" | "closed";
 };
 
