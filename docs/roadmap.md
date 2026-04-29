@@ -101,6 +101,8 @@ Scope:
 - completed launch intent slice: sessions record launch metadata from
   discovered applications and unsupported launch backends return typed
   unsupported errors
+- completed client state slice: app list/session view model covers loading,
+  empty, error, and success states
 - application listing with names and icons
 - launch or attach-to-running-app flow
 - selected-window identity model
