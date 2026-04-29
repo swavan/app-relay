@@ -3,8 +3,8 @@ use std::sync::{Mutex, OnceLock};
 
 use swavan_core::{
     ApplicationPermission, ApplicationPermissionRepository, ConnectionProfile,
-    ConnectionProfileRepository, FileApplicationPermissionRepository, FileConnectionProfileRepository,
-    ServerConfig,
+    ConnectionProfileRepository, FileApplicationPermissionRepository,
+    FileConnectionProfileRepository, ServerConfig,
 };
 use swavan_protocol::{
     AppIcon, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession, ControlAuth,
@@ -65,6 +65,7 @@ pub struct AppSummaryDto {
 #[serde(rename_all = "camelCase")]
 pub struct AppIconDto {
     pub mime_type: String,
+    pub data_url: Option<String>,
     pub source: Option<String>,
 }
 
@@ -378,11 +379,54 @@ impl From<swavan_protocol::ApplicationSummary> for AppSummaryDto {
 
 impl From<AppIcon> for AppIconDto {
     fn from(icon: AppIcon) -> Self {
+        let data_url = icon_data_url(&icon);
+
         Self {
             mime_type: icon.mime_type,
+            data_url,
             source: icon.source,
         }
     }
+}
+
+fn icon_data_url(icon: &AppIcon) -> Option<String> {
+    if icon.bytes.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "data:{};base64,{}",
+        icon.mime_type,
+        base64_encode(&icon.bytes)
+    ))
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+
+        encoded.push(ALPHABET[(first >> 2) as usize] as char);
+        encoded.push(ALPHABET[(((first & 0b0000_0011) << 4) | (second >> 4)) as usize] as char);
+
+        if chunk.len() > 1 {
+            encoded.push(ALPHABET[(((second & 0b0000_1111) << 2) | (third >> 6)) as usize] as char);
+        } else {
+            encoded.push('=');
+        }
+
+        if chunk.len() > 2 {
+            encoded.push(ALPHABET[(third & 0b0011_1111) as usize] as char);
+        } else {
+            encoded.push('=');
+        }
+    }
+
+    encoded
 }
 
 impl From<ApplicationLaunch> for ApplicationLaunchDto {
@@ -545,4 +589,34 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Swavan AppRelay client");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn icon_data_url_encodes_icon_bytes() {
+        let icon = AppIcon {
+            mime_type: "image/png".to_string(),
+            bytes: vec![0x89, 0x50, 0x4e, 0x47],
+            source: Some("test.png".to_string()),
+        };
+
+        assert_eq!(
+            icon_data_url(&icon),
+            Some("data:image/png;base64,iVBORw==".to_string())
+        );
+    }
+
+    #[test]
+    fn icon_data_url_omits_empty_icon_bytes() {
+        let icon = AppIcon {
+            mime_type: "application/x-icon-theme-name".to_string(),
+            bytes: Vec::new(),
+            source: Some("utilities-terminal".to_string()),
+        };
+
+        assert_eq!(icon_data_url(&icon), None);
+    }
 }

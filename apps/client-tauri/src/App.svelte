@@ -166,7 +166,13 @@
     {:else}
       {#each appView.apps as app}
         <button class="app" on:click={() => createSession(app)} type="button">
-          <span class="icon" aria-hidden="true"></span>
+          {#if app.iconView.kind === "image"}
+            <img class="icon" src={app.iconView.url} alt="" title={app.iconView.title} />
+          {:else}
+            <span class="icon" aria-hidden="true" title={app.iconView.title}>
+              {app.iconView.label}
+            </span>
+          {/if}
           <span>{app.name}</span>
         </button>
       {/each}

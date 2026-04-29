@@ -27,6 +27,7 @@ class FakeRemoteService implements RemoteService {
         name: "Terminal",
         icon: {
           mimeType: "application/x-icon-theme-name",
+          dataUrl: undefined,
           source: "utilities-terminal"
         },
         launch: {
@@ -125,6 +126,7 @@ describe("RemoteService contract", () => {
         name: "Terminal",
         icon: {
           mimeType: "application/x-icon-theme-name",
+          dataUrl: undefined,
           source: "utilities-terminal"
         },
         launch: {
