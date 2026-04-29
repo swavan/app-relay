@@ -62,7 +62,22 @@ impl ServerServices {
         &mut self,
         request: CreateSessionRequest,
     ) -> Result<ApplicationSession, SwavanError> {
-        self.session_service.create_session(request)
+        let application = self
+            .application_discovery
+            .available_applications()
+            .ok()
+            .and_then(|applications| {
+                applications
+                    .into_iter()
+                    .find(|application| application.id == request.application_id)
+            });
+
+        match application {
+            Some(application) => self
+                .session_service
+                .create_session_for_application(request, application),
+            None => self.session_service.create_session(request),
+        }
     }
 
     pub fn resize_session(

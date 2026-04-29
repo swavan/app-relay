@@ -5,9 +5,10 @@ use swavan_core::{
     ConnectionProfile, ConnectionProfileRepository, FileConnectionProfileRepository, ServerConfig,
 };
 use swavan_protocol::{
-    AppIcon, ApplicationLaunch, ApplicationSession, ControlAuth, CreateSessionRequest, Feature,
-    Platform, PlatformCapability, ResizeIntentStatus, ResizeSessionRequest, SelectedWindow,
-    SessionState, ViewportSize, WindowResizeIntent,
+    AppIcon, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession, ControlAuth,
+    CreateSessionRequest, Feature, LaunchIntentStatus, Platform, PlatformCapability,
+    ResizeIntentStatus, ResizeSessionRequest, SelectedWindow, SessionState, ViewportSize,
+    WindowResizeIntent,
 };
 use swavan_server::{ServerControlPlane, ServerServices};
 
@@ -99,9 +100,19 @@ pub struct ApplicationSessionDto {
     pub id: String,
     pub application_id: String,
     pub selected_window: SelectedWindowDto,
+    pub launch_intent: Option<ApplicationLaunchIntentDto>,
     pub viewport: ViewportSizeDto,
     pub resize_intent: Option<WindowResizeIntentDto>,
     pub state: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationLaunchIntentDto {
+    pub session_id: String,
+    pub application_id: String,
+    pub launch: Option<ApplicationLaunchDto>,
+    pub status: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -364,6 +375,7 @@ impl From<ApplicationSession> for ApplicationSessionDto {
             id: session.id,
             application_id: session.application_id,
             selected_window: session.selected_window.into(),
+            launch_intent: session.launch_intent.map(Into::into),
             viewport: session.viewport.into(),
             resize_intent: session.resize_intent.map(Into::into),
             state: session_state_name(&session.state).to_string(),
@@ -379,6 +391,25 @@ impl From<WindowResizeIntent> for WindowResizeIntentDto {
             viewport: intent.viewport.into(),
             status: resize_intent_status_name(&intent.status).to_string(),
         }
+    }
+}
+
+impl From<ApplicationLaunchIntent> for ApplicationLaunchIntentDto {
+    fn from(intent: ApplicationLaunchIntent) -> Self {
+        Self {
+            session_id: intent.session_id,
+            application_id: intent.application_id,
+            launch: intent.launch.map(Into::into),
+            status: launch_intent_status_name(&intent.status).to_string(),
+        }
+    }
+}
+
+fn launch_intent_status_name(status: &LaunchIntentStatus) -> &'static str {
+    match status {
+        LaunchIntentStatus::Recorded => "recorded",
+        LaunchIntentStatus::Attached => "attached",
+        LaunchIntentStatus::Unsupported => "unsupported",
     }
 }
 
@@ -412,6 +443,7 @@ fn platform_name(platform: Platform) -> &'static str {
 fn feature_name(feature: &Feature) -> &'static str {
     match feature {
         Feature::AppDiscovery => "appDiscovery",
+        Feature::ApplicationLaunch => "applicationLaunch",
         Feature::WindowResize => "windowResize",
         Feature::WindowVideoStream => "windowVideoStream",
         Feature::SystemAudioStream => "systemAudioStream",

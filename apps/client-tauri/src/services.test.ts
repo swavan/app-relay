@@ -45,6 +45,15 @@ class FakeRemoteService implements RemoteService {
         id: "window-session-1",
         title: applicationId
       },
+      launchIntent: {
+        sessionId: "session-1",
+        applicationId,
+        launch: {
+          kind: "desktopCommand" as const,
+          value: "gnome-terminal"
+        },
+        status: "recorded" as const
+      },
       viewport: {
         width: 1280,
         height: 720
@@ -132,6 +141,10 @@ describe("RemoteService contract", () => {
     await expect(service.createSession("terminal", { width: 1280, height: 720 })).resolves.toMatchObject({
       id: "session-1",
       applicationId: "terminal",
+      launchIntent: {
+        applicationId: "terminal",
+        status: "recorded"
+      },
       state: "ready"
     });
     await expect(service.resizeSession("session-1", { width: 1440, height: 900 })).resolves.toMatchObject({
