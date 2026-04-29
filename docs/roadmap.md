@@ -95,6 +95,9 @@ Scope:
   session from the application list
 - completed application metadata slice: Linux `.desktop` launch/icon metadata
   and macOS bundle launch/icon metadata flow through the control plane
+- completed resize intent slice: session resize requests record backend intent,
+  expose resize status to the client, and unsupported resize backends return
+  typed unsupported errors
 - application listing with names and icons
 - launch or attach-to-running-app flow
 - selected-window identity model

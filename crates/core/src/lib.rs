@@ -7,8 +7,8 @@ use std::process::{Child, Command, Stdio};
 
 use swavan_protocol::{
     AppIcon, ApplicationLaunch, ApplicationSession, ApplicationSummary, CreateSessionRequest,
-    Feature, HealthStatus, Platform, PlatformCapability, ResizeSessionRequest, SelectedWindow,
-    SessionState, SwavanError, ViewportSize,
+    Feature, HealthStatus, Platform, PlatformCapability, ResizeIntentStatus, ResizeSessionRequest,
+    SelectedWindow, SessionState, SwavanError, ViewportSize, WindowResizeIntent,
 };
 
 pub trait HealthService {
@@ -34,6 +34,35 @@ pub trait ApplicationSessionService {
     ) -> Result<ApplicationSession, SwavanError>;
     fn close_session(&mut self, session_id: &str) -> Result<ApplicationSession, SwavanError>;
     fn active_sessions(&self) -> Vec<ApplicationSession>;
+}
+
+pub trait WindowResizeBackend {
+    fn resize_window(
+        &self,
+        selected_window: &SelectedWindow,
+        viewport: &ViewportSize,
+    ) -> Result<ResizeIntentStatus, SwavanError>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WindowResizeBackendService {
+    RecordOnly,
+    Unsupported { platform: Platform },
+}
+
+impl WindowResizeBackend for WindowResizeBackendService {
+    fn resize_window(
+        &self,
+        _selected_window: &SelectedWindow,
+        _viewport: &ViewportSize,
+    ) -> Result<ResizeIntentStatus, SwavanError> {
+        match self {
+            Self::RecordOnly => Ok(ResizeIntentStatus::Recorded),
+            Self::Unsupported { platform } => {
+                Err(SwavanError::unsupported(*platform, Feature::WindowResize))
+            }
+        }
+    }
 }
 
 pub trait ConnectionProfileRepository {
@@ -607,14 +636,23 @@ fn format_event(event: &ServerEvent) -> String {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InMemoryApplicationSessionService {
     policy: SessionPolicy,
+    resize_backend: WindowResizeBackendService,
     sessions: Vec<ApplicationSession>,
     next_session_sequence: u64,
 }
 
 impl InMemoryApplicationSessionService {
     pub fn new(policy: SessionPolicy) -> Self {
+        Self::with_resize_backend(policy, WindowResizeBackendService::RecordOnly)
+    }
+
+    pub fn with_resize_backend(
+        policy: SessionPolicy,
+        resize_backend: WindowResizeBackendService,
+    ) -> Self {
         Self {
             policy,
+            resize_backend,
             sessions: Vec::new(),
             next_session_sequence: 1,
         }
@@ -651,6 +689,7 @@ impl ApplicationSessionService for InMemoryApplicationSessionService {
                 title: request.application_id,
             },
             viewport: request.viewport,
+            resize_intent: None,
             state: SessionState::Ready,
         };
         self.sessions.push(session.clone());
@@ -672,8 +711,17 @@ impl ApplicationSessionService for InMemoryApplicationSessionService {
             .ok_or_else(|| {
                 SwavanError::NotFound(format!("session {} was not found", request.session_id))
             })?;
+        let intent = WindowResizeIntent {
+            session_id: session.id.clone(),
+            selected_window_id: session.selected_window.id.clone(),
+            viewport: request.viewport.clone(),
+            status: self
+                .resize_backend
+                .resize_window(&session.selected_window, &request.viewport)?,
+        };
 
         session.viewport = request.viewport;
+        session.resize_intent = Some(intent);
         Ok(session.clone())
     }
 
@@ -1571,6 +1619,7 @@ event=request_authorized operation=health\n"
                     title: "terminal".to_string(),
                 },
                 viewport: ViewportSize::new(1280, 720),
+                resize_intent: None,
                 state: SessionState::Ready,
             }]
         );
@@ -1612,6 +1661,42 @@ event=request_authorized operation=health\n"
             .expect("resize session");
 
         assert_eq!(resized.viewport, ViewportSize::new(1440, 900));
+        assert_eq!(
+            resized.resize_intent,
+            Some(WindowResizeIntent {
+                session_id: "session-1".to_string(),
+                selected_window_id: "window-session-1".to_string(),
+                viewport: ViewportSize::new(1440, 900),
+                status: ResizeIntentStatus::Recorded,
+            })
+        );
+    }
+
+    #[test]
+    fn session_service_reports_unsupported_resize_backend() {
+        let mut service = InMemoryApplicationSessionService::with_resize_backend(
+            SessionPolicy::allow_all(),
+            WindowResizeBackendService::Unsupported {
+                platform: Platform::Linux,
+            },
+        );
+        let session = service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+
+        assert_eq!(
+            service.resize_session(ResizeSessionRequest {
+                session_id: session.id,
+                viewport: ViewportSize::new(1440, 900),
+            }),
+            Err(SwavanError::unsupported(
+                Platform::Linux,
+                Feature::WindowResize
+            ))
+        );
     }
 
     #[test]
