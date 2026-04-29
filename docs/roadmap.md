@@ -167,7 +167,10 @@ Scope:
   transport-neutral adaptation metadata, deterministic in-memory 1080p target
   limits, the requested viewport, current target, and the reason applied across
   negotiated and non-negotiated resize flows
-- client video renderer
+- completed client video renderer slice: the Svelte client now renders a
+  metadata-backed selected-window preview surface with stream state, requested
+  viewport versus encoding target, encoded frame and keyframe metadata, and
+  empty/stopped states without claiming decoded video
 - session health and stream statistics
 - graceful recovery when the app closes or capture fails
 
