@@ -2,13 +2,15 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use swavan_core::{
-    ConnectionProfile, ConnectionProfileRepository, FileConnectionProfileRepository, ServerConfig,
+    ApplicationPermission, ApplicationPermissionRepository, ConnectionProfile,
+    ConnectionProfileRepository, FileApplicationPermissionRepository, FileConnectionProfileRepository,
+    ServerConfig,
 };
 use swavan_protocol::{
     AppIcon, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession, ControlAuth,
     CreateSessionRequest, Feature, LaunchIntentStatus, Platform, PlatformCapability,
-    ResizeIntentStatus, ResizeSessionRequest, SelectedWindow, SessionState, ViewportSize,
-    WindowResizeIntent,
+    ResizeIntentStatus, ResizeSessionRequest, SelectedWindow, SessionState, SwavanError,
+    ViewportSize, WindowResizeIntent,
 };
 use swavan_server::{ServerControlPlane, ServerServices};
 
@@ -24,6 +26,13 @@ pub struct ConnectionProfileDto {
     pub local_port: u16,
     pub remote_port: u16,
     pub auth_token: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationPermissionDto {
+    pub application_id: String,
+    pub label: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -147,6 +156,28 @@ fn remove_connection_profile(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn list_application_permissions() -> Result<Vec<ApplicationPermissionDto>, String> {
+    permission_repository()
+        .list()
+        .map(|permissions| permissions.into_iter().map(Into::into).collect())
+        .map_err(|error| format!("{error:?}"))
+}
+
+#[tauri::command]
+fn save_application_permission(permission: ApplicationPermissionDto) -> Result<(), String> {
+    permission_repository()
+        .save(permission.into())
+        .map_err(|error| format!("{error:?}"))
+}
+
+#[tauri::command]
+fn remove_application_permission(application_id: String) -> Result<(), String> {
+    permission_repository()
+        .remove(&application_id)
+        .map_err(|error| format!("{error:?}"))
+}
+
+#[tauri::command]
 fn server_health(auth_token: String) -> Result<HealthStatusDto, String> {
     with_control_plane(|control_plane| {
         control_plane
@@ -178,6 +209,8 @@ fn create_application_session(
     auth_token: String,
     request: CreateSessionRequestDto,
 ) -> Result<ApplicationSessionDto, String> {
+    ensure_application_allowed(&request.application_id)?;
+
     with_control_plane(|control_plane| {
         control_plane
             .create_session(&ControlAuth::new(auth_token), request.into())
@@ -211,6 +244,28 @@ fn close_application_session(
 
 fn profile_repository() -> FileConnectionProfileRepository {
     FileConnectionProfileRepository::new(data_dir().join("connection-profiles.tsv"))
+}
+
+fn permission_repository() -> FileApplicationPermissionRepository {
+    FileApplicationPermissionRepository::new(data_dir().join("application-permissions.tsv"))
+}
+
+fn ensure_application_allowed(application_id: &str) -> Result<(), String> {
+    let permissions = permission_repository()
+        .list()
+        .map_err(|error| format!("{error:?}"))?;
+
+    if permissions
+        .iter()
+        .any(|permission| permission.application_id == application_id)
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "{:?}",
+            SwavanError::PermissionDenied(format!("application {application_id} is not allowed"))
+        ))
+    }
 }
 
 fn with_control_plane<T>(
@@ -267,6 +322,24 @@ impl From<ConnectionProfile> for ConnectionProfileDto {
             local_port: profile.local_port,
             remote_port: profile.remote_port,
             auth_token: profile.auth_token,
+        }
+    }
+}
+
+impl From<ApplicationPermissionDto> for ApplicationPermission {
+    fn from(permission: ApplicationPermissionDto) -> Self {
+        Self {
+            application_id: permission.application_id,
+            label: permission.label,
+        }
+    }
+}
+
+impl From<ApplicationPermission> for ApplicationPermissionDto {
+    fn from(permission: ApplicationPermission) -> Self {
+        Self {
+            application_id: permission.application_id,
+            label: permission.label,
         }
     }
 }
@@ -460,6 +533,9 @@ pub fn run() {
             list_connection_profiles,
             save_connection_profile,
             remove_connection_profile,
+            list_application_permissions,
+            save_application_permission,
+            remove_application_permission,
             server_health,
             server_capabilities,
             server_applications,

@@ -4,6 +4,10 @@
     TauriConnectionProfileService,
     type ConnectionProfile
   } from "./connectionProfiles";
+  import {
+    TauriApplicationPermissionService,
+    type ApplicationPermission
+  } from "./applicationPermissions";
   import { buildAppViewModel } from "./appViewModel";
   import {
     TauriRemoteService,
@@ -14,11 +18,13 @@
   } from "./services";
 
   const profilesService = new TauriConnectionProfileService();
+  const permissionService = new TauriApplicationPermissionService();
   let remote = new TauriRemoteService();
 
   let health: HealthStatus | null = null;
   let capabilities: Capability[] = [];
   let profiles: ConnectionProfile[] = [];
+  let permissions: ApplicationPermission[] = [];
   let selectedProfile: ConnectionProfile | null = null;
   let activeSession: ApplicationSession | null = null;
   let apps: AppSummary[] = [];
@@ -41,6 +47,7 @@
     try {
       loading = true;
       profiles = await profilesService.list();
+      permissions = await permissionService.list();
       selectedProfile = profiles[0] ?? null;
 
       remote = new TauriRemoteService(selectedProfile?.authToken);
@@ -62,10 +69,25 @@
   async function createSession(app: AppSummary) {
     try {
       sessionMessage = "";
+      if (!hasPermission(app)) {
+        const granted = window.confirm(`Allow Swavan AppRelay to open ${app.name}?`);
+        if (!granted) {
+          sessionMessage = `Permission denied for ${app.name}`;
+          return;
+        }
+
+        await permissionService.save({ applicationId: app.id, label: app.name });
+        permissions = await permissionService.list();
+      }
+
       activeSession = await remote.createSession(app.id, { width: 1280, height: 720 });
     } catch (error) {
       sessionMessage = error instanceof Error ? error.message : String(error);
     }
+  }
+
+  function hasPermission(app: AppSummary) {
+    return permissions.some((permission) => permission.applicationId === app.id);
   }
 
   async function closeSession() {

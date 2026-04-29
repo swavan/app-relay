@@ -107,6 +107,12 @@ pub trait ConnectionProfileRepository {
     fn remove(&self, id: &str) -> Result<(), ProfileStoreError>;
 }
 
+pub trait ApplicationPermissionRepository {
+    fn list(&self) -> Result<Vec<ApplicationPermission>, PermissionStoreError>;
+    fn save(&self, permission: ApplicationPermission) -> Result<(), PermissionStoreError>;
+    fn remove(&self, application_id: &str) -> Result<(), PermissionStoreError>;
+}
+
 pub trait ServerConfigRepository {
     fn load(&self) -> Result<ServerConfig, ConfigStoreError>;
     fn save(&self, config: &ServerConfig) -> Result<(), ConfigStoreError>;
@@ -141,6 +147,15 @@ impl SessionPolicy {
             allowed_application_ids,
             ..Self::allow_all()
         }
+    }
+
+    pub fn from_permissions(permissions: &[ApplicationPermission]) -> Self {
+        Self::allow_applications(
+            permissions
+                .iter()
+                .map(|permission| permission.application_id.clone())
+                .collect(),
+        )
     }
 
     pub fn validate_application(&self, application_id: &str) -> Result<(), SwavanError> {
@@ -180,6 +195,64 @@ impl SessionPolicy {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplicationPermission {
+    pub application_id: String,
+    pub label: String,
+}
+
+impl ApplicationPermission {
+    pub fn validate(&self) -> Result<(), PermissionValidationError> {
+        if self.application_id.trim().is_empty() {
+            return Err(PermissionValidationError::MissingApplicationId);
+        }
+
+        if self.label.trim().is_empty() {
+            return Err(PermissionValidationError::MissingLabel);
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PermissionValidationError {
+    MissingApplicationId,
+    MissingLabel,
+}
+
+#[derive(Debug)]
+pub enum PermissionStoreError {
+    InvalidPermission(PermissionValidationError),
+    Io(std::io::Error),
+    CorruptedStore,
+}
+
+impl PartialEq for PermissionStoreError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::InvalidPermission(left), Self::InvalidPermission(right)) => left == right,
+            (Self::CorruptedStore, Self::CorruptedStore) => true,
+            (Self::Io(left), Self::Io(right)) => left.kind() == right.kind(),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for PermissionStoreError {}
+
+impl From<std::io::Error> for PermissionStoreError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<PermissionValidationError> for PermissionStoreError {
+    fn from(error: PermissionValidationError) -> Self {
+        Self::InvalidPermission(error)
     }
 }
 
@@ -264,6 +337,113 @@ impl From<ProfileValidationError> for ProfileStoreError {
     fn from(error: ProfileValidationError) -> Self {
         Self::InvalidProfile(error)
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct FileApplicationPermissionRepository {
+    path: PathBuf,
+}
+
+impl FileApplicationPermissionRepository {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    fn read_permissions(&self) -> Result<Vec<ApplicationPermission>, PermissionStoreError> {
+        let contents = match fs::read_to_string(&self.path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+
+        contents
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(decode_application_permission)
+            .collect()
+    }
+
+    fn write_permissions(
+        &self,
+        permissions: &[ApplicationPermission],
+    ) -> Result<(), PermissionStoreError> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut contents = String::new();
+        for permission in permissions {
+            contents.push_str(&encode_application_permission(permission));
+            contents.push('\n');
+        }
+
+        fs::write(&self.path, contents)?;
+        Ok(())
+    }
+}
+
+impl ApplicationPermissionRepository for FileApplicationPermissionRepository {
+    fn list(&self) -> Result<Vec<ApplicationPermission>, PermissionStoreError> {
+        let mut permissions = self.read_permissions()?;
+        permissions.sort_by(|left, right| {
+            left.label
+                .to_lowercase()
+                .cmp(&right.label.to_lowercase())
+                .then_with(|| left.application_id.cmp(&right.application_id))
+        });
+
+        Ok(permissions)
+    }
+
+    fn save(&self, permission: ApplicationPermission) -> Result<(), PermissionStoreError> {
+        permission.validate()?;
+
+        let mut permissions = self.read_permissions()?;
+        permissions.retain(|existing| existing.application_id != permission.application_id);
+        permissions.push(permission);
+        permissions.sort_by(|left, right| {
+            left.label
+                .to_lowercase()
+                .cmp(&right.label.to_lowercase())
+                .then_with(|| left.application_id.cmp(&right.application_id))
+        });
+        self.write_permissions(&permissions)
+    }
+
+    fn remove(&self, application_id: &str) -> Result<(), PermissionStoreError> {
+        let mut permissions = self.read_permissions()?;
+        permissions.retain(|permission| permission.application_id != application_id);
+        self.write_permissions(&permissions)
+    }
+}
+
+fn encode_application_permission(permission: &ApplicationPermission) -> String {
+    [
+        encode_field(&permission.application_id),
+        encode_field(&permission.label),
+    ]
+    .join("\t")
+}
+
+fn decode_application_permission(
+    line: &str,
+) -> Result<ApplicationPermission, PermissionStoreError> {
+    let fields = line.split('\t').collect::<Vec<_>>();
+    if fields.len() != 2 {
+        return Err(PermissionStoreError::CorruptedStore);
+    }
+
+    let permission = ApplicationPermission {
+        application_id: decode_permission_field(fields[0])?,
+        label: decode_permission_field(fields[1])?,
+    };
+
+    permission.validate()?;
+    Ok(permission)
+}
+
+fn decode_permission_field(value: &str) -> Result<String, PermissionStoreError> {
+    decode_escaped_field(value).map_err(|_| PermissionStoreError::CorruptedStore)
 }
 
 #[derive(Clone, Debug)]
@@ -2080,6 +2260,105 @@ event=request_authorized operation=health\n"
     }
 
     #[test]
+    fn application_permission_validation_rejects_missing_application_id() {
+        let permission = ApplicationPermission {
+            application_id: " ".to_string(),
+            label: "Terminal".to_string(),
+        };
+
+        assert_eq!(
+            permission.validate(),
+            Err(PermissionValidationError::MissingApplicationId)
+        );
+    }
+
+    #[test]
+    fn session_policy_can_be_built_from_permissions() {
+        let policy = SessionPolicy::from_permissions(&[test_permission("terminal", "Terminal")]);
+
+        assert_eq!(policy.validate_application("terminal"), Ok(()));
+        assert_eq!(
+            policy.validate_application("browser"),
+            Err(SwavanError::PermissionDenied(
+                "application browser is not allowed".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn file_application_permission_repository_persists_permissions() {
+        let root = unique_test_dir("application-permission-store");
+        let repository = FileApplicationPermissionRepository::new(root.join("permissions.tsv"));
+
+        repository
+            .save(test_permission("zed", "Zed"))
+            .expect("save zed permission");
+        repository
+            .save(test_permission("terminal", "Terminal"))
+            .expect("save terminal permission");
+
+        let permissions = repository.list().expect("list permissions");
+        assert_eq!(
+            permissions
+                .iter()
+                .map(|permission| permission.application_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["terminal", "zed"]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_application_permission_repository_replaces_permissions_by_application_id() {
+        let root = unique_test_dir("application-permission-replace");
+        let repository = FileApplicationPermissionRepository::new(root.join("permissions.tsv"));
+
+        repository
+            .save(test_permission("terminal", "Terminal"))
+            .expect("save original permission");
+        repository
+            .save(test_permission("terminal", "Terminal Updated"))
+            .expect("replace permission");
+
+        assert_eq!(
+            repository.list().expect("list permissions"),
+            vec![test_permission("terminal", "Terminal Updated")]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_application_permission_repository_removes_permissions_by_application_id() {
+        let root = unique_test_dir("application-permission-remove");
+        let repository = FileApplicationPermissionRepository::new(root.join("permissions.tsv"));
+
+        repository
+            .save(test_permission("terminal", "Terminal"))
+            .expect("save permission");
+        repository.remove("terminal").expect("remove permission");
+
+        assert_eq!(repository.list().expect("list permissions"), Vec::new());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_application_permission_repository_reports_corruption() {
+        let root = unique_test_dir("application-permission-corrupt");
+        let path = root.join("permissions.tsv");
+        fs::create_dir_all(&root).expect("create permission store dir");
+        fs::write(&path, "bad data").expect("write corrupted permission store");
+
+        let repository = FileApplicationPermissionRepository::new(path);
+
+        assert_eq!(repository.list(), Err(PermissionStoreError::CorruptedStore));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn file_connection_profile_repository_persists_profiles() {
         let root = unique_test_dir("connection-profile-store");
         let repository = FileConnectionProfileRepository::new(root.join("profiles.tsv"));
@@ -2161,6 +2440,13 @@ event=request_authorized operation=health\n"
             local_port: 7676,
             remote_port: 7676,
             auth_token: "token".to_string(),
+        }
+    }
+
+    fn test_permission(application_id: &str, label: &str) -> ApplicationPermission {
+        ApplicationPermission {
+            application_id: application_id.to_string(),
+            label: label.to_string(),
         }
     }
 
