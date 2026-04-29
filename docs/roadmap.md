@@ -283,6 +283,10 @@ Completed:
 - active audio backend leg statuses expose transport-neutral media counters for
   packets, bytes, and latency that remain zero and unavailable until live media
   telemetry is implemented
+- native audio media backend scaffold is explicit in core for Linux PipeWire,
+  macOS CoreAudio, and Windows WASAPI across capture, playback, client
+  microphone capture, and server-side microphone injection, with every leg still
+  reporting not implemented by default
 
 Remaining:
 
