@@ -27,49 +27,142 @@ pub trait AudioStreamService {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AudioBackendService {
-    DesktopControl { platform: Platform },
-    Unsupported { platform: Platform },
+    DesktopControl {
+        platform: Platform,
+        native_readiness: AudioBackendNativeReadiness,
+    },
+    Unsupported {
+        platform: Platform,
+    },
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AudioBackendNativeReadiness {
+    available_legs: Vec<AudioBackendLeg>,
+}
+
+impl AudioBackendNativeReadiness {
+    pub fn unavailable() -> Self {
+        Self::default()
+    }
+
+    #[cfg(test)]
+    fn with_available_legs(available_legs: impl IntoIterator<Item = AudioBackendLeg>) -> Self {
+        let mut available_legs = available_legs.into_iter().collect::<Vec<_>>();
+        available_legs.sort_by_key(Self::leg_sort_key);
+        available_legs.dedup();
+        Self { available_legs }
+    }
+
+    fn is_available(&self, leg: &AudioBackendLeg) -> bool {
+        self.available_legs.contains(leg)
+    }
+
+    fn all_native_legs_available(&self) -> bool {
+        Self::native_legs().iter().all(|leg| self.is_available(leg))
+    }
+
+    fn no_native_legs_available(&self) -> bool {
+        self.available_legs.is_empty()
+    }
+
+    fn native_legs() -> [AudioBackendLeg; 4] {
+        [
+            AudioBackendLeg::Capture,
+            AudioBackendLeg::Playback,
+            AudioBackendLeg::ClientMicrophoneCapture,
+            AudioBackendLeg::ServerMicrophoneInjection,
+        ]
+    }
+
+    #[cfg(test)]
+    fn leg_sort_key(leg: &AudioBackendLeg) -> u8 {
+        match leg {
+            AudioBackendLeg::Capture => 0,
+            AudioBackendLeg::Playback => 1,
+            AudioBackendLeg::ClientMicrophoneCapture => 2,
+            AudioBackendLeg::ServerMicrophoneInjection => 3,
+        }
+    }
 }
 
 impl AudioBackendService {
     pub fn for_platform(platform: Platform) -> Self {
         match platform {
-            Platform::Linux | Platform::Macos | Platform::Windows => {
-                Self::DesktopControl { platform }
-            }
+            Platform::Linux | Platform::Macos | Platform::Windows => Self::DesktopControl {
+                platform,
+                native_readiness: AudioBackendNativeReadiness::unavailable(),
+            },
             Platform::Android | Platform::Ios | Platform::Unknown => Self::Unsupported { platform },
+        }
+    }
+
+    #[cfg(test)]
+    fn for_platform_with_native_readiness(
+        platform: Platform,
+        native_readiness: AudioBackendNativeReadiness,
+    ) -> Self {
+        match platform {
+            Platform::Linux | Platform::Macos | Platform::Windows => Self::DesktopControl {
+                platform,
+                native_readiness,
+            },
+            Platform::Android | Platform::Ios | Platform::Unknown => Self::Unsupported { platform },
+        }
+    }
+
+    #[cfg(test)]
+    fn configure_native_readiness(&mut self, native_readiness: AudioBackendNativeReadiness) {
+        if let Self::DesktopControl {
+            native_readiness: current,
+            ..
+        } = self
+        {
+            *current = native_readiness;
         }
     }
 
     pub fn capabilities(&self) -> AudioStreamCapabilities {
         match self {
-            Self::DesktopControl { .. } => AudioStreamCapabilities {
-                system_audio: AudioCapability {
-                    supported: true,
-                    reason: Some("desktop audio control-plane support is available".to_string()),
-                },
-                microphone_capture: AudioCapability {
-                    supported: true,
-                    reason: Some(
-                        "desktop microphone control-plane support is available".to_string(),
-                    ),
-                },
-                microphone_injection: AudioCapability {
-                    supported: false,
-                    reason: Some(
-                        "server-side microphone injection backend is not implemented yet"
-                            .to_string(),
-                    ),
-                },
-                echo_cancellation: AudioCapability {
-                    supported: true,
-                    reason: None,
-                },
-                device_selection: AudioCapability {
-                    supported: true,
-                    reason: None,
-                },
-            },
+            Self::DesktopControl {
+                native_readiness, ..
+            } => {
+                let microphone_injection_available =
+                    native_readiness.is_available(&AudioBackendLeg::ServerMicrophoneInjection);
+                AudioStreamCapabilities {
+                    system_audio: AudioCapability {
+                        supported: true,
+                        reason: Some(
+                            "desktop audio control-plane support is available".to_string(),
+                        ),
+                    },
+                    microphone_capture: AudioCapability {
+                        supported: true,
+                        reason: Some(
+                            "desktop microphone control-plane support is available".to_string(),
+                        ),
+                    },
+                    microphone_injection: AudioCapability {
+                        supported: microphone_injection_available,
+                        reason: if microphone_injection_available {
+                            None
+                        } else {
+                            Some(
+                                "server-side microphone injection backend is not implemented yet"
+                                    .to_string(),
+                            )
+                        },
+                    },
+                    echo_cancellation: AudioCapability {
+                        supported: true,
+                        reason: None,
+                    },
+                    device_selection: AudioCapability {
+                        supported: true,
+                        reason: None,
+                    },
+                }
+            }
             Self::Unsupported { platform } => {
                 let reason = format!("audio streaming is unsupported on {platform:?}");
                 AudioStreamCapabilities {
@@ -100,7 +193,10 @@ impl AudioBackendService {
 
     pub fn backend_contract(&self) -> AudioBackendContract {
         match self {
-            Self::DesktopControl { platform } => {
+            Self::DesktopControl {
+                platform,
+                native_readiness,
+            } => {
                 let native_backend = match platform {
                     Platform::Linux => AudioBackendKind::PipeWire,
                     Platform::Macos => AudioBackendKind::CoreAudio,
@@ -115,12 +211,13 @@ impl AudioBackendService {
                     planned_capture: native_backend.clone(),
                     planned_playback: native_backend.clone(),
                     planned_microphone: native_backend,
-                    statuses: Self::desktop_backend_statuses(*platform),
-                    readiness: AudioBackendReadiness::ControlPlaneOnly,
-                    notes: vec![
-                        "current stream enforces control-plane state only; native capture, playback, client microphone capture, and server microphone injection are not implemented"
-                            .to_string(),
-                    ],
+                    statuses: Self::desktop_backend_statuses(*platform, native_readiness),
+                    readiness: if native_readiness.all_native_legs_available() {
+                        AudioBackendReadiness::NativeAvailable
+                    } else {
+                        AudioBackendReadiness::ControlPlaneOnly
+                    },
+                    notes: Self::desktop_backend_notes(native_readiness),
                 }
             }
             Self::Unsupported { platform } => AudioBackendContract {
@@ -137,7 +234,29 @@ impl AudioBackendService {
         }
     }
 
-    fn desktop_backend_statuses(platform: Platform) -> Vec<AudioBackendStatus> {
+    fn desktop_backend_notes(native_readiness: &AudioBackendNativeReadiness) -> Vec<String> {
+        if native_readiness.all_native_legs_available() {
+            vec![
+                "all native audio backend legs are configured available for transport-neutral service tests"
+                    .to_string(),
+            ]
+        } else if native_readiness.no_native_legs_available() {
+            vec![
+                "current stream enforces control-plane state only; native capture, playback, client microphone capture, and server microphone injection are not implemented"
+                    .to_string(),
+            ]
+        } else {
+            vec![
+                "current stream enforces control-plane state for unavailable native legs; configured native leg availability is reported per backend status"
+                    .to_string(),
+            ]
+        }
+    }
+
+    fn desktop_backend_statuses(
+        platform: Platform,
+        native_readiness: &AudioBackendNativeReadiness,
+    ) -> Vec<AudioBackendStatus> {
         let backend = match platform {
             Platform::Linux => AudioBackendKind::PipeWire,
             Platform::Macos => AudioBackendKind::CoreAudio,
@@ -145,23 +264,26 @@ impl AudioBackendService {
             Platform::Android | Platform::Ios | Platform::Unknown => AudioBackendKind::Unsupported,
         };
 
-        [
-            AudioBackendLeg::Capture,
-            AudioBackendLeg::Playback,
-            AudioBackendLeg::ClientMicrophoneCapture,
-            AudioBackendLeg::ServerMicrophoneInjection,
-        ]
+        AudioBackendNativeReadiness::native_legs()
         .into_iter()
         .map(|leg| AudioBackendStatus {
             leg: leg.clone(),
             backend: backend.clone(),
-            available: false,
-            readiness: AudioBackendReadiness::PlannedNative,
-            failure: Some(AudioBackendFailure {
-                kind: AudioBackendFailureKind::NativeBackendNotImplemented,
-                message: Self::native_backend_gap_message(&leg, platform),
-                recovery: "keep the control-plane stream active for state negotiation, but do not expect audio packets until the native backend is implemented".to_string(),
-            }),
+            available: native_readiness.is_available(&leg),
+            readiness: if native_readiness.is_available(&leg) {
+                AudioBackendReadiness::NativeAvailable
+            } else {
+                AudioBackendReadiness::PlannedNative
+            },
+            failure: if native_readiness.is_available(&leg) {
+                None
+            } else {
+                Some(AudioBackendFailure {
+                    kind: AudioBackendFailureKind::NativeBackendNotImplemented,
+                    message: Self::native_backend_gap_message(&leg, platform),
+                    recovery: "keep the control-plane stream active for state negotiation, but do not expect audio packets until the native backend is implemented".to_string(),
+                })
+            },
         })
         .collect()
     }
@@ -207,7 +329,15 @@ impl AudioBackendService {
 
     fn microphone_injection_readiness(&self) -> AudioBackendReadiness {
         match self {
-            Self::DesktopControl { .. } => AudioBackendReadiness::PlannedNative,
+            Self::DesktopControl {
+                native_readiness, ..
+            } => {
+                if native_readiness.is_available(&AudioBackendLeg::ServerMicrophoneInjection) {
+                    AudioBackendReadiness::NativeAvailable
+                } else {
+                    AudioBackendReadiness::PlannedNative
+                }
+            }
             Self::Unsupported { .. } => AudioBackendReadiness::Unsupported,
         }
     }
@@ -218,8 +348,13 @@ impl AudioBackendService {
         capabilities: &AudioStreamCapabilities,
     ) -> MicrophoneInjectionState {
         let requested = microphone == &MicrophoneMode::Enabled;
+        let active = requested
+            && capabilities.microphone_injection.supported
+            && self.microphone_injection_readiness() == AudioBackendReadiness::NativeAvailable;
         let reason = if !requested {
             Some("microphone input is disabled for this session".to_string())
+        } else if active {
+            None
         } else if !capabilities.microphone_injection.supported {
             capabilities.microphone_injection.reason.clone()
         } else {
@@ -228,7 +363,7 @@ impl AudioBackendService {
 
         MicrophoneInjectionState {
             requested,
-            active: false,
+            active,
             readiness: self.microphone_injection_readiness(),
             reason,
         }
@@ -261,6 +396,12 @@ impl InMemoryAudioStreamService {
         }
     }
 
+    #[cfg(test)]
+    fn configure_native_readiness(&mut self, native_readiness: AudioBackendNativeReadiness) {
+        self.backend.configure_native_readiness(native_readiness);
+        self.refresh_active_stream_backend_state();
+    }
+
     fn next_stream_id(&mut self) -> String {
         let stream_id = format!("audio-stream-{}", self.next_stream_number);
         self.next_stream_number += 1;
@@ -275,12 +416,34 @@ impl InMemoryAudioStreamService {
             title: session.selected_window.title.clone(),
         }
     }
+
+    #[cfg(test)]
+    fn refresh_active_stream_backend_state(&mut self) {
+        let backend = self.backend.clone();
+        let backend_contract = self.backend.backend_contract();
+        let capabilities = self.backend.capabilities();
+        for stream in self
+            .streams
+            .iter_mut()
+            .filter(|stream| stream.state != AudioStreamState::Stopped)
+        {
+            stream.backend = Some(backend_contract.clone());
+            stream.capabilities = capabilities.clone();
+            stream.microphone_injection =
+                backend.microphone_injection_state(&stream.microphone, &capabilities);
+            stream.health = AudioStreamHealth {
+                healthy: true,
+                message: Some("audio backend readiness updated".to_string()),
+            };
+        }
+    }
 }
 
 impl Default for InMemoryAudioStreamService {
     fn default() -> Self {
         Self::new(AudioBackendService::DesktopControl {
             platform: Platform::Linux,
+            native_readiness: AudioBackendNativeReadiness::default(),
         })
     }
 }
@@ -563,6 +726,104 @@ mod tests {
                     })
             }));
         }
+    }
+
+    #[test]
+    fn audio_backend_contract_can_model_native_leg_readiness() {
+        let contract = AudioBackendService::for_platform_with_native_readiness(
+            Platform::Linux,
+            AudioBackendNativeReadiness::with_available_legs([
+                AudioBackendLeg::Capture,
+                AudioBackendLeg::Playback,
+                AudioBackendLeg::ClientMicrophoneCapture,
+            ]),
+        )
+        .backend_contract();
+
+        assert_eq!(contract.readiness, AudioBackendReadiness::ControlPlaneOnly);
+        for available_leg in [
+            AudioBackendLeg::Capture,
+            AudioBackendLeg::Playback,
+            AudioBackendLeg::ClientMicrophoneCapture,
+        ] {
+            let status = contract
+                .statuses
+                .iter()
+                .find(|status| status.leg == available_leg)
+                .expect("available leg status");
+            assert!(status.available);
+            assert_eq!(status.readiness, AudioBackendReadiness::NativeAvailable);
+            assert_eq!(status.failure, None);
+        }
+
+        let microphone_injection = contract
+            .statuses
+            .iter()
+            .find(|status| status.leg == AudioBackendLeg::ServerMicrophoneInjection)
+            .expect("microphone injection status");
+        assert!(!microphone_injection.available);
+        assert_eq!(
+            microphone_injection.readiness,
+            AudioBackendReadiness::PlannedNative
+        );
+        assert!(microphone_injection.failure.is_some());
+    }
+
+    #[test]
+    fn audio_backend_readiness_configuration_refreshes_active_streams() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::default();
+        let stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Enabled,
+                    system_audio_muted: false,
+                    microphone_muted: false,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+                &session,
+            )
+            .expect("start audio stream");
+
+        stream_service.configure_native_readiness(
+            AudioBackendNativeReadiness::with_available_legs([
+                AudioBackendLeg::Capture,
+                AudioBackendLeg::Playback,
+                AudioBackendLeg::ClientMicrophoneCapture,
+                AudioBackendLeg::ServerMicrophoneInjection,
+            ]),
+        );
+
+        let refreshed = stream_service
+            .stream_status(&stream.id)
+            .expect("stream status after readiness update");
+        let backend = refreshed.backend.expect("backend contract");
+
+        assert_eq!(backend.readiness, AudioBackendReadiness::NativeAvailable);
+        assert!(backend.statuses.iter().all(|status| {
+            status.available
+                && status.readiness == AudioBackendReadiness::NativeAvailable
+                && status.failure.is_none()
+        }));
+        assert!(refreshed.capabilities.microphone_injection.supported);
+        assert!(refreshed.microphone_injection.active);
+        assert_eq!(
+            refreshed.microphone_injection.readiness,
+            AudioBackendReadiness::NativeAvailable
+        );
+        assert_eq!(refreshed.microphone_injection.reason, None);
+        assert_eq!(
+            refreshed.health.message.as_deref(),
+            Some("audio backend readiness updated")
+        );
     }
 
     #[test]

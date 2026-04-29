@@ -1,6 +1,10 @@
 export type MicrophoneMode = "disabled" | "enabled";
 export type AudioBackendKind = "controlPlane" | "pipeWire" | "coreAudio" | "wasapi" | "unsupported";
-export type AudioBackendReadiness = "controlPlaneOnly" | "plannedNative" | "unsupported";
+export type AudioBackendReadiness =
+  | "controlPlaneOnly"
+  | "plannedNative"
+  | "nativeAvailable"
+  | "unsupported";
 export type AudioBackendLeg =
   | "capture"
   | "playback"
