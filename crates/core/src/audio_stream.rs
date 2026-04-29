@@ -468,8 +468,8 @@ impl AudioBackendService {
         }
     }
 
-    #[cfg(test)]
-    fn for_platform_with_native_readiness(
+    #[cfg(any(test, feature = "pipewire-capture"))]
+    pub fn for_platform_with_native_readiness(
         platform: Platform,
         native_readiness: AudioBackendNativeReadiness,
     ) -> Self {

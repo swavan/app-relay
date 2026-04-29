@@ -1,3 +1,5 @@
+#[cfg(feature = "pipewire-capture")]
+use apprelay_core::AudioBackendNativeReadiness;
 use apprelay_core::{AudioBackendService, AudioStreamService, InMemoryAudioStreamService};
 use apprelay_protocol::{
     AppRelayError, ApplicationSession, AudioStreamSession, Platform, StartAudioStreamRequest,
@@ -18,9 +20,7 @@ impl AudioStreamControl {
 
     pub fn for_platform(platform: Platform) -> Self {
         Self {
-            stream_service: InMemoryAudioStreamService::new(AudioBackendService::for_platform(
-                platform,
-            )),
+            stream_service: InMemoryAudioStreamService::new(audio_backend_for_platform(platform)),
         }
     }
 
@@ -66,4 +66,16 @@ impl Default for AudioStreamControl {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn audio_backend_for_platform(platform: Platform) -> AudioBackendService {
+    #[cfg(feature = "pipewire-capture")]
+    if platform == Platform::Linux {
+        return AudioBackendService::for_platform_with_native_readiness(
+            platform,
+            AudioBackendNativeReadiness::with_linux_pipewire_capture_adapter_boundary(),
+        );
+    }
+
+    AudioBackendService::for_platform(platform)
 }

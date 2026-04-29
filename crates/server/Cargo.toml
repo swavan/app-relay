@@ -8,6 +8,10 @@ repository.workspace = true
 apprelay-core = { path = "../core" }
 apprelay-protocol = { path = "../protocol" }
 
+[features]
+default = []
+pipewire-capture = ["apprelay-core/pipewire-capture"]
+
 [lib]
 path = "src/lib.rs"
 
