@@ -208,6 +208,15 @@ fn server_applications(auth_token: String) -> Result<Vec<AppSummaryDto>, String>
 }
 
 #[tauri::command]
+fn active_application_sessions(auth_token: String) -> Result<Vec<ApplicationSessionDto>, String> {
+    with_control_plane(|control_plane| {
+        control_plane
+            .active_sessions(&ControlAuth::new(auth_token))
+            .map(|sessions| sessions.into_iter().map(Into::into).collect())
+    })
+}
+
+#[tauri::command]
 fn create_application_session(
     auth_token: String,
     request: CreateSessionRequestDto,
@@ -595,6 +604,7 @@ pub fn run() {
             server_health,
             server_capabilities,
             server_applications,
+            active_application_sessions,
             create_application_session,
             resize_application_session,
             close_application_session

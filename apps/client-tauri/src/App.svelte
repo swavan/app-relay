@@ -54,6 +54,7 @@
       health = await remote.health();
       capabilities = await remote.capabilities();
       apps = await remote.applications();
+      activeSession = (await remote.activeSessions())[0] ?? null;
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
       health = {

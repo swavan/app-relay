@@ -64,6 +64,7 @@ export interface RemoteService {
   health(): Promise<HealthStatus>;
   capabilities(): Promise<Capability[]>;
   applications(): Promise<AppSummary[]>;
+  activeSessions(): Promise<ApplicationSession[]>;
   createSession(applicationId: string, viewport: ViewportSize): Promise<ApplicationSession>;
   resizeSession(sessionId: string, viewport: ViewportSize): Promise<ApplicationSession>;
   closeSession(sessionId: string): Promise<ApplicationSession>;
@@ -86,6 +87,12 @@ export class TauriRemoteService implements RemoteService {
 
   async applications(): Promise<AppSummary[]> {
     return invoke<AppSummary[]>("server_applications", { authToken: this.authToken });
+  }
+
+  async activeSessions(): Promise<ApplicationSession[]> {
+    return invoke<ApplicationSession[]>("active_application_sessions", {
+      authToken: this.authToken
+    });
   }
 
   async createSession(

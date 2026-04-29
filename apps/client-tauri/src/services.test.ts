@@ -38,6 +38,26 @@ class FakeRemoteService implements RemoteService {
     ];
   }
 
+  async activeSessions() {
+    return [
+      {
+        id: "session-1",
+        applicationId: "terminal",
+        selectedWindow: {
+          id: "window-session-1",
+          applicationId: "terminal",
+          selectionMethod: "launchIntent" as const,
+          title: "Terminal"
+        },
+        viewport: {
+          width: 1280,
+          height: 720
+        },
+        state: "ready" as const
+      }
+    ];
+  }
+
   async createSession(applicationId: string) {
     return {
       id: "session-1",
@@ -146,6 +166,23 @@ describe("RemoteService contract", () => {
   it("creates, resizes, and closes sessions", async () => {
     const service = new FakeRemoteService();
 
+    await expect(service.activeSessions()).resolves.toEqual([
+      {
+        id: "session-1",
+        applicationId: "terminal",
+        selectedWindow: {
+          id: "window-session-1",
+          applicationId: "terminal",
+          selectionMethod: "launchIntent",
+          title: "Terminal"
+        },
+        viewport: {
+          width: 1280,
+          height: 720
+        },
+        state: "ready"
+      }
+    ]);
     await expect(service.createSession("terminal", { width: 1280, height: 720 })).resolves.toMatchObject({
       id: "session-1",
       applicationId: "terminal",
