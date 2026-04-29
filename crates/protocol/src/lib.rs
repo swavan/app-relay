@@ -75,6 +75,7 @@ impl Platform {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Feature {
     AppDiscovery,
+    ApplicationLaunch,
     WindowResize,
     WindowVideoStream,
     SystemAudioStream,
@@ -176,9 +177,25 @@ pub struct ApplicationSession {
     pub id: String,
     pub application_id: String,
     pub selected_window: SelectedWindow,
+    pub launch_intent: Option<ApplicationLaunchIntent>,
     pub viewport: ViewportSize,
     pub resize_intent: Option<WindowResizeIntent>,
     pub state: SessionState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplicationLaunchIntent {
+    pub session_id: String,
+    pub application_id: String,
+    pub launch: Option<ApplicationLaunch>,
+    pub status: LaunchIntentStatus,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LaunchIntentStatus {
+    Recorded,
+    Attached,
+    Unsupported,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

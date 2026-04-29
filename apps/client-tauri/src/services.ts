@@ -38,6 +38,15 @@ export type ApplicationSession = {
     id: string;
     title: string;
   };
+  launchIntent?: {
+    sessionId: string;
+    applicationId: string;
+    launch?: {
+      kind: "desktopCommand" | "macosBundle";
+      value: string;
+    };
+    status: "recorded" | "attached" | "unsupported";
+  };
   viewport: ViewportSize;
   resizeIntent?: {
     sessionId: string;

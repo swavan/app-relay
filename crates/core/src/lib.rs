@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use swavan_protocol::{
-    AppIcon, ApplicationLaunch, ApplicationSession, ApplicationSummary, CreateSessionRequest,
-    Feature, HealthStatus, Platform, PlatformCapability, ResizeIntentStatus, ResizeSessionRequest,
-    SelectedWindow, SessionState, SwavanError, ViewportSize, WindowResizeIntent,
+    AppIcon, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession, ApplicationSummary,
+    CreateSessionRequest, Feature, HealthStatus, LaunchIntentStatus, Platform, PlatformCapability,
+    ResizeIntentStatus, ResizeSessionRequest, SelectedWindow, SessionState, SwavanError,
+    ViewportSize, WindowResizeIntent,
 };
 
 pub trait HealthService {
@@ -34,6 +35,41 @@ pub trait ApplicationSessionService {
     ) -> Result<ApplicationSession, SwavanError>;
     fn close_session(&mut self, session_id: &str) -> Result<ApplicationSession, SwavanError>;
     fn active_sessions(&self) -> Vec<ApplicationSession>;
+}
+
+pub trait ApplicationLaunchBackend {
+    fn prepare_launch(
+        &self,
+        application: &ApplicationSummary,
+        session_id: &str,
+    ) -> Result<ApplicationLaunchIntent, SwavanError>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ApplicationLaunchBackendService {
+    RecordOnly,
+    Unsupported { platform: Platform },
+}
+
+impl ApplicationLaunchBackend for ApplicationLaunchBackendService {
+    fn prepare_launch(
+        &self,
+        application: &ApplicationSummary,
+        session_id: &str,
+    ) -> Result<ApplicationLaunchIntent, SwavanError> {
+        match self {
+            Self::RecordOnly => Ok(ApplicationLaunchIntent {
+                session_id: session_id.to_string(),
+                application_id: application.id.clone(),
+                launch: application.launch.clone(),
+                status: LaunchIntentStatus::Recorded,
+            }),
+            Self::Unsupported { platform } => Err(SwavanError::unsupported(
+                *platform,
+                Feature::ApplicationLaunch,
+            )),
+        }
+    }
 }
 
 pub trait WindowResizeBackend {
@@ -636,6 +672,7 @@ fn format_event(event: &ServerEvent) -> String {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InMemoryApplicationSessionService {
     policy: SessionPolicy,
+    launch_backend: ApplicationLaunchBackendService,
     resize_backend: WindowResizeBackendService,
     sessions: Vec<ApplicationSession>,
     next_session_sequence: u64,
@@ -643,15 +680,43 @@ pub struct InMemoryApplicationSessionService {
 
 impl InMemoryApplicationSessionService {
     pub fn new(policy: SessionPolicy) -> Self {
-        Self::with_resize_backend(policy, WindowResizeBackendService::RecordOnly)
+        Self::with_backends(
+            policy,
+            ApplicationLaunchBackendService::RecordOnly,
+            WindowResizeBackendService::RecordOnly,
+        )
     }
 
     pub fn with_resize_backend(
         policy: SessionPolicy,
         resize_backend: WindowResizeBackendService,
     ) -> Self {
+        Self::with_backends(
+            policy,
+            ApplicationLaunchBackendService::RecordOnly,
+            resize_backend,
+        )
+    }
+
+    pub fn with_launch_backend(
+        policy: SessionPolicy,
+        launch_backend: ApplicationLaunchBackendService,
+    ) -> Self {
+        Self::with_backends(
+            policy,
+            launch_backend,
+            WindowResizeBackendService::RecordOnly,
+        )
+    }
+
+    pub fn with_backends(
+        policy: SessionPolicy,
+        launch_backend: ApplicationLaunchBackendService,
+        resize_backend: WindowResizeBackendService,
+    ) -> Self {
         Self {
             policy,
+            launch_backend,
             resize_backend,
             sessions: Vec::new(),
             next_session_sequence: 1,
@@ -662,6 +727,51 @@ impl InMemoryApplicationSessionService {
         let id = format!("session-{}", self.next_session_sequence);
         self.next_session_sequence += 1;
         id
+    }
+
+    pub fn create_session_for_application(
+        &mut self,
+        request: CreateSessionRequest,
+        application: ApplicationSummary,
+    ) -> Result<ApplicationSession, SwavanError> {
+        if request.application_id != application.id {
+            return Err(SwavanError::InvalidRequest(format!(
+                "application {} does not match request {}",
+                application.id, request.application_id
+            )));
+        }
+
+        self.create_validated_session(request, application)
+    }
+
+    fn create_validated_session(
+        &mut self,
+        request: CreateSessionRequest,
+        application: ApplicationSummary,
+    ) -> Result<ApplicationSession, SwavanError> {
+        self.policy
+            .validate_application(&request.application_id)
+            .and_then(|_| self.policy.validate_viewport(&request.viewport))?;
+
+        let session_id = self.next_session_id();
+        let launch_intent = self
+            .launch_backend
+            .prepare_launch(&application, &session_id)?;
+        let session = ApplicationSession {
+            id: session_id.clone(),
+            application_id: application.id,
+            selected_window: SelectedWindow {
+                id: format!("window-{session_id}"),
+                title: application.name,
+            },
+            launch_intent: Some(launch_intent),
+            viewport: request.viewport,
+            resize_intent: None,
+            state: SessionState::Ready,
+        };
+        self.sessions.push(session.clone());
+
+        Ok(session)
     }
 }
 
@@ -676,25 +786,14 @@ impl ApplicationSessionService for InMemoryApplicationSessionService {
         &mut self,
         request: CreateSessionRequest,
     ) -> Result<ApplicationSession, SwavanError> {
-        self.policy
-            .validate_application(&request.application_id)
-            .and_then(|_| self.policy.validate_viewport(&request.viewport))?;
-
-        let session_id = self.next_session_id();
-        let session = ApplicationSession {
-            id: session_id.clone(),
-            application_id: request.application_id.clone(),
-            selected_window: SelectedWindow {
-                id: format!("window-{session_id}"),
-                title: request.application_id,
-            },
-            viewport: request.viewport,
-            resize_intent: None,
-            state: SessionState::Ready,
+        let application = ApplicationSummary {
+            id: request.application_id.clone(),
+            name: request.application_id.clone(),
+            icon: None,
+            launch: None,
         };
-        self.sessions.push(session.clone());
 
-        Ok(session)
+        self.create_validated_session(request, application)
     }
 
     fn resize_session(
@@ -1020,6 +1119,11 @@ impl CapabilityService for DefaultCapabilityService {
             app_discovery,
             PlatformCapability::unsupported(
                 self.platform,
+                Feature::ApplicationLaunch,
+                "native launch backend records intent but does not spawn applications yet",
+            ),
+            PlatformCapability::unsupported(
+                self.platform,
                 Feature::WindowResize,
                 unsupported_reason,
             ),
@@ -1316,7 +1420,7 @@ mod tests {
         let service = DefaultCapabilityService::new(Platform::Windows);
         let capabilities = service.platform_capabilities();
 
-        assert_eq!(capabilities.len(), 7);
+        assert_eq!(capabilities.len(), 8);
         assert!(capabilities.iter().all(|capability| !capability.supported));
         assert!(capabilities
             .iter()
@@ -1618,6 +1722,12 @@ event=request_authorized operation=health\n"
                     id: "window-session-1".to_string(),
                     title: "terminal".to_string(),
                 },
+                launch_intent: Some(ApplicationLaunchIntent {
+                    session_id: "session-1".to_string(),
+                    application_id: "terminal".to_string(),
+                    launch: None,
+                    status: LaunchIntentStatus::Recorded,
+                }),
                 viewport: ViewportSize::new(1280, 720),
                 resize_intent: None,
                 state: SessionState::Ready,
@@ -1639,6 +1749,61 @@ event=request_authorized operation=health\n"
             }),
             Err(SwavanError::PermissionDenied(
                 "application browser is not allowed".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn session_service_records_launch_intent_for_discovered_application() {
+        let mut service = InMemoryApplicationSessionService::default();
+        let session = service
+            .create_session_for_application(
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+                ApplicationSummary {
+                    id: "terminal".to_string(),
+                    name: "Terminal".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::DesktopCommand {
+                        command: "gnome-terminal".to_string(),
+                    }),
+                },
+            )
+            .expect("create session");
+
+        assert_eq!(session.selected_window.title, "Terminal");
+        assert_eq!(
+            session.launch_intent,
+            Some(ApplicationLaunchIntent {
+                session_id: "session-1".to_string(),
+                application_id: "terminal".to_string(),
+                launch: Some(ApplicationLaunch::DesktopCommand {
+                    command: "gnome-terminal".to_string(),
+                }),
+                status: LaunchIntentStatus::Recorded,
+            })
+        );
+    }
+
+    #[test]
+    fn session_service_reports_unsupported_launch_backend() {
+        let mut service = InMemoryApplicationSessionService::with_launch_backend(
+            SessionPolicy::allow_all(),
+            ApplicationLaunchBackendService::Unsupported {
+                platform: Platform::Linux,
+            },
+        );
+
+        assert_eq!(
+            service.create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            }),
+            Err(SwavanError::unsupported(
+                Platform::Linux,
+                Feature::ApplicationLaunch
             ))
         );
     }

@@ -98,6 +98,9 @@ Scope:
 - completed resize intent slice: session resize requests record backend intent,
   expose resize status to the client, and unsupported resize backends return
   typed unsupported errors
+- completed launch intent slice: sessions record launch metadata from
+  discovered applications and unsupported launch backends return typed
+  unsupported errors
 - application listing with names and icons
 - launch or attach-to-running-app flow
 - selected-window identity model
