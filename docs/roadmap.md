@@ -298,6 +298,9 @@ Completed:
   contract plumbing and a fake test runtime that can feed capture-leg media
   counters into native media session status; production feature builds still
   use the unavailable boundary and do not claim live PipeWire packets
+- active audio streams reconcile PipeWire capture runtime readiness changes so
+  capture telemetry starts when the test runtime becomes available and clears
+  when it returns to the unavailable adapter boundary
 - server composition has an optional `pipewire-capture` feature that forwards
   to the core boundary and reports the Linux PipeWire capture adapter boundary
   as unavailable without changing default server behavior or affecting macOS
