@@ -15,11 +15,12 @@ desktop applications from a mobile or desktop client.
 
 ## Current Phase
 
-Phase 2 is complete. It includes the authenticated server control plane,
+Phase 3 is complete. It includes the authenticated server control plane,
 server config persistence, SSH tunnel command planning and process lifecycle
-supervision, Linux/macOS application discovery, Rust-owned client profile
-persistence, structured logs, and service manifest generation. Application
-sessions, media streaming, and input forwarding start in later phases.
+supervision, Linux/macOS application discovery, Rust-owned client profile and
+application permission persistence, structured logs, service manifest
+generation, and managed application window session state. Media streaming and
+input forwarding start in later phases.
 
 See `docs/roadmap.md` for the full path from Phase 1 to production release.
 
@@ -27,6 +28,7 @@ See `docs/roadmap.md` for the full path from Phase 1 to production release.
 
 ```sh
 cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
@@ -36,4 +38,6 @@ The Tauri/Svelte app requires Node dependencies before frontend checks can run:
 cd apps/client-tauri
 npm install
 npm test
+npm run build
+npm audit --omit=dev
 ```

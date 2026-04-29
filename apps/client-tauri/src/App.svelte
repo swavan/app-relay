@@ -286,7 +286,10 @@
               {app.iconView.label}
             </span>
           {/if}
-          <span>{app.name}</span>
+          <span class="app-copy">
+            <strong>{app.name}</strong>
+            <small>{app.launchLabel}</small>
+          </span>
         </button>
       {/each}
     {/if}

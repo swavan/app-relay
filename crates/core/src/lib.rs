@@ -62,7 +62,11 @@ impl ApplicationLaunchBackend for ApplicationLaunchBackendService {
                 session_id: session_id.to_string(),
                 application_id: application.id.clone(),
                 launch: application.launch.clone(),
-                status: LaunchIntentStatus::Recorded,
+                status: if application.launch.is_some() {
+                    LaunchIntentStatus::Recorded
+                } else {
+                    LaunchIntentStatus::Attached
+                },
             }),
             Self::Unsupported { platform } => Err(SwavanError::unsupported(
                 *platform,
@@ -937,10 +941,10 @@ impl InMemoryApplicationSessionService {
         let launch_intent = self
             .launch_backend
             .prepare_launch(&application, &session_id)?;
-        let selection_method = if launch_intent.launch.is_some() {
-            WindowSelectionMethod::LaunchIntent
-        } else {
-            WindowSelectionMethod::Synthetic
+        let selection_method = match launch_intent.status {
+            LaunchIntentStatus::Recorded => WindowSelectionMethod::LaunchIntent,
+            LaunchIntentStatus::Attached => WindowSelectionMethod::ExistingWindow,
+            LaunchIntentStatus::Unsupported => WindowSelectionMethod::Synthetic,
         };
         let session = ApplicationSession {
             id: session_id.clone(),
@@ -1307,7 +1311,7 @@ impl CapabilityService for DefaultCapabilityService {
             PlatformCapability::unsupported(
                 self.platform,
                 Feature::ApplicationLaunch,
-                "native launch backend records intent but does not spawn applications yet",
+                "native launch backend records launch or attach intent but does not spawn applications yet",
             ),
             PlatformCapability::unsupported(
                 self.platform,
@@ -1909,13 +1913,13 @@ event=request_authorized operation=health\n"
                     id: "window-session-1".to_string(),
                     application_id: "terminal".to_string(),
                     title: "terminal".to_string(),
-                    selection_method: WindowSelectionMethod::Synthetic,
+                    selection_method: WindowSelectionMethod::ExistingWindow,
                 },
                 launch_intent: Some(ApplicationLaunchIntent {
                     session_id: "session-1".to_string(),
                     application_id: "terminal".to_string(),
                     launch: None,
-                    status: LaunchIntentStatus::Recorded,
+                    status: LaunchIntentStatus::Attached,
                 }),
                 viewport: ViewportSize::new(1280, 720),
                 resize_intent: None,
@@ -1939,6 +1943,39 @@ event=request_authorized operation=health\n"
             Err(SwavanError::PermissionDenied(
                 "application browser is not allowed".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn session_service_attaches_when_launch_metadata_is_absent() {
+        let mut service = InMemoryApplicationSessionService::default();
+        let session = service
+            .create_session_for_application(
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+                ApplicationSummary {
+                    id: "terminal".to_string(),
+                    name: "Terminal".to_string(),
+                    icon: None,
+                    launch: None,
+                },
+            )
+            .expect("create session");
+
+        assert_eq!(
+            session.selected_window.selection_method,
+            WindowSelectionMethod::ExistingWindow
+        );
+        assert_eq!(
+            session.launch_intent,
+            Some(ApplicationLaunchIntent {
+                session_id: "session-1".to_string(),
+                application_id: "terminal".to_string(),
+                launch: None,
+                status: LaunchIntentStatus::Attached,
+            })
         );
     }
 
