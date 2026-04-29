@@ -24,6 +24,7 @@
     inputModeFromDelivery,
     inputViewportForSession
   } from "./inputForwarding";
+  import type { AudioStreamSession } from "./audioStreams";
   import type { VideoStreamSession } from "./videoStreams";
 
   const profilesService = new TauriConnectionProfileService();
@@ -37,6 +38,7 @@
   let selectedProfile: ConnectionProfile | null = null;
   let activeSession: ApplicationSession | null = null;
   let activeStream: VideoStreamSession | null = null;
+  let activeAudioStream: AudioStreamSession | null = null;
   let apps: AppSummary[] = [];
   let view: "tile" | "list" = "tile";
   let viewportWidth = "1280";
@@ -44,8 +46,14 @@
   let errorMessage = "";
   let sessionMessage = "";
   let streamMessage = "";
+  let audioMessage = "";
   let inputMessage = "";
   let inputMode = false;
+  let microphoneEnabled = false;
+  let systemAudioMuted = false;
+  let microphoneMuted = true;
+  let outputDeviceId = "";
+  let inputDeviceId = "";
   let loading = true;
 
   const viewportPresets: ViewportSize[] = [
@@ -56,6 +64,7 @@
 
   $: requestedViewport = parseViewport(viewportWidth, viewportHeight);
   $: viewportValid = requestedViewport !== null;
+  $: audioStreamActive = activeAudioStream !== null && activeAudioStream.state !== "stopped";
 
   $: appView = buildAppViewModel({
     health,
@@ -124,7 +133,11 @@
       if (activeStream && activeStream.state !== "stopped") {
         await remote.stopVideoStream(activeStream.id);
       }
+      if (audioStreamActive && activeAudioStream) {
+        await remote.stopAudioStream(activeAudioStream.id);
+      }
       activeStream = null;
+      activeAudioStream = null;
       activeSession = await remote.createSession(app.id, requestedViewport);
     } catch (error) {
       sessionMessage = error instanceof Error ? error.message : String(error);
@@ -167,6 +180,10 @@
         await remote.stopVideoStream(activeStream.id);
         activeStream = null;
       }
+      if (audioStreamActive && activeAudioStream) {
+        await remote.stopAudioStream(activeAudioStream.id);
+      }
+      activeAudioStream = null;
       inputMode = false;
       await remote.closeSession(activeSession.id);
       activeSession = null;
@@ -283,6 +300,58 @@
     }
   }
 
+  async function startAudioStream() {
+    if (!activeSession) {
+      return;
+    }
+
+    try {
+      audioMessage = "";
+      activeAudioStream = await remote.startAudioStream(activeSession.id, {
+        microphone: microphoneEnabled ? "enabled" : "disabled",
+        systemAudioMuted,
+        microphoneMuted,
+        outputDeviceId: optionalDeviceId(outputDeviceId),
+        inputDeviceId: optionalDeviceId(inputDeviceId)
+      });
+    } catch (error) {
+      audioMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function stopAudioStream() {
+    if (!audioStreamActive || !activeAudioStream) {
+      activeAudioStream = null;
+      return;
+    }
+
+    try {
+      audioMessage = "";
+      const stoppedStream = await remote.stopAudioStream(activeAudioStream.id);
+      activeAudioStream = stoppedStream.state === "stopped" ? null : stoppedStream;
+    } catch (error) {
+      audioMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function updateAudioStream() {
+    if (!audioStreamActive || !activeAudioStream) {
+      return;
+    }
+
+    try {
+      audioMessage = "";
+      activeAudioStream = await remote.updateAudioStream(activeAudioStream.id, {
+        systemAudioMuted,
+        microphoneMuted,
+        outputDeviceId: optionalDeviceId(outputDeviceId),
+        inputDeviceId: optionalDeviceId(inputDeviceId)
+      });
+    } catch (error) {
+      audioMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   function setViewport(viewport: ViewportSize) {
     viewportWidth = String(viewport.width);
     viewportHeight = String(viewport.height);
@@ -312,6 +381,11 @@
       requestedViewport?.width === viewport.width &&
       requestedViewport?.height === viewport.height
     );
+  }
+
+  function optionalDeviceId(value: string) {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
   }
 </script>
 
@@ -426,6 +500,38 @@
         </button>
       </div>
     </section>
+    <section class="status audio-controls" aria-label="Audio controls">
+      <span>
+        Audio
+        {#if activeAudioStream}
+          <small>{activeAudioStream.state}</small>
+        {/if}
+      </span>
+      <div class="audio-panel">
+        <label>
+          <input bind:checked={microphoneEnabled} disabled={audioStreamActive} type="checkbox" />
+          Mic
+        </label>
+        <label>
+          <input bind:checked={systemAudioMuted} type="checkbox" />
+          Mute audio
+        </label>
+        <label>
+          <input bind:checked={microphoneMuted} type="checkbox" />
+          Mute mic
+        </label>
+        <input bind:value={outputDeviceId} placeholder="Output device" type="text" />
+        <input bind:value={inputDeviceId} placeholder="Input device" type="text" />
+        <div class="session-actions">
+          {#if audioStreamActive}
+            <button on:click={updateAudioStream} type="button">Apply</button>
+            <button on:click={stopAudioStream} type="button">Stop Audio</button>
+          {:else}
+            <button on:click={startAudioStream} type="button">Audio</button>
+          {/if}
+        </div>
+      </div>
+    </section>
   {/if}
 
   {#if activeSession}
@@ -443,6 +549,13 @@
     <section class="status error" aria-label="Stream error">
       <span>Stream error</span>
       <strong>{streamMessage}</strong>
+    </section>
+  {/if}
+
+  {#if audioMessage}
+    <section class="status error" aria-label="Audio error">
+      <span>Audio error</span>
+      <strong>{audioMessage}</strong>
     </section>
   {/if}
 

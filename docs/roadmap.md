@@ -233,9 +233,9 @@ Completed:
 - explicit unsupported keyboard and pointer backend errors
 - client service methods and lightweight input mode controls
 
-## Phase 6: Audio And Microphone
+## Phase 6: Audio And Microphone (In Progress)
 
-Goal: support bidirectional audio where the platform allows it.
+Goal: support desktop audio control-plane behavior now and bidirectional audio where the platform allows it.
 
 Scope:
 
@@ -249,12 +249,27 @@ Scope:
 
 Acceptance criteria:
 
-- server reports exact audio capability per platform
+- server reports exact desktop audio control-plane capability per platform
 - audio stream can start and stop independently from video
 - microphone input is opt-in per session
 - mute state is enforced locally and remotely
 - tests cover capability negotiation and stream state
 - manual release checklist covers latency, mute, and permission behavior
+
+Completed:
+
+- transport-neutral audio and microphone stream contract
+- server-side audio stream lifecycle independent from video streams
+- per-session opt-in microphone mode and mute/device control state
+- desktop audio control-plane capability negotiation for system audio and client microphone input
+- control-plane and client service tests for audio stream state
+- client controls for independent audio start, stop, mute, microphone opt-in, and device IDs
+- manual latency, mute, device, and permission release checklist
+
+Remaining:
+
+- native platform capture and playback backends
+- server-side microphone injection backend
 
 ## Phase 7: Cross-Platform Hardening
 

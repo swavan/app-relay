@@ -1,5 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AudioStreamSession,
+  AudioStreamStartOptions,
+  AudioStreamUpdate
+} from "./audioStreams";
+import type {
   VideoStreamSession,
   WebRtcIceCandidate,
   WebRtcSessionDescription
@@ -138,6 +143,13 @@ export interface RemoteService {
   ): Promise<InputDelivery>;
   startVideoStream(sessionId: string): Promise<VideoStreamSession>;
   stopVideoStream(streamId: string): Promise<VideoStreamSession>;
+  startAudioStream(
+    sessionId: string,
+    options: AudioStreamStartOptions
+  ): Promise<AudioStreamSession>;
+  stopAudioStream(streamId: string): Promise<AudioStreamSession>;
+  updateAudioStream(streamId: string, update: AudioStreamUpdate): Promise<AudioStreamSession>;
+  audioStreamStatus(streamId: string): Promise<AudioStreamSession>;
   reconnectVideoStream(streamId: string): Promise<VideoStreamSession>;
   negotiateVideoStream(
     streamId: string,
@@ -218,6 +230,40 @@ export class TauriRemoteService implements RemoteService {
     return invoke<VideoStreamSession>("stop_video_stream", {
       authToken: this.authToken,
       request: { streamId }
+    });
+  }
+
+  async startAudioStream(
+    sessionId: string,
+    options: AudioStreamStartOptions
+  ): Promise<AudioStreamSession> {
+    return invoke<AudioStreamSession>("start_audio_stream", {
+      authToken: this.authToken,
+      request: { sessionId, ...options }
+    });
+  }
+
+  async stopAudioStream(streamId: string): Promise<AudioStreamSession> {
+    return invoke<AudioStreamSession>("stop_audio_stream", {
+      authToken: this.authToken,
+      request: { streamId }
+    });
+  }
+
+  async updateAudioStream(
+    streamId: string,
+    update: AudioStreamUpdate
+  ): Promise<AudioStreamSession> {
+    return invoke<AudioStreamSession>("update_audio_stream", {
+      authToken: this.authToken,
+      request: { streamId, ...update }
+    });
+  }
+
+  async audioStreamStatus(streamId: string): Promise<AudioStreamSession> {
+    return invoke<AudioStreamSession>("audio_stream_status", {
+      authToken: this.authToken,
+      streamId
     });
   }
 

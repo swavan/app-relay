@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { InputEvent, RemoteService, ViewportSize } from "./services";
+import type { AudioStreamStartOptions, AudioStreamUpdate } from "./audioStreams";
 import type { WebRtcIceCandidate, WebRtcSessionDescription } from "./videoStreams";
 
 const streamOffer = {
@@ -269,6 +270,118 @@ class FakeRemoteService implements RemoteService {
         message: "stream stopped by client"
       },
       state: "stopped" as const
+    };
+  }
+
+  async startAudioStream(sessionId: string, options: AudioStreamStartOptions) {
+    return {
+      id: "audio-stream-1",
+      sessionId,
+      selectedWindowId: "window-session-1",
+      source: {
+        scope: "selectedApplication" as const,
+        selectedWindowId: "window-session-1",
+        applicationId: "terminal",
+        title: "Terminal"
+      },
+      devices: {
+        outputDeviceId: options.outputDeviceId,
+        inputDeviceId: options.inputDeviceId
+      },
+      microphone: options.microphone,
+      mute: {
+        systemAudioMuted: options.systemAudioMuted,
+        microphoneMuted: options.microphoneMuted
+      },
+      capabilities: {
+        systemAudio: { supported: true },
+        microphoneCapture: { supported: true },
+        microphoneInjection: {
+          supported: false,
+          reason: "server-side microphone injection backend is not implemented yet"
+        },
+        echoCancellation: { supported: true },
+        deviceSelection: { supported: true }
+      },
+      stats: {
+        packetsSent: 0,
+        packetsReceived: 0,
+        latencyMs: 0
+      },
+      health: {
+        healthy: true,
+        message: "audio stream started"
+      },
+      state: "streaming" as const
+    };
+  }
+
+  async stopAudioStream(streamId: string) {
+    return {
+      ...(await this.audioStreamStatus(streamId)),
+      health: {
+        healthy: false,
+        message: "audio stream stopped by client"
+      },
+      state: "stopped" as const
+    };
+  }
+
+  async updateAudioStream(streamId: string, update: AudioStreamUpdate) {
+    return {
+      ...(await this.audioStreamStatus(streamId)),
+      devices: {
+        outputDeviceId: update.outputDeviceId,
+        inputDeviceId: update.inputDeviceId
+      },
+      mute: {
+        systemAudioMuted: update.systemAudioMuted,
+        microphoneMuted: update.microphoneMuted
+      },
+      health: {
+        healthy: true,
+        message: "audio stream controls updated"
+      }
+    };
+  }
+
+  async audioStreamStatus(streamId: string) {
+    return {
+      id: streamId,
+      sessionId: "session-1",
+      selectedWindowId: "window-session-1",
+      source: {
+        scope: "selectedApplication" as const,
+        selectedWindowId: "window-session-1",
+        applicationId: "terminal",
+        title: "Terminal"
+      },
+      devices: {},
+      microphone: "disabled" as const,
+      mute: {
+        systemAudioMuted: false,
+        microphoneMuted: true
+      },
+      capabilities: {
+        systemAudio: { supported: true },
+        microphoneCapture: { supported: true },
+        microphoneInjection: {
+          supported: false,
+          reason: "server-side microphone injection backend is not implemented yet"
+        },
+        echoCancellation: { supported: true },
+        deviceSelection: { supported: true }
+      },
+      stats: {
+        packetsSent: 0,
+        packetsReceived: 0,
+        latencyMs: 0
+      },
+      health: {
+        healthy: true,
+        message: "audio stream started"
+      },
+      state: "streaming" as const
     };
   }
 
@@ -610,6 +723,62 @@ describe("RemoteService contract", () => {
     });
     await expect(service.stopVideoStream("stream-1")).resolves.toMatchObject({
       id: "stream-1",
+      state: "stopped"
+    });
+  });
+
+  it("starts, updates, checks, and stops audio streams", async () => {
+    const service = new FakeRemoteService();
+
+    await expect(
+      service.startAudioStream("session-1", {
+        microphone: "enabled",
+        systemAudioMuted: false,
+        microphoneMuted: true,
+        outputDeviceId: "speakers",
+        inputDeviceId: "mic"
+      })
+    ).resolves.toMatchObject({
+      id: "audio-stream-1",
+      sessionId: "session-1",
+      microphone: "enabled",
+      mute: {
+        systemAudioMuted: false,
+        microphoneMuted: true
+      },
+      capabilities: {
+        systemAudio: {
+          supported: true
+        },
+        microphoneCapture: {
+          supported: true
+        }
+      },
+      state: "streaming"
+    });
+    await expect(
+      service.updateAudioStream("audio-stream-1", {
+        systemAudioMuted: true,
+        microphoneMuted: true,
+        outputDeviceId: "headphones"
+      })
+    ).resolves.toMatchObject({
+      devices: {
+        outputDeviceId: "headphones"
+      },
+      mute: {
+        systemAudioMuted: true
+      },
+      health: {
+        message: "audio stream controls updated"
+      }
+    });
+    await expect(service.audioStreamStatus("audio-stream-1")).resolves.toMatchObject({
+      id: "audio-stream-1",
+      state: "streaming"
+    });
+    await expect(service.stopAudioStream("audio-stream-1")).resolves.toMatchObject({
+      id: "audio-stream-1",
       state: "stopped"
     });
   });

@@ -1,8 +1,10 @@
 //! Core service contracts for AppRelay.
 
+mod audio_stream;
 mod input;
 mod video_stream;
 
+pub use audio_stream::{AudioBackendService, AudioStreamService, InMemoryAudioStreamService};
 pub use input::{
     map_point, InMemoryInputForwardingService, InputBackend, InputBackendService,
     InputForwardingService,
@@ -1299,6 +1301,15 @@ impl DefaultCapabilityService {
 impl CapabilityService for DefaultCapabilityService {
     fn platform_capabilities(&self) -> Vec<PlatformCapability> {
         let unsupported_reason = "feature planned but not implemented in Phase 1";
+        let audio_reason = match self.platform {
+            Platform::Linux | Platform::Macos | Platform::Windows => {
+                "desktop audio control-plane backend is available for negotiation"
+            }
+            Platform::Android | Platform::Ios => {
+                "mobile platforms are client targets and do not expose desktop audio control-plane capture"
+            }
+            Platform::Unknown => "unknown platform cannot expose desktop audio control-plane capture",
+        };
         let app_discovery = match self.platform {
             Platform::Linux | Platform::Macos => {
                 PlatformCapability::supported(self.platform, Feature::AppDiscovery)
@@ -1337,16 +1348,30 @@ impl CapabilityService for DefaultCapabilityService {
                 Feature::WindowVideoStream,
                 unsupported_reason,
             ),
-            PlatformCapability::unsupported(
+            if matches!(
                 self.platform,
-                Feature::SystemAudioStream,
-                unsupported_reason,
-            ),
-            PlatformCapability::unsupported(
+                Platform::Linux | Platform::Macos | Platform::Windows
+            ) {
+                PlatformCapability::supported(self.platform, Feature::SystemAudioStream)
+            } else {
+                PlatformCapability::unsupported(
+                    self.platform,
+                    Feature::SystemAudioStream,
+                    audio_reason,
+                )
+            },
+            if matches!(
                 self.platform,
-                Feature::ClientMicrophoneInput,
-                unsupported_reason,
-            ),
+                Platform::Linux | Platform::Macos | Platform::Windows
+            ) {
+                PlatformCapability::supported(self.platform, Feature::ClientMicrophoneInput)
+            } else {
+                PlatformCapability::unsupported(
+                    self.platform,
+                    Feature::ClientMicrophoneInput,
+                    audio_reason,
+                )
+            },
             PlatformCapability::unsupported(
                 self.platform,
                 Feature::KeyboardInput,
@@ -1621,15 +1646,23 @@ mod tests {
     }
 
     #[test]
-    fn default_capabilities_are_explicitly_unsupported() {
+    fn windows_capabilities_keep_non_audio_gaps_explicit() {
         let service = DefaultCapabilityService::new(Platform::Windows);
         let capabilities = service.platform_capabilities();
 
         assert_eq!(capabilities.len(), 8);
-        assert!(capabilities.iter().all(|capability| !capability.supported));
         assert!(capabilities
             .iter()
             .all(|capability| capability.platform == Platform::Windows));
+        assert!(capabilities.iter().any(|capability| {
+            capability.feature == Feature::SystemAudioStream && capability.supported
+        }));
+        assert!(capabilities.iter().any(|capability| {
+            capability.feature == Feature::ClientMicrophoneInput && capability.supported
+        }));
+        assert!(capabilities.iter().any(|capability| {
+            capability.feature == Feature::AppDiscovery && !capability.supported
+        }));
     }
 
     #[test]

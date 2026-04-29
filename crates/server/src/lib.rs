@@ -1,5 +1,6 @@
 //! Server composition for AppRelay.
 
+mod audio_stream;
 mod video_stream;
 
 use std::fs;
@@ -15,13 +16,15 @@ use apprelay_core::{
     ServerConfig, ServerEvent, SessionPolicy, StaticHealthService, UnsupportedApplicationDiscovery,
 };
 use apprelay_protocol::{
-    AppRelayError, ApplicationSession, ApplicationSummary, ControlAuth, ControlError,
-    ControlResult, CreateSessionRequest, ForwardInputRequest, HealthStatus, HeartbeatStatus,
-    InputDelivery, NegotiateVideoStreamRequest, Platform, PlatformCapability,
-    ReconnectVideoStreamRequest, ResizeSessionRequest, ServerVersion, StartVideoStreamRequest,
-    StopVideoStreamRequest, VideoStreamSession,
+    AppRelayError, ApplicationSession, ApplicationSummary, AudioStreamSession, ControlAuth,
+    ControlError, ControlResult, CreateSessionRequest, ForwardInputRequest, HealthStatus,
+    HeartbeatStatus, InputDelivery, NegotiateVideoStreamRequest, Platform, PlatformCapability,
+    ReconnectVideoStreamRequest, ResizeSessionRequest, ServerVersion, StartAudioStreamRequest,
+    StartVideoStreamRequest, StopAudioStreamRequest, StopVideoStreamRequest,
+    UpdateAudioStreamRequest, VideoStreamSession,
 };
 
+use crate::audio_stream::AudioStreamControl;
 use crate::video_stream::VideoStreamControl;
 
 #[derive(Debug)]
@@ -32,6 +35,7 @@ pub struct ServerServices {
     session_service: InMemoryApplicationSessionService,
     input_forwarding: InMemoryInputForwardingService,
     video_stream: VideoStreamControl,
+    audio_stream: AudioStreamControl,
     platform: Platform,
     version: String,
 }
@@ -47,6 +51,7 @@ impl ServerServices {
             session_service: InMemoryApplicationSessionService::new(SessionPolicy::allow_all()),
             input_forwarding: InMemoryInputForwardingService::default(),
             video_stream: VideoStreamControl::for_platform(platform),
+            audio_stream: AudioStreamControl::for_platform(platform),
             platform,
             version,
         }
@@ -103,6 +108,7 @@ impl ServerServices {
         let session = self.session_service.close_session(session_id)?;
         self.input_forwarding.close_session(session_id);
         self.video_stream.record_session_closed(session_id);
+        self.audio_stream.record_session_closed(session_id);
         Ok(session)
     }
 
@@ -152,6 +158,35 @@ impl ServerServices {
         stream_id: &str,
     ) -> Result<VideoStreamSession, AppRelayError> {
         self.video_stream.status(stream_id)
+    }
+
+    pub fn start_audio_stream(
+        &mut self,
+        request: StartAudioStreamRequest,
+    ) -> Result<AudioStreamSession, AppRelayError> {
+        self.audio_stream
+            .start(request, &self.session_service.active_sessions())
+    }
+
+    pub fn stop_audio_stream(
+        &mut self,
+        request: StopAudioStreamRequest,
+    ) -> Result<AudioStreamSession, AppRelayError> {
+        self.audio_stream.stop(request)
+    }
+
+    pub fn update_audio_stream(
+        &mut self,
+        request: UpdateAudioStreamRequest,
+    ) -> Result<AudioStreamSession, AppRelayError> {
+        self.audio_stream.update(request)
+    }
+
+    pub fn audio_stream_status(
+        &self,
+        stream_id: &str,
+    ) -> Result<AudioStreamSession, AppRelayError> {
+        self.audio_stream.status(stream_id)
     }
 
     pub fn version(&self) -> ServerVersion {
@@ -324,6 +359,48 @@ impl ServerControlPlane {
         self.authorize(auth)?;
         self.services
             .video_stream_status(stream_id)
+            .map_err(Into::into)
+    }
+
+    pub fn start_audio_stream(
+        &mut self,
+        auth: &ControlAuth,
+        request: StartAudioStreamRequest,
+    ) -> ControlResult<AudioStreamSession> {
+        self.authorize(auth)?;
+        self.services
+            .start_audio_stream(request)
+            .map_err(Into::into)
+    }
+
+    pub fn stop_audio_stream(
+        &mut self,
+        auth: &ControlAuth,
+        request: StopAudioStreamRequest,
+    ) -> ControlResult<AudioStreamSession> {
+        self.authorize(auth)?;
+        self.services.stop_audio_stream(request).map_err(Into::into)
+    }
+
+    pub fn update_audio_stream(
+        &mut self,
+        auth: &ControlAuth,
+        request: UpdateAudioStreamRequest,
+    ) -> ControlResult<AudioStreamSession> {
+        self.authorize(auth)?;
+        self.services
+            .update_audio_stream(request)
+            .map_err(Into::into)
+    }
+
+    pub fn audio_stream_status(
+        &self,
+        auth: &ControlAuth,
+        stream_id: &str,
+    ) -> ControlResult<AudioStreamSession> {
+        self.authorize(auth)?;
+        self.services
+            .audio_stream_status(stream_id)
             .map_err(Into::into)
     }
 

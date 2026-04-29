@@ -113,10 +113,42 @@ h1 {
 }
 
 .session-actions,
+.audio-panel,
 .presets,
 .viewport-fields {
   display: flex;
   gap: 8px;
+}
+
+.audio-controls {
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.audio-panel {
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.audio-panel label {
+  align-items: center;
+  color: var(--apprelay-muted);
+  display: flex;
+  gap: 6px;
+  min-height: 38px;
+}
+
+.audio-panel input[type="text"] {
+  background: var(--apprelay-bg);
+  border: 1px solid var(--apprelay-border);
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: var(--apprelay-text);
+  font: inherit;
+  min-height: 38px;
+  padding: 8px;
+  width: 148px;
 }
 
 .viewport-controls {
@@ -230,12 +262,14 @@ h1 {
 
   .viewport-controls,
   .viewport-fields,
+  .audio-panel,
   .presets {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .viewport-fields input {
+  .viewport-fields input,
+  .audio-panel input[type="text"] {
     width: 100%;
   }
 }
