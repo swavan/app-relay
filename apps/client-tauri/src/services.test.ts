@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RemoteService, ViewportSize } from "./services";
+import type { InputEvent, RemoteService, ViewportSize } from "./services";
 import type { WebRtcIceCandidate, WebRtcSessionDescription } from "./videoStreams";
 
 const streamOffer = {
@@ -171,6 +171,30 @@ class FakeRemoteService implements RemoteService {
         height: 720
       },
       state: "closed" as const
+    };
+  }
+
+  async forwardInput(sessionId: string, clientViewport: ViewportSize, event: InputEvent) {
+    if (event.kind === "pointerMove") {
+      return {
+        sessionId,
+        selectedWindowId: "window-session-1",
+        mappedEvent: {
+          kind: "pointerMove" as const,
+          position: {
+            x: Math.floor((event.position.x / clientViewport.width) * 1280),
+            y: Math.floor((event.position.y / clientViewport.height) * 720)
+          }
+        },
+        status: "delivered" as const
+      };
+    }
+
+    return {
+      sessionId,
+      selectedWindowId: "window-session-1",
+      mappedEvent: event,
+      status: event.kind === "focus" ? ("focused" as const) : ("delivered" as const)
     };
   }
 
@@ -453,6 +477,36 @@ describe("RemoteService contract", () => {
     await expect(service.closeSession("session-1")).resolves.toMatchObject({
       id: "session-1",
       state: "closed"
+    });
+  });
+
+  it("forwards input events through the service contract", async () => {
+    const service = new FakeRemoteService();
+
+    await expect(
+      service.forwardInput("session-1", { width: 640, height: 360 }, { kind: "focus" })
+    ).resolves.toMatchObject({
+      sessionId: "session-1",
+      selectedWindowId: "window-session-1",
+      mappedEvent: {
+        kind: "focus"
+      },
+      status: "focused"
+    });
+    await expect(
+      service.forwardInput("session-1", { width: 640, height: 360 }, {
+        kind: "pointerMove",
+        position: { x: 320, y: 180 }
+      })
+    ).resolves.toMatchObject({
+      mappedEvent: {
+        kind: "pointerMove",
+        position: {
+          x: 640,
+          y: 360
+        }
+      },
+      status: "delivered"
     });
   });
 

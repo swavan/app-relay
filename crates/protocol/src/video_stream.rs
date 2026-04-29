@@ -39,6 +39,7 @@ pub struct VideoStreamSession {
     pub stats: VideoStreamStats,
     pub health: VideoStreamHealth,
     pub state: VideoStreamState,
+    pub failure: Option<VideoStreamFailure>,
     pub failure_reason: Option<String>,
 }
 
@@ -216,6 +217,37 @@ pub struct VideoStreamHealth {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct VideoStreamFailure {
+    pub kind: VideoStreamFailureKind,
+    pub message: String,
+    pub recovery: VideoStreamRecovery,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoStreamFailureKind {
+    AppClosed,
+    CaptureFailed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoStreamRecovery {
+    pub action: VideoStreamRecoveryAction,
+    pub message: String,
+    pub retryable: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoStreamRecoveryAction {
+    ReconnectStream,
+    RestartApplicationSession,
+    None,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum VideoStreamState {
     Starting,
     Streaming,
@@ -295,6 +327,7 @@ mod tests {
                 healthy: true,
                 message: None,
             },
+            failure: None,
             state: VideoStreamState::Starting,
             failure_reason: None,
         };

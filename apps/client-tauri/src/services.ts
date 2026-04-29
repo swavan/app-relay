@@ -65,6 +65,64 @@ export type ApplicationSession = {
   state: "starting" | "ready" | "closed";
 };
 
+export type ClientPoint = {
+  x: number;
+  y: number;
+};
+
+export type PointerButton = "primary" | "secondary" | "middle";
+export type ButtonAction = "press" | "release";
+export type KeyAction = "press" | "release";
+
+export type KeyModifiers = {
+  shift: boolean;
+  control: boolean;
+  alt: boolean;
+  meta: boolean;
+};
+
+export type InputEvent =
+  | { kind: "focus" }
+  | { kind: "blur" }
+  | { kind: "pointerMove"; position: ClientPoint }
+  | {
+      kind: "pointerButton";
+      position: ClientPoint;
+      button: PointerButton;
+      action: ButtonAction;
+    }
+  | { kind: "pointerScroll"; position: ClientPoint; deltaX: number; deltaY: number }
+  | { kind: "pointerDrag"; from: ClientPoint; to: ClientPoint; button: PointerButton }
+  | { kind: "keyboardText"; text: string }
+  | { kind: "keyboardKey"; key: string; action: KeyAction; modifiers: KeyModifiers };
+
+export type ServerPoint = {
+  x: number;
+  y: number;
+};
+
+export type MappedInputEvent =
+  | { kind: "focus" }
+  | { kind: "blur" }
+  | { kind: "pointerMove"; position: ServerPoint }
+  | {
+      kind: "pointerButton";
+      position: ServerPoint;
+      button: PointerButton;
+      action: ButtonAction;
+    }
+  | { kind: "pointerScroll"; position: ServerPoint; deltaX: number; deltaY: number }
+  | { kind: "pointerDrag"; from: ServerPoint; to: ServerPoint; button: PointerButton }
+  | { kind: "keyboardText"; text: string }
+  | { kind: "keyboardKey"; key: string; action: KeyAction; modifiers: KeyModifiers };
+
+export type InputDelivery = {
+  sessionId: string;
+  selectedWindowId: string;
+  mappedEvent: MappedInputEvent;
+  status: "focused" | "blurred" | "delivered" | "ignoredBlurred";
+};
+
 export interface RemoteService {
   health(): Promise<HealthStatus>;
   capabilities(): Promise<Capability[]>;
@@ -73,6 +131,11 @@ export interface RemoteService {
   createSession(applicationId: string, viewport: ViewportSize): Promise<ApplicationSession>;
   resizeSession(sessionId: string, viewport: ViewportSize): Promise<ApplicationSession>;
   closeSession(sessionId: string): Promise<ApplicationSession>;
+  forwardInput(
+    sessionId: string,
+    clientViewport: ViewportSize,
+    event: InputEvent
+  ): Promise<InputDelivery>;
   startVideoStream(sessionId: string): Promise<VideoStreamSession>;
   stopVideoStream(streamId: string): Promise<VideoStreamSession>;
   reconnectVideoStream(streamId: string): Promise<VideoStreamSession>;
@@ -130,6 +193,17 @@ export class TauriRemoteService implements RemoteService {
     return invoke<ApplicationSession>("close_application_session", {
       authToken: this.authToken,
       sessionId
+    });
+  }
+
+  async forwardInput(
+    sessionId: string,
+    clientViewport: ViewportSize,
+    event: InputEvent
+  ): Promise<InputDelivery> {
+    return invoke<InputDelivery>("forward_input", {
+      authToken: this.authToken,
+      request: { sessionId, clientViewport, event }
     });
   }
 

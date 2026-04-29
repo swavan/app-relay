@@ -11,15 +11,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use apprelay_core::{
     ApplicationDiscovery, ApplicationSessionService, CapabilityService, DefaultCapabilityService,
     DesktopEntryApplicationDiscovery, EventSink, HealthService, InMemoryApplicationSessionService,
-    MacosApplicationDiscovery, ServerConfig, ServerEvent, SessionPolicy, StaticHealthService,
-    UnsupportedApplicationDiscovery,
+    InMemoryInputForwardingService, InputForwardingService, MacosApplicationDiscovery,
+    ServerConfig, ServerEvent, SessionPolicy, StaticHealthService, UnsupportedApplicationDiscovery,
 };
 use apprelay_protocol::{
     AppRelayError, ApplicationSession, ApplicationSummary, ControlAuth, ControlError,
-    ControlResult, CreateSessionRequest, HealthStatus, HeartbeatStatus,
-    NegotiateVideoStreamRequest, Platform, PlatformCapability, ReconnectVideoStreamRequest,
-    ResizeSessionRequest, ServerVersion, StartVideoStreamRequest, StopVideoStreamRequest,
-    VideoStreamSession,
+    ControlResult, CreateSessionRequest, ForwardInputRequest, HealthStatus, HeartbeatStatus,
+    InputDelivery, NegotiateVideoStreamRequest, Platform, PlatformCapability,
+    ReconnectVideoStreamRequest, ResizeSessionRequest, ServerVersion, StartVideoStreamRequest,
+    StopVideoStreamRequest, VideoStreamSession,
 };
 
 use crate::video_stream::VideoStreamControl;
@@ -30,6 +30,7 @@ pub struct ServerServices {
     capability_service: DefaultCapabilityService,
     application_discovery: ApplicationDiscoveryService,
     session_service: InMemoryApplicationSessionService,
+    input_forwarding: InMemoryInputForwardingService,
     video_stream: VideoStreamControl,
     platform: Platform,
     version: String,
@@ -44,6 +45,7 @@ impl ServerServices {
             capability_service: DefaultCapabilityService::new(platform),
             application_discovery: ApplicationDiscoveryService::for_platform(platform),
             session_service: InMemoryApplicationSessionService::new(SessionPolicy::allow_all()),
+            input_forwarding: InMemoryInputForwardingService::default(),
             video_stream: VideoStreamControl::for_platform(platform),
             platform,
             version,
@@ -98,11 +100,22 @@ impl ServerServices {
     }
 
     pub fn close_session(&mut self, session_id: &str) -> Result<ApplicationSession, AppRelayError> {
-        self.session_service.close_session(session_id)
+        let session = self.session_service.close_session(session_id)?;
+        self.input_forwarding.close_session(session_id);
+        self.video_stream.record_session_closed(session_id);
+        Ok(session)
     }
 
     pub fn active_sessions(&self) -> Vec<ApplicationSession> {
         self.session_service.active_sessions()
+    }
+
+    pub fn forward_input(
+        &mut self,
+        request: ForwardInputRequest,
+    ) -> Result<InputDelivery, AppRelayError> {
+        self.input_forwarding
+            .forward_input(request, &self.session_service.active_sessions())
     }
 
     pub fn start_video_stream(
@@ -250,6 +263,15 @@ impl ServerControlPlane {
     pub fn active_sessions(&self, auth: &ControlAuth) -> ControlResult<Vec<ApplicationSession>> {
         self.authorize(auth)?;
         Ok(self.services.active_sessions())
+    }
+
+    pub fn forward_input(
+        &mut self,
+        auth: &ControlAuth,
+        request: ForwardInputRequest,
+    ) -> ControlResult<InputDelivery> {
+        self.authorize(auth)?;
+        self.services.forward_input(request).map_err(Into::into)
     }
 
     pub fn start_video_stream(

@@ -16,8 +16,14 @@
     type ApplicationSession,
     type Capability,
     type HealthStatus,
+    type InputEvent,
     type ViewportSize
   } from "./services";
+  import {
+    centerPoint,
+    inputModeFromDelivery,
+    inputViewportForSession
+  } from "./inputForwarding";
   import type { VideoStreamSession } from "./videoStreams";
 
   const profilesService = new TauriConnectionProfileService();
@@ -38,6 +44,8 @@
   let errorMessage = "";
   let sessionMessage = "";
   let streamMessage = "";
+  let inputMessage = "";
+  let inputMode = false;
   let loading = true;
 
   const viewportPresets: ViewportSize[] = [
@@ -105,6 +113,14 @@
         return;
       }
 
+      const previousSession = activeSession;
+      if (previousSession && inputMode) {
+        await blurInputSession(previousSession);
+      } else {
+        inputMode = false;
+        inputMessage = "";
+      }
+
       if (activeStream && activeStream.state !== "stopped") {
         await remote.stopVideoStream(activeStream.id);
       }
@@ -151,6 +167,7 @@
         await remote.stopVideoStream(activeStream.id);
         activeStream = null;
       }
+      inputMode = false;
       await remote.closeSession(activeSession.id);
       activeSession = null;
     } catch (error) {
@@ -168,6 +185,75 @@
       activeStream = await remote.startVideoStream(activeSession.id);
     } catch (error) {
       streamMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function setInputMode(enabled: boolean) {
+    if (!activeSession) {
+      return;
+    }
+
+    const delivery = await forwardInput({ kind: enabled ? "focus" : "blur" });
+    if (delivery) {
+      inputMode = inputModeFromDelivery(inputMode, delivery);
+    }
+  }
+
+  async function forwardInput(event: InputEvent) {
+    if (!activeSession) {
+      return null;
+    }
+
+    try {
+      inputMessage = "";
+      const delivery = await remote.forwardInput(
+        activeSession.id,
+        inputViewportForSession(activeSession),
+        event
+      );
+      inputMessage = `Input ${delivery.status}`;
+      return delivery;
+    } catch (error) {
+      inputMode = false;
+      inputMessage = error instanceof Error ? error.message : String(error);
+      return null;
+    }
+  }
+
+  async function sendTestClick() {
+    if (!activeSession) {
+      return;
+    }
+
+    // Phase 5 test controls target the current session viewport. Real pointer
+    // forwarding should switch to measured renderer bounds once decoded video exists.
+    const point = centerPoint(inputViewportForSession(activeSession));
+    await forwardInput({
+      kind: "pointerButton",
+      position: point,
+      button: "primary",
+      action: "press"
+    });
+    await forwardInput({
+      kind: "pointerButton",
+      position: point,
+      button: "primary",
+      action: "release"
+    });
+  }
+
+  async function sendTestText() {
+    await forwardInput({ kind: "keyboardText", text: "AppRelay" });
+  }
+
+  async function blurInputSession(session: ApplicationSession) {
+    try {
+      await remote.forwardInput(session.id, inputViewportForSession(session), { kind: "blur" });
+    } catch {
+      // Best-effort cleanup before replacing a session; server-side session auth still gates delivery.
+    } finally {
+      inputMode = false;
+      inputMessage = "";
     }
   }
 
@@ -322,6 +408,24 @@
         <button on:click={closeSession} type="button">Close</button>
       </div>
     </section>
+    <section class="status" aria-label="Input forwarding">
+      <span>Input</span>
+      <div class="session-actions">
+        <button
+          class:active={inputMode}
+          on:click={() => setInputMode(!inputMode)}
+          type="button"
+        >
+          {inputMode ? "Blur" : "Focus"}
+        </button>
+        <button disabled={!inputMode} on:click={sendTestClick} type="button">
+          Click
+        </button>
+        <button disabled={!inputMode} on:click={sendTestText} type="button">
+          Type
+        </button>
+      </div>
+    </section>
   {/if}
 
   {#if activeSession}
@@ -339,6 +443,13 @@
     <section class="status error" aria-label="Stream error">
       <span>Stream error</span>
       <strong>{streamMessage}</strong>
+    </section>
+  {/if}
+
+  {#if inputMessage}
+    <section class="status" aria-label="Input status">
+      <span>Input status</span>
+      <strong>{inputMessage}</strong>
     </section>
   {/if}
 

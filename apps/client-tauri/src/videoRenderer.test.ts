@@ -141,12 +141,25 @@ describe("buildVideoRendererView", () => {
       {
         ...baseStream,
         state: "failed",
-        failureReason: "capture backend failed",
+        failure: {
+          kind: "captureFailed",
+          message: "capture backend failed",
+          recovery: {
+            action: "reconnectStream",
+            message: "fix the capture backend and reconnect the stream",
+            retryable: true,
+          },
+        },
+        failureReason: "legacy capture backend failed",
       },
       null
     );
 
     expect(view.stateLabel).toBe("Failed");
     expect(view.healthLabel).toBe("capture backend failed");
+    expect(view.emptyHeading).toBe("Stream failed");
+    expect(view.emptyDetail).toBe("fix the capture backend and reconnect the stream");
+    expect(view.recoveryLabel).toBe("fix the capture backend and reconnect the stream");
+    expect(view.hasEncodedFrame).toBe(false);
   });
 });

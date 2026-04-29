@@ -140,7 +140,7 @@ Acceptance criteria:
 
 ## Phase 4: Video Streaming
 
-Status: in progress
+Status: complete
 
 Goal: stream only the selected application window to the client with acceptable
 latency.
@@ -171,8 +171,14 @@ Scope:
   metadata-backed selected-window preview surface with stream state, requested
   viewport versus encoding target, encoded frame and keyframe metadata, and
   empty/stopped states without claiming decoded video
-- session health and stream statistics
-- graceful recovery when the app closes or capture fails
+- completed session health and stream statistics slice: stream health, coherent
+  encoding/stat counters, reconnect attempts, latency, and bitrate metadata are
+  deterministic across start, negotiation, resize, reconnect, stop, and failure
+  states
+- completed graceful recovery slice: stream sessions now expose explicit
+  transport-neutral failure and recovery metadata for application-close and
+  capture-failure paths, reject stale app-close reconnects, and preserve
+  actionable retry guidance for recoverable capture failures
 
 Out of scope:
 
@@ -190,7 +196,7 @@ Acceptance criteria:
 - automated tests cover signaling and session state
 - manual release checklist includes visual verification on supported OS
 
-## Phase 5: Input Forwarding
+## Phase 5: Input Forwarding (Complete)
 
 Goal: forward client keyboard and pointer input to the selected application
 session.
@@ -218,6 +224,14 @@ Acceptance criteria:
 - unsupported input backends fail explicitly
 - integration tests cover event validation and session authorization
 - E2E tests cover basic click and typing workflows on supported platforms
+
+Completed:
+
+- transport-neutral pointer, keyboard, focus, and blur input contract
+- deterministic in-memory forwarding with coordinate mapping and delivery records
+- per-session authorization through the control plane and selected-window checks
+- explicit unsupported keyboard and pointer backend errors
+- client service methods and lightweight input mode controls
 
 ## Phase 6: Audio And Microphone
 
