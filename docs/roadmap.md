@@ -294,6 +294,10 @@ Completed:
   that can be configured as capture-only and unavailable until a real PipeWire
   runtime is wired; playback, client microphone capture, server-side microphone
   injection, macOS CoreAudio, and Windows WASAPI remain unaffected and planned
+- the feature-gated PipeWire capture boundary now has start/stop runtime
+  contract plumbing and a fake test runtime that can feed capture-leg media
+  counters into native media session status; production feature builds still
+  use the unavailable boundary and do not claim live PipeWire packets
 - server composition has an optional `pipewire-capture` feature that forwards
   to the core boundary and reports the Linux PipeWire capture adapter boundary
   as unavailable without changing default server behavior or affecting macOS
