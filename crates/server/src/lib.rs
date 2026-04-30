@@ -511,7 +511,7 @@ impl ForegroundControlServer {
                 });
                 "ERROR unauthorized".to_string()
             }
-            Err(ControlError::Service(_)) => "ERROR service".to_string(),
+            Err(ControlError::Service(error)) => format!("ERROR service {}", error.user_message()),
         }
     }
 }

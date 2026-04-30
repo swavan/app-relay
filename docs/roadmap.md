@@ -356,6 +356,8 @@ Completed:
   Android, iOS, and unknown platforms; core tests verify every platform reports
   every feature exactly once and every unsupported capability has a non-empty
   user-facing reason
+- protocol errors expose stable user-facing messages for typed unsupported
+  feature errors and control-plane service errors
 
 ## Phase 8: Security Review And Beta
 

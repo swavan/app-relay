@@ -99,6 +99,17 @@ impl Platform {
             Self::Unknown
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Android => "Android",
+            Self::Ios => "iOS",
+            Self::Linux => "Linux",
+            Self::Macos => "macOS",
+            Self::Windows => "Windows",
+            Self::Unknown => "this platform",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -111,6 +122,21 @@ pub enum Feature {
     ClientMicrophoneInput,
     KeyboardInput,
     MouseInput,
+}
+
+impl Feature {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::AppDiscovery => "application discovery",
+            Self::ApplicationLaunch => "application launch",
+            Self::WindowResize => "window resize",
+            Self::WindowVideoStream => "window video streaming",
+            Self::SystemAudioStream => "system audio streaming",
+            Self::ClientMicrophoneInput => "client microphone input",
+            Self::KeyboardInput => "keyboard input",
+            Self::MouseInput => "mouse input",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -279,19 +305,23 @@ impl AppRelayError {
     pub fn unsupported(platform: Platform, feature: Feature) -> Self {
         Self::UnsupportedPlatform { platform, feature }
     }
-}
 
-impl std::fmt::Display for AppRelayError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    pub fn user_message(&self) -> String {
         match self {
             Self::UnsupportedPlatform { platform, feature } => {
-                write!(formatter, "{feature:?} is unsupported on {platform:?}")
+                format!("{} is unsupported on {}", feature.label(), platform.label())
             }
             Self::ServiceUnavailable(message)
             | Self::InvalidRequest(message)
             | Self::PermissionDenied(message)
-            | Self::NotFound(message) => formatter.write_str(message),
+            | Self::NotFound(message) => message.clone(),
         }
+    }
+}
+
+impl std::fmt::Display for AppRelayError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.user_message())
     }
 }
 
@@ -335,6 +365,15 @@ impl From<AppRelayError> for ControlError {
     }
 }
 
+impl ControlError {
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::Unauthorized => "request is unauthorized".to_string(),
+            Self::Service(error) => error.user_message(),
+        }
+    }
+}
+
 pub type ControlResult<T> = Result<T, ControlError>;
 
 #[cfg(test)]
@@ -362,6 +401,33 @@ mod tests {
         assert_eq!(
             capability.reason.as_deref(),
             Some("capture backend not implemented")
+        );
+    }
+
+    #[test]
+    fn unsupported_errors_expose_user_facing_messages() {
+        let error = AppRelayError::unsupported(Platform::Macos, Feature::WindowVideoStream);
+
+        assert_eq!(
+            error.user_message(),
+            "window video streaming is unsupported on macOS"
+        );
+        assert_eq!(error.to_string(), error.user_message());
+    }
+
+    #[test]
+    fn control_errors_expose_user_facing_messages() {
+        assert_eq!(
+            ControlError::Unauthorized.user_message(),
+            "request is unauthorized"
+        );
+        assert_eq!(
+            ControlError::Service(AppRelayError::unsupported(
+                Platform::Windows,
+                Feature::AppDiscovery
+            ))
+            .user_message(),
+            "application discovery is unsupported on Windows"
         );
     }
 
