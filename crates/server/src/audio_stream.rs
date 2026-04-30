@@ -95,8 +95,11 @@ fn audio_backend_for_platform(platform: Platform) -> AudioBackendService {
 #[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
 fn pipewire_capture_command_config_from_env() -> PipeWireCaptureCommandConfig {
     let mut config = PipeWireCaptureCommandConfig::new(
-        std::env::var("APPRELAY_PIPEWIRE_CAPTURE_COMMAND")
-            .unwrap_or_else(|_| "pw-record".to_string()),
+        pipewire_capture_command_from_env_value(
+            std::env::var("APPRELAY_PIPEWIRE_CAPTURE_COMMAND")
+                .ok()
+                .as_deref(),
+        ),
         pipewire_capture_target_from_env_value(
             std::env::var("APPRELAY_PIPEWIRE_CAPTURE_TARGET")
                 .ok()
@@ -127,6 +130,14 @@ fn pipewire_capture_enabled_from_env() -> bool {
         std::env::var("APPRELAY_PIPEWIRE_CAPTURE").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
     )
+}
+
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+fn pipewire_capture_command_from_env_value(value: Option<&str>) -> String {
+    value
+        .filter(|value| !value.is_empty())
+        .unwrap_or("pw-record")
+        .to_string()
 }
 
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
@@ -162,13 +173,24 @@ fn pipewire_capture_target_from_env_value(value: Option<&str>) -> Option<String>
 mod tests {
     #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
     use super::{
-        pipewire_capture_channels_from_env_value, pipewire_capture_format_from_env_value,
-        pipewire_capture_rate_from_env_value, pipewire_capture_target_from_env_value,
+        pipewire_capture_channels_from_env_value, pipewire_capture_command_from_env_value,
+        pipewire_capture_format_from_env_value, pipewire_capture_rate_from_env_value,
+        pipewire_capture_target_from_env_value,
     };
 
     #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
     #[test]
     fn pipewire_capture_env_parameter_parsing_falls_back_conservatively() {
+        assert_eq!(
+            pipewire_capture_command_from_env_value(Some("pw-cat")),
+            "pw-cat"
+        );
+        assert_eq!(
+            pipewire_capture_command_from_env_value(Some("")),
+            "pw-record"
+        );
+        assert_eq!(pipewire_capture_command_from_env_value(None), "pw-record");
+
         assert_eq!(pipewire_capture_rate_from_env_value(Some("44100")), 44_100);
         assert_eq!(pipewire_capture_rate_from_env_value(Some("0")), 48_000);
         assert_eq!(pipewire_capture_rate_from_env_value(Some("bad")), 48_000);
