@@ -69,6 +69,7 @@ pub trait ApplicationLaunchBackend {
 }
 
 const MAX_APP_ICON_BYTES: u64 = 1_048_576;
+const MAX_INFO_PLIST_STRINGS_BYTES: u64 = 262_144;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApplicationLaunchBackendService {
@@ -2199,7 +2200,8 @@ fn parse_macos_app_bundle(path: &Path) -> Option<ApplicationSummary> {
         path.file_stem()
             .map(|value| value.to_string_lossy().into_owned())
     })?;
-    let name = plist_dictionary_string_value(info, "CFBundleDisplayName")
+    let name = localized_macos_bundle_name(path)
+        .or_else(|| plist_dictionary_string_value(info, "CFBundleDisplayName"))
         .or_else(|| plist_dictionary_string_value(info, "CFBundleName"))
         .or_else(|| {
             path.file_stem()
@@ -2252,6 +2254,170 @@ fn application_launch_sort_key(application: &ApplicationSummary) -> (bool, &str)
     }
 }
 
+fn localized_macos_bundle_name(path: &Path) -> Option<String> {
+    let strings_path = path
+        .join("Contents")
+        .join("Resources")
+        .join("en.lproj")
+        .join("InfoPlist.strings");
+    let entries = parse_macos_info_plist_strings(&strings_path)?;
+
+    localized_info_plist_string_value(&entries, "CFBundleDisplayName")
+        .or_else(|| localized_info_plist_string_value(&entries, "CFBundleName"))
+}
+
+fn localized_info_plist_string_value(entries: &[(String, String)], key: &str) -> Option<String> {
+    entries
+        .iter()
+        .find(|(entry_key, _)| entry_key == key)
+        .map(|(_, value)| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn parse_macos_info_plist_strings(path: &Path) -> Option<Vec<(String, String)>> {
+    let bytes = read_regular_file_bytes_limited(path, MAX_INFO_PLIST_STRINGS_BYTES)?;
+    let content = decode_macos_info_plist_strings(&bytes)?;
+    parse_quoted_string_pairs(&content)
+}
+
+fn decode_macos_info_plist_strings(bytes: &[u8]) -> Option<String> {
+    if bytes.starts_with(&[0xff, 0xfe]) {
+        return decode_utf16_bytes(&bytes[2..], true);
+    }
+    if bytes.starts_with(&[0xfe, 0xff]) {
+        return decode_utf16_bytes(&bytes[2..], false);
+    }
+
+    let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+    std::str::from_utf8(bytes).ok().map(str::to_string)
+}
+
+fn decode_utf16_bytes(bytes: &[u8], little_endian: bool) -> Option<String> {
+    if !bytes.len().is_multiple_of(2) {
+        return None;
+    }
+
+    let units = bytes.chunks_exact(2).map(|chunk| {
+        if little_endian {
+            u16::from_le_bytes([chunk[0], chunk[1]])
+        } else {
+            u16::from_be_bytes([chunk[0], chunk[1]])
+        }
+    });
+
+    String::from_utf16(&units.collect::<Vec<_>>()).ok()
+}
+
+fn parse_quoted_string_pairs(content: &str) -> Option<Vec<(String, String)>> {
+    let mut parser = QuotedStringPairParser::new(content);
+    parser.parse()
+}
+
+struct QuotedStringPairParser<'a> {
+    chars: std::iter::Peekable<std::str::Chars<'a>>,
+}
+
+impl<'a> QuotedStringPairParser<'a> {
+    fn new(content: &'a str) -> Self {
+        Self {
+            chars: content.chars().peekable(),
+        }
+    }
+
+    fn parse(&mut self) -> Option<Vec<(String, String)>> {
+        let mut entries = Vec::new();
+
+        loop {
+            self.skip_whitespace_and_comments()?;
+            if self.chars.peek().is_none() {
+                return Some(entries);
+            }
+
+            let key = self.parse_quoted_string()?;
+            self.skip_whitespace_and_comments()?;
+            self.expect_char('=')?;
+            self.skip_whitespace_and_comments()?;
+            let value = self.parse_quoted_string()?;
+            self.skip_whitespace_and_comments()?;
+            self.expect_char(';')?;
+            entries.push((key, value));
+        }
+    }
+
+    fn skip_whitespace_and_comments(&mut self) -> Option<()> {
+        loop {
+            while self
+                .chars
+                .peek()
+                .is_some_and(|character| character.is_whitespace())
+            {
+                self.chars.next();
+            }
+
+            let mut probe = self.chars.clone();
+            match (probe.next(), probe.next()) {
+                (Some('/'), Some('/')) => {
+                    self.chars.next();
+                    self.chars.next();
+                    for character in self.chars.by_ref() {
+                        if character == '\n' {
+                            break;
+                        }
+                    }
+                }
+                (Some('/'), Some('*')) => {
+                    self.chars.next();
+                    self.chars.next();
+                    let mut closed = false;
+                    let mut previous = '\0';
+                    for character in self.chars.by_ref() {
+                        if previous == '*' && character == '/' {
+                            closed = true;
+                            break;
+                        }
+                        previous = character;
+                    }
+                    if !closed {
+                        return None;
+                    }
+                }
+                _ => return Some(()),
+            }
+        }
+    }
+
+    fn parse_quoted_string(&mut self) -> Option<String> {
+        self.expect_char('"')?;
+        let mut value = String::new();
+
+        while let Some(character) = self.chars.next() {
+            match character {
+                '"' => return Some(value),
+                '\\' => value.push(self.parse_escape()?),
+                character => value.push(character),
+            }
+        }
+
+        None
+    }
+
+    fn parse_escape(&mut self) -> Option<char> {
+        match self.chars.next()? {
+            '"' => Some('"'),
+            '\\' => Some('\\'),
+            'n' => Some('\n'),
+            'r' => Some('\r'),
+            't' => Some('\t'),
+            _ => None,
+        }
+    }
+
+    fn expect_char(&mut self, expected: char) -> Option<()> {
+        (self.chars.next()? == expected).then_some(())
+    }
+}
+
 fn macos_bundle_icon(path: &Path, icon_file: &str) -> Option<AppIcon> {
     let file_name = Path::new(icon_file).file_name()?;
     if file_name.is_empty() {
@@ -2285,6 +2451,10 @@ fn macos_bundle_icon(path: &Path, icon_file: &str) -> Option<AppIcon> {
 }
 
 fn read_regular_file_bytes(path: &Path) -> Option<Vec<u8>> {
+    read_regular_file_bytes_limited(path, MAX_APP_ICON_BYTES)
+}
+
+fn read_regular_file_bytes_limited(path: &Path, max_bytes: u64) -> Option<Vec<u8>> {
     let path_metadata = fs::symlink_metadata(path).ok()?;
     if !path_metadata.file_type().is_file() {
         return None;
@@ -2295,12 +2465,18 @@ fn read_regular_file_bytes(path: &Path) -> Option<Vec<u8>> {
     if !same_file_metadata(&path_metadata, &file_metadata) {
         return None;
     }
-    if file_metadata.len() > MAX_APP_ICON_BYTES {
+    if file_metadata.len() > max_bytes {
         return None;
     }
 
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).ok()?;
+    std::io::Read::by_ref(&mut file)
+        .take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > max_bytes {
+        return None;
+    }
     Some(bytes)
 }
 
@@ -3767,6 +3943,363 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
                 icon: None,
                 launch: Some(ApplicationLaunch::MacosBundle {
                     bundle_path: root.join("Fallback.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_prefers_localized_display_name() {
+        let root = unique_test_dir("macos-app-localized-display-name");
+        let app_contents = root.join("Localized.app/Contents");
+        fs::create_dir_all(app_contents.join("Resources/en.lproj")).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.localized-display-name</string>
+  <key>CFBundleDisplayName</key>
+  <string>Plain Display Name</string>
+  <key>CFBundleName</key>
+  <string>Plain Bundle Name</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+        fs::write(
+            app_contents.join("Resources/en.lproj/InfoPlist.strings"),
+            r#""CFBundleName" = "Localized Bundle Name";
+"CFBundleDisplayName" = "Localized Display Name";
+"#,
+        )
+        .expect("write localized info plist strings");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.localized-display-name".to_string(),
+                name: "Localized Display Name".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("Localized.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_falls_back_to_localized_bundle_name() {
+        let root = unique_test_dir("macos-app-localized-bundle-name");
+        let app_contents = root.join("Localized.app/Contents");
+        fs::create_dir_all(app_contents.join("Resources/en.lproj")).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.localized-bundle-name</string>
+  <key>CFBundleDisplayName</key>
+  <string>Plain Display Name</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+        fs::write(
+            app_contents.join("Resources/en.lproj/InfoPlist.strings"),
+            r#""CFBundleName" = "Localized Bundle Name";
+"#,
+        )
+        .expect("write localized info plist strings");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.localized-bundle-name".to_string(),
+                name: "Localized Bundle Name".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("Localized.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_falls_back_when_localized_strings_missing_or_invalid() {
+        let root = unique_test_dir("macos-app-localized-missing-invalid");
+        let invalid_contents = root.join("Invalid.app/Contents");
+        fs::create_dir_all(invalid_contents.join("Resources/en.lproj")).expect("create app bundle");
+        fs::write(
+            invalid_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.invalid-localized-strings</string>
+  <key>CFBundleDisplayName</key>
+  <string>Invalid Strings Fallback</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+        fs::write(
+            invalid_contents.join("Resources/en.lproj/InfoPlist.strings"),
+            r#""CFBundleDisplayName" = "Unterminated Localized Name"#,
+        )
+        .expect("write invalid localized info plist strings");
+
+        let missing_contents = root.join("Missing.app/Contents");
+        fs::create_dir_all(&missing_contents).expect("create app bundle");
+        fs::write(
+            missing_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.missing-localized-strings</string>
+  <key>CFBundleDisplayName</key>
+  <string>Missing Strings Fallback</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![
+                ApplicationSummary {
+                    id: "dev.apprelay.invalid-localized-strings".to_string(),
+                    name: "Invalid Strings Fallback".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::MacosBundle {
+                        bundle_path: root.join("Invalid.app").display().to_string(),
+                    }),
+                },
+                ApplicationSummary {
+                    id: "dev.apprelay.missing-localized-strings".to_string(),
+                    name: "Missing Strings Fallback".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::MacosBundle {
+                        bundle_path: root.join("Missing.app").display().to_string(),
+                    }),
+                },
+            ]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_ignores_blank_localized_values() {
+        let root = unique_test_dir("macos-app-blank-localized-values");
+        let app_contents = root.join("Blank.app/Contents");
+        fs::create_dir_all(app_contents.join("Resources/en.lproj")).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.blank-localized-values</string>
+  <key>CFBundleDisplayName</key>
+  <string>Plain Display Name</string>
+  <key>CFBundleName</key>
+  <string>Plain Bundle Name</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+        fs::write(
+            app_contents.join("Resources/en.lproj/InfoPlist.strings"),
+            r#""CFBundleDisplayName" = " ";
+"CFBundleName" = "";
+"#,
+        )
+        .expect("write localized info plist strings");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.blank-localized-values".to_string(),
+                name: "Plain Display Name".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("Blank.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_reads_utf8_bom_localized_strings() {
+        let root = unique_test_dir("macos-app-localized-utf8-bom");
+        let app_contents = root.join("Bom.app/Contents");
+        fs::create_dir_all(app_contents.join("Resources/en.lproj")).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.localized-bom</string>
+  <key>CFBundleDisplayName</key>
+  <string>Plain BOM Name</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+        let mut strings = vec![0xef, 0xbb, 0xbf];
+        strings.extend_from_slice(
+            br#""CFBundleDisplayName" = "Localized BOM Name";
+"#,
+        );
+        fs::write(
+            app_contents.join("Resources/en.lproj/InfoPlist.strings"),
+            strings,
+        )
+        .expect("write localized info plist strings");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.localized-bom".to_string(),
+                name: "Localized BOM Name".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("Bom.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_falls_back_on_unsupported_localized_escape() {
+        let root = unique_test_dir("macos-app-localized-unsupported-escape");
+        let app_contents = root.join("UnsupportedEscape.app/Contents");
+        fs::create_dir_all(app_contents.join("Resources/en.lproj")).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.localized-unsupported-escape</string>
+  <key>CFBundleDisplayName</key>
+  <string>Plain Escape Name</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+        fs::write(
+            app_contents.join("Resources/en.lproj/InfoPlist.strings"),
+            r#""CFBundleDisplayName" = "Localized \U2019 Name";
+"#,
+        )
+        .expect("write localized info plist strings");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.localized-unsupported-escape".to_string(),
+                name: "Plain Escape Name".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("UnsupportedEscape.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_ignores_oversized_localized_strings() {
+        let root = unique_test_dir("macos-app-localized-oversized");
+        let app_contents = root.join("OversizedStrings.app/Contents");
+        fs::create_dir_all(app_contents.join("Resources/en.lproj")).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.localized-oversized</string>
+  <key>CFBundleDisplayName</key>
+  <string>Plain Oversized Name</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+        let strings = fs::File::create(app_contents.join("Resources/en.lproj/InfoPlist.strings"))
+            .expect("create oversized localized strings");
+        strings
+            .set_len(MAX_INFO_PLIST_STRINGS_BYTES + 1)
+            .expect("size oversized localized strings");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.localized-oversized".to_string(),
+                name: "Plain Oversized Name".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("OversizedStrings.app").display().to_string(),
                 }),
             }]
         );
