@@ -42,7 +42,10 @@ Expected lifecycle commands:
 - start: `systemctl --user start apprelay`
 - stop: `systemctl --user stop apprelay`
 - status: `systemctl --user status apprelay`
-- uninstall: stop, disable, remove the unit, and reload systemd
+- uninstall plan: `apprelay-server uninstall-service-plan linux`
+- uninstall script: `apprelay-server uninstall-service linux`, then run the
+  printed `run:` command, for example
+  `sh '<absolute path from output>/uninstall-service.sh'`
 
 System-level installation can be added later for shared machines, but the first
 release should prefer user-level service scope.
@@ -76,7 +79,10 @@ Expected lifecycle commands:
 - start: `launchctl bootstrap gui/$UID <plist>`
 - stop: `launchctl bootout gui/$UID <plist>`
 - status: `launchctl print gui/$UID/dev.apprelay.server`
-- uninstall: stop and remove the plist
+- uninstall plan: `apprelay-server uninstall-service-plan macos`
+- uninstall script: `apprelay-server uninstall-service macos`, then run the
+  printed `run:` command, for example
+  `sh '<absolute path from output>/uninstall-service.sh'`
 
 ## Windows
 
@@ -89,15 +95,26 @@ through a generated PowerShell installer script:
 - start: `sc start AppRelay`
 - stop: `sc stop AppRelay`
 - status: `sc query AppRelay`
-- uninstall: stop and delete the service registration
+- uninstall plan: `apprelay-server uninstall-service-plan windows`
+- uninstall script: `apprelay-server uninstall-service windows`, then run the
+  generated `uninstall-service.ps1` as an elevated user
 
 Windows application discovery remains unsupported in the current code and
 returns a typed unsupported error.
 
-## Phase 2 Boundary
+## Deterministic Uninstall Boundary
+
+The uninstall CLI path mirrors install behavior: it writes a platform-native
+script and prints the exact run command, but it does not execute service-manager
+commands itself. The generated scripts perform the destructive lifecycle work:
+Linux disables and stops the user unit, removes the systemd unit file, and
+reloads systemd; macOS boots out the launchd agent and removes the plist;
+Windows stops and deletes the `AppRelay` service registration.
+
+## Phase 7 Boundary
 
 The current implementation validates the daemon/service lifecycle contract,
 runtime file ownership, config persistence, structured event output, SSH tunnel
-process supervision, and service manifest generation. Release packaging can
-wrap these commands later for signed installers and OS-specific permission
-prompts.
+process supervision, service manifest generation, and uninstall script
+generation. Release packaging can wrap these commands later for signed
+installers, upgrade handling, rollback, and OS-specific permission prompts.

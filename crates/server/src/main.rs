@@ -23,6 +23,14 @@ fn main() {
             let platform = args.get(2).and_then(|value| parse_platform(value));
             install_service_manifest(&executable_path, platform);
         }
+        Some("uninstall-service-plan") => {
+            let platform = args.get(2).and_then(|value| parse_platform(value));
+            print_uninstall_service_plan(&executable_path, platform);
+        }
+        Some("uninstall-service") => {
+            let platform = args.get(2).and_then(|value| parse_platform(value));
+            write_uninstall_service_manifest(&executable_path, platform);
+        }
         _ => run_foreground(&args),
     }
 }
@@ -106,6 +114,35 @@ fn install_service_manifest(executable_path: &PathBuf, platform: Option<Platform
     println!("wrote {}", plan.manifest_path.display());
     println!("start: {}", plan.start_command);
     println!("status: {}", plan.status_command);
+}
+
+fn print_uninstall_service_plan(executable_path: &PathBuf, platform: Option<Platform>) {
+    let installer = DaemonServiceInstaller::new(executable_path);
+    let plan = platform
+        .map(|platform| installer.uninstall_plan_for_platform(platform))
+        .unwrap_or_else(|| installer.uninstall_plan_for_current_platform())
+        .expect("failed to build service uninstall plan");
+
+    println!("manifest: {}", plan.manifest_path.display());
+    println!("service-manifest: {}", plan.service_manifest_path.display());
+    println!("run: {}", plan.run_command);
+    println!();
+    print!("{}", plan.manifest_contents);
+}
+
+fn write_uninstall_service_manifest(executable_path: &PathBuf, platform: Option<Platform>) {
+    let installer = DaemonServiceInstaller::new(executable_path);
+    let plan = platform
+        .map(|platform| installer.uninstall_plan_for_platform(platform))
+        .unwrap_or_else(|| installer.uninstall_plan_for_current_platform())
+        .expect("failed to build service uninstall plan");
+
+    installer
+        .write_uninstall_manifest(&plan)
+        .expect("failed to write service uninstall manifest");
+
+    println!("wrote {}", plan.manifest_path.display());
+    println!("run: {}", plan.run_command);
 }
 
 fn option_value(args: &[String], name: &str) -> Option<String> {
