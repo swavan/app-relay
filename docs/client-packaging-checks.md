@@ -2,7 +2,9 @@
 
 The Tauri client packaging check is intentionally limited to deterministic
 configuration and asset validation. It does not run native bundle builders, sign
-artifacts, or require platform-specific packaging tools.
+artifacts, or require platform-specific packaging tools. The beta signing gate
+for distributed artifacts is documented separately in
+[`signed-release-artifact-policy.md`](signed-release-artifact-policy.md).
 
 Run it after the frontend build:
 
@@ -34,10 +36,10 @@ check. When native packaging files are introduced, update this contract and the
 check in the same change so the platform-specific permission intent remains
 deterministic.
 
-Install, upgrade, uninstall, and rollback of signed client packages remain
-release-runner/manual checks until native package builds run in CI. The
-deterministic boundary here is `npm run package:check`; the native boundary is
-documented in
+Install, upgrade, uninstall, rollback, checksum capture, and signature evidence
+for client packages remain release-runner/manual checks until native package
+builds run in CI. The deterministic boundary here is `npm run package:check`;
+the native boundary is documented in
 [`install-upgrade-rollback-runbook.md`](install-upgrade-rollback-runbook.md).
 
 When the source icon changes, regenerate the package icon set with:

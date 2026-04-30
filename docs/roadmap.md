@@ -463,6 +463,12 @@ Completed:
   rules, documenting the current Node CI audit and Rust release-runner boundary,
   and listing required release evidence and known gaps without claiming signed
   releases, final security review, or production artifact publishing
+- completed signed release artifact policy slice in
+  [`signed-release-artifact-policy.md`](signed-release-artifact-policy.md),
+  defining beta artifact classes, signing and blocking rules, required
+  checksum/signature evidence, key-material boundaries, unsupported native
+  package gaps, and known limitations without claiming signed native artifacts
+  or publishing are implemented
 
 ## Phase 9: Production Release
 

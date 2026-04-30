@@ -150,6 +150,9 @@ Runtime config and logs are not deleted during upgrade or rollback.
 
 The release-runner checklist for those steps lives in
 [`install-upgrade-rollback-runbook.md`](install-upgrade-rollback-runbook.md).
+Beta checksum, signature metadata, signing key boundaries, and unsigned
+artifact blocking rules live in
+[`signed-release-artifact-policy.md`](signed-release-artifact-policy.md).
 
 ## Phase 7 Boundary
 

@@ -13,6 +13,7 @@ desktop applications from a mobile or desktop client.
 - `docs/control-plane.md`: Phase 2 control-plane design
 - `docs/threat-model.md`: Phase 8 beta security threat model
 - `docs/dependency-audit-policy.md`: Phase 8 beta dependency audit policy
+- `docs/signed-release-artifact-policy.md`: Phase 8 beta signed artifact policy
 - `docs/roadmap.md`: phase-by-phase production release plan
 
 ## Current Phase

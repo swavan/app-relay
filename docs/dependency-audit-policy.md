@@ -3,6 +3,8 @@
 This policy defines the dependency audit gate for AppRelay beta releases. It is
 a release-runner policy and deterministic CI boundary; it does not claim signed
 releases, final security review, or production artifact publishing are complete.
+The signed artifact gate is documented separately in
+[`signed-release-artifact-policy.md`](signed-release-artifact-policy.md).
 
 ## Dependency Classes
 
@@ -117,5 +119,7 @@ package/version metadata.
   blockers even when package metadata labels the package development-only,
   because current CI cannot prove whether that package executes during artifact
   generation.
-- This policy does not cover release signing, artifact publication, external
-  penetration testing, or final production security approval.
+- Release signing and artifact publication are covered separately by
+  [`signed-release-artifact-policy.md`](signed-release-artifact-policy.md).
+  This policy does not cover external penetration testing or final production
+  security approval.
