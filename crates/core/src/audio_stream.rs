@@ -149,7 +149,14 @@ enum PipeWireCaptureAdapterState {
 struct PipeWireCaptureCommandRuntime {
     command: String,
     target: Option<String>,
-    sessions: Arc<Mutex<Vec<PipeWireCaptureCommandSession>>>,
+    sessions: Arc<Mutex<PipeWireCaptureCommandState>>,
+}
+
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+#[derive(Debug)]
+struct PipeWireCaptureCommandState {
+    active: Vec<PipeWireCaptureCommandSession>,
+    stopped_stream_ids: Vec<String>,
 }
 
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
@@ -623,6 +630,18 @@ impl PipeWireCaptureAdapterRuntime {
             PipeWireCaptureAdapterState::FakeStartFailure => None,
         }
     }
+
+    #[cfg(test)]
+    fn command_capture_session_count(&self) -> usize {
+        match &self.state {
+            PipeWireCaptureAdapterState::CommandCapture(runtime) => runtime.session_count(),
+            PipeWireCaptureAdapterState::BoundaryOnly => 0,
+            #[cfg(all(test, feature = "pipewire-capture"))]
+            PipeWireCaptureAdapterState::FakeCapture { .. } => 0,
+            #[cfg(all(test, feature = "pipewire-capture"))]
+            PipeWireCaptureAdapterState::FakeStartFailure => 0,
+        }
+    }
 }
 
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
@@ -644,7 +663,10 @@ impl PipeWireCaptureCommandRuntime {
         Self {
             command: command.into(),
             target,
-            sessions: Arc::new(Mutex::new(Vec::new())),
+            sessions: Arc::new(Mutex::new(PipeWireCaptureCommandState {
+                active: Vec::new(),
+                stopped_stream_ids: Vec::new(),
+            })),
         }
     }
 
@@ -694,7 +716,7 @@ impl PipeWireCaptureCommandRuntime {
             let _ = child.wait();
             return None;
         };
-        sessions.push(PipeWireCaptureCommandSession {
+        sessions.active.push(PipeWireCaptureCommandSession {
             stream_id: stream_id.to_string(),
             child,
             stats: Arc::clone(&stats),
@@ -736,12 +758,14 @@ impl PipeWireCaptureCommandRuntime {
     }
 
     fn stop_capture(&self, stream_id: &str) {
+        self.clear_stopped_stream(stream_id);
+
         let Ok(mut sessions) = self.sessions.lock() else {
             return;
         };
 
         let mut retained = Vec::new();
-        for mut session in sessions.drain(..) {
+        for mut session in sessions.active.drain(..) {
             if session.stream_id == stream_id {
                 session.stats.running.store(false, Ordering::Relaxed);
                 let _ = session.child.kill();
@@ -750,15 +774,32 @@ impl PipeWireCaptureCommandRuntime {
                 retained.push(session);
             }
         }
-        *sessions = retained;
+        sessions.active = retained;
     }
 
     fn capture_media(&self, stream_id: &str) -> Option<AudioBackendMediaStats> {
-        let sessions = self.sessions.lock().ok()?;
-        sessions
+        let mut sessions = self.sessions.lock().ok()?;
+        let Some(session_index) = sessions
+            .active
             .iter()
-            .find(|session| session.stream_id == stream_id)
-            .map(|session| Self::media_from_stats(&session.stats))
+            .position(|session| session.stream_id == stream_id)
+        else {
+            return sessions
+                .stopped_stream_observed(stream_id)
+                .then_some(AudioBackendMediaStats::default());
+        };
+
+        let media = Self::media_from_stats(&sessions.active[session_index].stats);
+        if media.available {
+            return Some(media);
+        }
+
+        let mut session = sessions.active.remove(session_index);
+        session.stats.running.store(false, Ordering::Relaxed);
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+        sessions.remember_stopped_stream(stream_id);
+        Some(media)
     }
 
     fn read_capture_stdout(
@@ -792,6 +833,45 @@ impl PipeWireCaptureCommandRuntime {
             bytes_received: bytes,
             latency_ms: 100,
         }
+    }
+
+    fn clear_stopped_stream(&self, stream_id: &str) {
+        let Ok(mut sessions) = self.sessions.lock() else {
+            return;
+        };
+        sessions.clear_stopped_stream(stream_id);
+    }
+
+    #[cfg(test)]
+    fn session_count(&self) -> usize {
+        self.sessions
+            .lock()
+            .map(|sessions| sessions.active.len())
+            .unwrap_or_default()
+    }
+}
+
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+impl PipeWireCaptureCommandState {
+    fn remember_stopped_stream(&mut self, stream_id: &str) {
+        if !self
+            .stopped_stream_ids
+            .iter()
+            .any(|stopped| stopped == stream_id)
+        {
+            self.stopped_stream_ids.push(stream_id.to_string());
+        }
+    }
+
+    fn clear_stopped_stream(&mut self, stream_id: &str) {
+        self.stopped_stream_ids
+            .retain(|stopped| stopped != stream_id);
+    }
+
+    fn stopped_stream_observed(&self, stream_id: &str) -> bool {
+        self.stopped_stream_ids
+            .iter()
+            .any(|stopped| stopped == stream_id)
     }
 }
 
@@ -2764,7 +2844,11 @@ mod tests {
                 .expect("system clock")
                 .as_nanos()
         ));
-        fs::write(&script_path, "#!/bin/sh\nprintf audio-data\nsleep 0.2\n").expect("write script");
+        fs::write(
+            &script_path,
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then exit 0; fi\nprintf audio-data\nsleep 0.5\n",
+        )
+        .expect("write script");
         let mut permissions = fs::metadata(&script_path)
             .expect("script metadata")
             .permissions();
@@ -2778,13 +2862,19 @@ mod tests {
                 viewport: ViewportSize::new(1280, 720),
             })
             .expect("create session");
+        let native_readiness = AudioBackendNativeReadiness::with_linux_pipewire_command_capture(
+            script_path.to_string_lossy().to_string(),
+            None,
+        );
+        let capture_adapter = native_readiness
+            .pipewire_capture_adapter
+            .as_ref()
+            .expect("pipewire capture adapter")
+            .clone();
         let mut stream_service = InMemoryAudioStreamService::new(
             AudioBackendService::for_platform_with_native_readiness(
                 Platform::Linux,
-                AudioBackendNativeReadiness::with_linux_pipewire_command_capture(
-                    script_path.to_string_lossy().to_string(),
-                    None,
-                ),
+                native_readiness,
             ),
         );
         let stream = stream_service
@@ -2800,8 +2890,9 @@ mod tests {
                 &session,
             )
             .expect("start audio stream");
+        assert_eq!(capture_adapter.command_capture_session_count(), 1);
 
-        std::thread::sleep(std::time::Duration::from_millis(350));
+        std::thread::sleep(std::time::Duration::from_millis(700));
         let status = stream_service
             .stream_status(&stream.id)
             .expect("stream status");
@@ -2822,6 +2913,7 @@ mod tests {
             .expect("capture failure")
             .message
             .contains("stopped"));
+        assert_eq!(capture_adapter.command_capture_session_count(), 0);
 
         let _ = fs::remove_file(script_path);
     }
@@ -2841,7 +2933,11 @@ mod tests {
                 .expect("system clock")
                 .as_nanos()
         ));
-        fs::write(&script_path, "#!/bin/sh\nprintf audio-data\nsleep 0.2\n").expect("write script");
+        fs::write(
+            &script_path,
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then exit 0; fi\nprintf audio-data\nsleep 0.5\n",
+        )
+        .expect("write script");
         let mut permissions = fs::metadata(&script_path)
             .expect("script metadata")
             .permissions();
@@ -2855,13 +2951,19 @@ mod tests {
                 viewport: ViewportSize::new(1280, 720),
             })
             .expect("create session");
+        let native_readiness = AudioBackendNativeReadiness::with_linux_pipewire_command_capture(
+            script_path.to_string_lossy().to_string(),
+            None,
+        );
+        let capture_adapter = native_readiness
+            .pipewire_capture_adapter
+            .as_ref()
+            .expect("pipewire capture adapter")
+            .clone();
         let mut stream_service = InMemoryAudioStreamService::new(
             AudioBackendService::for_platform_with_native_readiness(
                 Platform::Linux,
-                AudioBackendNativeReadiness::with_linux_pipewire_command_capture(
-                    script_path.to_string_lossy().to_string(),
-                    None,
-                ),
+                native_readiness,
             ),
         );
         let stream = stream_service
@@ -2877,8 +2979,9 @@ mod tests {
                 &session,
             )
             .expect("start audio stream");
+        assert_eq!(capture_adapter.command_capture_session_count(), 1);
 
-        std::thread::sleep(std::time::Duration::from_millis(350));
+        std::thread::sleep(std::time::Duration::from_millis(700));
         let updated = stream_service
             .update_stream(UpdateAudioStreamRequest {
                 stream_id: stream.id.clone(),
@@ -2905,6 +3008,7 @@ mod tests {
             .expect("capture failure")
             .message
             .contains("stopped"));
+        assert_eq!(capture_adapter.command_capture_session_count(), 0);
 
         let _ = fs::remove_file(script_path);
     }
