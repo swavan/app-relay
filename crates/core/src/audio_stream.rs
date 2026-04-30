@@ -2090,13 +2090,14 @@ impl AudioStreamService for InMemoryAudioStreamService {
         let unavailable_device_ids = self.unavailable_device_ids.clone();
         #[cfg(not(test))]
         let unavailable_device_ids: Vec<String> = Vec::new();
-        let stream = self
+        let stream_index = self
             .streams
-            .iter_mut()
-            .find(|stream| stream.id == request.stream_id)
+            .iter()
+            .position(|stream| stream.id == request.stream_id)
             .ok_or_else(|| {
                 AppRelayError::NotFound(format!("audio stream {} was not found", request.stream_id))
             })?;
+        let stream = &mut self.streams[stream_index];
 
         if stream.state == AudioStreamState::Stopped {
             return Err(AppRelayError::InvalidRequest(format!(
@@ -2113,20 +2114,14 @@ impl AudioStreamService for InMemoryAudioStreamService {
             output_device_id: request.output_device_id,
             input_device_id: request.input_device_id,
         };
-        let mut backend_contract = self.backend.backend_contract_for_media_session(
-            self.native_runtime.session_for_stream(&stream.id),
-            Some(&stream.mute),
-            AudioDeviceAvailability {
-                devices: Some(&stream.devices),
-                #[cfg(test)]
-                unavailable_device_ids: &unavailable_device_ids,
-            },
+        let stream_snapshot = stream.clone();
+        let backend_contract = self.backend_contract_for_active_stream(
+            &stream_snapshot,
+            Some(&stream_snapshot.mute),
+            Some(&stream_snapshot.devices),
+            &unavailable_device_ids,
         );
-        Self::apply_native_runtime_failures_from(
-            &self.native_runtime,
-            &stream.id,
-            &mut backend_contract,
-        );
+        let stream = &mut self.streams[stream_index];
         stream.stats = Self::stream_stats_from_backend(&backend_contract);
         stream.backend = Some(backend_contract);
         stream.health = Self::stream_health_for_devices(
@@ -2811,6 +2806,89 @@ mod tests {
             .stream_status(&stream.id)
             .expect("stream status");
         let capture = status
+            .backend
+            .as_ref()
+            .expect("backend contract")
+            .statuses
+            .iter()
+            .find(|status| status.leg == AudioBackendLeg::Capture)
+            .expect("capture status");
+
+        assert!(!capture.available);
+        assert_eq!(capture.media, AudioBackendMediaStats::default());
+        assert!(capture
+            .failure
+            .as_ref()
+            .expect("capture failure")
+            .message
+            .contains("stopped"));
+
+        let _ = fs::remove_file(script_path);
+    }
+
+    #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+    #[test]
+    fn audio_stream_update_reports_pipewire_process_exit_failure() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let script_path = std::env::temp_dir().join(format!(
+            "apprelay-pipewire-update-exit-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        fs::write(&script_path, "#!/bin/sh\nprintf audio-data\nsleep 0.2\n").expect("write script");
+        let mut permissions = fs::metadata(&script_path)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&script_path, permissions).expect("script permissions");
+
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::new(
+            AudioBackendService::for_platform_with_native_readiness(
+                Platform::Linux,
+                AudioBackendNativeReadiness::with_linux_pipewire_command_capture(
+                    script_path.to_string_lossy().to_string(),
+                    None,
+                ),
+            ),
+        );
+        let stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Disabled,
+                    system_audio_muted: false,
+                    microphone_muted: true,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+                &session,
+            )
+            .expect("start audio stream");
+
+        std::thread::sleep(std::time::Duration::from_millis(350));
+        let updated = stream_service
+            .update_stream(UpdateAudioStreamRequest {
+                stream_id: stream.id.clone(),
+                system_audio_muted: false,
+                microphone_muted: true,
+                output_device_id: None,
+                input_device_id: None,
+            })
+            .expect("update stream");
+        let capture = updated
             .backend
             .as_ref()
             .expect("backend contract")
