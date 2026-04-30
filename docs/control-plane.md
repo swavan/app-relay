@@ -80,16 +80,40 @@ a typed error.
 
 ## Foreground Listener
 
-`ForegroundControlServer` exposes a minimal line-based TCP control listener for
-Phase 2 validation. It currently supports:
+`ForegroundControlServer` exposes a line-based TCP control listener for
+foreground integration testing. It currently supports:
 
 - `health <token>`
 - `version <token>`
 - `heartbeat <token>`
+- `capabilities <token>`
+- `applications <token>`
+- `create-session <token> <application_id> <width> <height>`
+- `sessions <token>`
 
 This is a foreground development listener, not the final daemon transport. It
 keeps the control-plane service boundary executable while the service manifest
 installer owns host startup behavior.
+
+Responses are single-line, shell-friendly text records. Authentication failures
+return `ERROR unauthorized`, malformed command arguments return
+`ERROR bad-request`, service failures return `ERROR service ...`, and unknown
+operations return `ERROR unknown-operation`.
+
+Manual foreground smoke test:
+
+1. Start `apprelay-server` with a known local config token.
+2. Send `capabilities <token>` and confirm the response includes
+   `supported=... total=...` plus `feature:supported` or
+   `feature:unsupported` pairs.
+3. Send `applications <token>` and choose an `appN.id=...` value from the
+   response. Application names are percent-escaped so each response remains one
+   parseable line.
+4. Send `create-session <token> <application_id> 1280 720`. On Linux, when the
+   selected application was discovered from a `.desktop` entry with `Exec=`
+   metadata, this command triggers the native launch path and spawns that
+   command without a shell.
+5. Send `sessions <token>` to confirm the created session is active.
 
 ## Daemon Installation
 
