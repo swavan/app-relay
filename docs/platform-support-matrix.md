@@ -9,7 +9,7 @@ baseline rather than a native media backend.
 
 | Platform | App discovery | Application launch | Window resize | Window video | System audio | Client microphone | Keyboard input | Mouse input |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Linux | Supported | Unsupported: launch intent only | Unsupported: planned | Unsupported: planned | Supported: PipeWire native backend planned | Supported: PipeWire native backend planned | Unsupported: planned | Unsupported: planned |
+| Linux | Supported | Supported: `.desktop` Exec command spawn | Unsupported: planned | Unsupported: planned | Supported: PipeWire native backend planned | Supported: PipeWire native backend planned | Unsupported: planned | Unsupported: planned |
 | macOS | Supported | Unsupported: launch intent only | Unsupported: planned | Unsupported: planned | Supported: CoreAudio native backend planned | Supported: CoreAudio native backend planned | Unsupported: planned | Unsupported: planned |
 | Windows | Unsupported: discovery backend not implemented | Unsupported: launch intent only | Unsupported: planned | Unsupported: planned | Supported: WASAPI native backend planned | Supported: WASAPI native backend planned | Unsupported: planned | Unsupported: planned |
 | Android | Unsupported: client target | Unsupported: launch intent only | Unsupported: planned | Unsupported: planned | Unsupported: client target | Unsupported: client target | Unsupported: planned | Unsupported: planned |
@@ -23,5 +23,7 @@ baseline rather than a native media backend.
   unsupported-state messaging.
 - Desktop audio support is currently a control-plane contract. Native PipeWire,
   CoreAudio, and WASAPI capture/playback backends remain planned.
+- Linux application launch spawns discovered `.desktop` `Exec=` commands
+  directly without a shell after stripping common desktop-entry field codes.
 - Mobile platforms are client targets and do not expose desktop server capture
   or discovery capabilities.

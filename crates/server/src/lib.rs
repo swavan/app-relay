@@ -10,10 +10,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use apprelay_core::{
-    ApplicationDiscovery, ApplicationSessionService, CapabilityService, DefaultCapabilityService,
-    DesktopEntryApplicationDiscovery, EventSink, HealthService, InMemoryApplicationSessionService,
-    InMemoryInputForwardingService, InputForwardingService, MacosApplicationDiscovery,
-    ServerConfig, ServerEvent, SessionPolicy, StaticHealthService, UnsupportedApplicationDiscovery,
+    ApplicationDiscovery, ApplicationLaunchBackendService, ApplicationSessionService,
+    CapabilityService, DefaultCapabilityService, DesktopEntryApplicationDiscovery, EventSink,
+    HealthService, InMemoryApplicationSessionService, InMemoryInputForwardingService,
+    InputForwardingService, MacosApplicationDiscovery, ServerConfig, ServerEvent, SessionPolicy,
+    StaticHealthService, UnsupportedApplicationDiscovery,
 };
 use apprelay_protocol::{
     AppRelayError, ApplicationSession, ApplicationSummary, AudioStreamSession, ControlAuth,
@@ -48,7 +49,10 @@ impl ServerServices {
             health_service: StaticHealthService::new("apprelay-server", version.clone()),
             capability_service: DefaultCapabilityService::new(platform),
             application_discovery: ApplicationDiscoveryService::for_platform(platform),
-            session_service: InMemoryApplicationSessionService::new(SessionPolicy::allow_all()),
+            session_service: InMemoryApplicationSessionService::with_launch_backend(
+                SessionPolicy::allow_all(),
+                launch_backend_for_platform(platform),
+            ),
             input_forwarding: InMemoryInputForwardingService::default(),
             video_stream: VideoStreamControl::for_platform(platform),
             audio_stream: AudioStreamControl::for_platform(platform),
@@ -59,6 +63,15 @@ impl ServerServices {
 
     pub fn for_current_platform() -> Self {
         Self::new(Platform::current(), env!("CARGO_PKG_VERSION"))
+    }
+
+    #[doc(hidden)]
+    pub fn with_linux_desktop_entry_roots(version: impl Into<String>, roots: Vec<PathBuf>) -> Self {
+        let mut services = Self::new(Platform::Linux, version);
+        services.application_discovery = ApplicationDiscoveryService::DesktopEntries(
+            DesktopEntryApplicationDiscovery::new(roots),
+        );
+        services
     }
 
     pub fn health(&self) -> HealthStatus {
@@ -191,6 +204,17 @@ impl ServerServices {
 
     pub fn version(&self) -> ServerVersion {
         ServerVersion::new("apprelay-server", self.version.clone(), self.platform)
+    }
+}
+
+fn launch_backend_for_platform(platform: Platform) -> ApplicationLaunchBackendService {
+    match platform {
+        Platform::Linux => ApplicationLaunchBackendService::LinuxNative,
+        Platform::Macos
+        | Platform::Windows
+        | Platform::Android
+        | Platform::Ios
+        | Platform::Unknown => ApplicationLaunchBackendService::RecordOnly,
     }
 }
 

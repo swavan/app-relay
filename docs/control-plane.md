@@ -143,6 +143,11 @@ Linux currently uses `.desktop` entries from:
 
 The parser includes visible `Type=Application` entries and skips hidden,
 NoDisplay, and non-application entries. Icons are not extracted yet.
+When a session is created for a discovered Linux application with `Exec=`
+metadata, the server spawns that command directly without a shell after
+stripping common desktop-entry field codes such as `%f`, `%F`, `%u`, `%U`,
+`%i`, `%c`, and `%k`. Discovered Linux applications without launch metadata
+continue to attach to an existing window intent.
 
 macOS currently uses `.app` bundles from:
 

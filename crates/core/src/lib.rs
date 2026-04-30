@@ -67,6 +67,7 @@ pub trait ApplicationLaunchBackend {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApplicationLaunchBackendService {
     RecordOnly,
+    LinuxNative,
     Unsupported { platform: Platform },
 }
 
@@ -87,12 +88,104 @@ impl ApplicationLaunchBackend for ApplicationLaunchBackendService {
                     LaunchIntentStatus::Attached
                 },
             }),
+            Self::LinuxNative => match &application.launch {
+                Some(ApplicationLaunch::DesktopCommand { command }) => {
+                    spawn_linux_desktop_command(command)?;
+                    Ok(ApplicationLaunchIntent {
+                        session_id: session_id.to_string(),
+                        application_id: application.id.clone(),
+                        launch: application.launch.clone(),
+                        status: LaunchIntentStatus::Recorded,
+                    })
+                }
+                Some(ApplicationLaunch::MacosBundle { .. }) => Err(AppRelayError::unsupported(
+                    Platform::Linux,
+                    Feature::ApplicationLaunch,
+                )),
+                None => Ok(ApplicationLaunchIntent {
+                    session_id: session_id.to_string(),
+                    application_id: application.id.clone(),
+                    launch: None,
+                    status: LaunchIntentStatus::Attached,
+                }),
+            },
             Self::Unsupported { platform } => Err(AppRelayError::unsupported(
                 *platform,
                 Feature::ApplicationLaunch,
             )),
         }
     }
+}
+
+fn spawn_linux_desktop_command(command: &str) -> Result<(), AppRelayError> {
+    let argv = parse_desktop_exec(command)?;
+    let (program, args) = argv.split_first().ok_or_else(|| {
+        AppRelayError::InvalidRequest("desktop Exec command is empty".to_string())
+    })?;
+
+    Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| {
+            AppRelayError::ServiceUnavailable(format!(
+                "failed to launch desktop command `{program}`: {error}"
+            ))
+        })
+}
+
+fn parse_desktop_exec(command: &str) -> Result<Vec<String>, AppRelayError> {
+    let mut argv = Vec::new();
+    let mut current = String::new();
+    let mut chars = command.chars().peekable();
+    let mut in_quotes = false;
+
+    while let Some(character) = chars.next() {
+        match character {
+            '"' => in_quotes = !in_quotes,
+            '\\' => {
+                if let Some(escaped) = chars.next() {
+                    current.push(escaped);
+                }
+            }
+            '%' => match chars.next() {
+                Some('%') => current.push('%'),
+                Some('f' | 'F' | 'u' | 'U' | 'i' | 'c' | 'k') => {}
+                Some(field_code) => {
+                    current.push('%');
+                    current.push(field_code);
+                }
+                None => current.push('%'),
+            },
+            character if character.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    argv.push(std::mem::take(&mut current));
+                }
+            }
+            character => current.push(character),
+        }
+    }
+
+    if in_quotes {
+        return Err(AppRelayError::InvalidRequest(
+            "desktop Exec command has an unterminated quote".to_string(),
+        ));
+    }
+
+    if !current.is_empty() {
+        argv.push(current);
+    }
+
+    if argv.is_empty() {
+        return Err(AppRelayError::InvalidRequest(
+            "desktop Exec command has no executable after field-code stripping".to_string(),
+        ));
+    }
+
+    Ok(argv)
 }
 
 pub trait WindowResizeBackend {
@@ -1342,13 +1435,32 @@ impl CapabilityService for DefaultCapabilityService {
             ),
         };
 
-        vec![
-            app_discovery,
-            PlatformCapability::unsupported(
+        let application_launch = match self.platform {
+            Platform::Linux => PlatformCapability::supported_with_reason(
+                self.platform,
+                Feature::ApplicationLaunch,
+                "Linux launches discovered .desktop Exec commands without a shell",
+            ),
+            Platform::Macos | Platform::Windows => PlatformCapability::unsupported(
                 self.platform,
                 Feature::ApplicationLaunch,
                 "native launch backend records launch or attach intent but does not spawn applications yet",
             ),
+            Platform::Android | Platform::Ios => PlatformCapability::unsupported(
+                self.platform,
+                Feature::ApplicationLaunch,
+                "mobile platforms are client targets and do not expose desktop application launch",
+            ),
+            Platform::Unknown => PlatformCapability::unsupported(
+                self.platform,
+                Feature::ApplicationLaunch,
+                "unknown platform cannot expose desktop application launch",
+            ),
+        };
+
+        vec![
+            app_discovery,
+            application_launch,
             PlatformCapability::unsupported(
                 self.platform,
                 Feature::WindowResize,
@@ -1695,6 +1807,16 @@ mod tests {
     }
 
     #[test]
+    fn linux_capabilities_support_application_launch() {
+        let service = DefaultCapabilityService::new(Platform::Linux);
+        let capabilities = service.platform_capabilities();
+
+        assert!(capabilities.iter().any(|capability| {
+            capability.feature == Feature::ApplicationLaunch && capability.supported
+        }));
+    }
+
+    #[test]
     fn platform_capability_matrix_covers_every_target_feature() {
         let platforms = [
             Platform::Linux,
@@ -1831,6 +1953,39 @@ mod tests {
             Err(AppRelayError::unsupported(
                 Platform::Windows,
                 Feature::AppDiscovery
+            ))
+        );
+    }
+
+    #[test]
+    fn desktop_exec_parser_strips_field_codes_and_preserves_literal_percent() {
+        assert_eq!(
+            parse_desktop_exec("app --file %f --urls %U %%").expect("parse desktop exec"),
+            vec!["app", "--file", "--urls", "%"]
+        );
+    }
+
+    #[test]
+    fn desktop_exec_parser_preserves_quoted_arguments() {
+        assert_eq!(
+            parse_desktop_exec(r#"app --title "Two Words" "quoted %c value" escaped\ space"#)
+                .expect("parse desktop exec"),
+            vec![
+                "app",
+                "--title",
+                "Two Words",
+                "quoted  value",
+                "escaped space"
+            ]
+        );
+    }
+
+    #[test]
+    fn desktop_exec_parser_rejects_empty_command_after_field_code_stripping() {
+        assert_eq!(
+            parse_desktop_exec("%f %U"),
+            Err(AppRelayError::InvalidRequest(
+                "desktop Exec command has no executable after field-code stripping".to_string()
             ))
         );
     }
@@ -2184,6 +2339,85 @@ event=request_authorized operation=health\n"
                 status: LaunchIntentStatus::Recorded,
             })
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn linux_launch_backend_spawns_desktop_command_and_records_intent() {
+        let root = unique_test_dir("linux-launch-backend");
+        fs::create_dir_all(&root).expect("create test launch directory");
+        let marker = root.join("launch-marker");
+        let executable = root.join("fake-app");
+        write_executable_script(
+            &executable,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$1\" \"$2\" > {}\n",
+                marker.display()
+            ),
+        );
+
+        let mut service = InMemoryApplicationSessionService::with_launch_backend(
+            SessionPolicy::allow_all(),
+            ApplicationLaunchBackendService::LinuxNative,
+        );
+        let session = service
+            .create_session_for_application(
+                CreateSessionRequest {
+                    application_id: "fake".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+                ApplicationSummary {
+                    id: "fake".to_string(),
+                    name: "Fake App".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::DesktopCommand {
+                        command: format!("{} --name \"Fake App\" %U", executable.display()),
+                    }),
+                },
+            )
+            .expect("create launched session");
+
+        wait_for_path(&marker);
+        assert_eq!(
+            fs::read_to_string(&marker).expect("read launch marker"),
+            "--name\nFake App\n"
+        );
+        assert_eq!(
+            session.launch_intent.expect("launch intent").status,
+            LaunchIntentStatus::Recorded
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn linux_launch_backend_rejects_spawn_failure_without_ready_session() {
+        let root = unique_test_dir("linux-launch-failure");
+        let missing = root.join("missing-app");
+        let mut service = InMemoryApplicationSessionService::with_launch_backend(
+            SessionPolicy::allow_all(),
+            ApplicationLaunchBackendService::LinuxNative,
+        );
+
+        let error = service
+            .create_session_for_application(
+                CreateSessionRequest {
+                    application_id: "missing".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+                ApplicationSummary {
+                    id: "missing".to_string(),
+                    name: "Missing App".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::DesktopCommand {
+                        command: missing.display().to_string(),
+                    }),
+                },
+            )
+            .expect_err("missing executable should fail launch");
+
+        assert!(matches!(error, AppRelayError::ServiceUnavailable(_)));
+        assert_eq!(service.active_sessions(), Vec::new());
     }
 
     #[test]
@@ -2676,5 +2910,30 @@ event=request_authorized operation=health\n"
             .as_nanos();
 
         std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()))
+    }
+
+    #[cfg(unix)]
+    fn write_executable_script(path: &Path, contents: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::write(path, contents).expect("write executable script");
+        let mut permissions = fs::metadata(path)
+            .expect("read executable script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).expect("mark executable script");
+    }
+
+    #[cfg(unix)]
+    fn wait_for_path(path: &Path) {
+        for _ in 0..100 {
+            if path.exists() {
+                return;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        panic!("timed out waiting for {}", path.display());
     }
 }
