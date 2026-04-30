@@ -112,6 +112,16 @@ pub(crate) struct PipeWireCaptureAdapterRuntime {
     state: PipeWireCaptureAdapterState,
 }
 
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PipeWireCaptureCommandConfig {
+    pub command: String,
+    pub target: Option<String>,
+    pub rate: u32,
+    pub channels: u16,
+    pub format: String,
+}
+
 #[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ClientPlaybackRuntime {
@@ -147,8 +157,7 @@ enum PipeWireCaptureAdapterState {
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 #[derive(Clone, Debug)]
 struct PipeWireCaptureCommandRuntime {
-    command: String,
-    target: Option<String>,
+    config: Box<PipeWireCaptureCommandConfig>,
     sessions: Arc<Mutex<PipeWireCaptureCommandState>>,
 }
 
@@ -233,29 +242,19 @@ impl AudioBackendNativeReadiness {
     }
 
     #[cfg(all(test, feature = "pipewire-capture", target_os = "linux"))]
-    fn with_linux_pipewire_command_capture(
-        command: impl Into<String>,
-        target: Option<String>,
-    ) -> Self {
+    fn with_linux_pipewire_command_capture(config: PipeWireCaptureCommandConfig) -> Self {
         Self {
             available_legs: Vec::new(),
-            pipewire_capture_adapter: Some(PipeWireCaptureAdapterRuntime::command_capture(
-                command, target,
-            )),
+            pipewire_capture_adapter: Some(PipeWireCaptureAdapterRuntime::command_capture(config)),
             ..Self::default()
         }
     }
 
     #[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
-    pub fn with_linux_pipewire_command_capture(
-        command: impl Into<String>,
-        target: Option<String>,
-    ) -> Self {
+    pub fn with_linux_pipewire_command_capture(config: PipeWireCaptureCommandConfig) -> Self {
         Self {
             available_legs: Vec::new(),
-            pipewire_capture_adapter: Some(PipeWireCaptureAdapterRuntime::command_capture(
-                command, target,
-            )),
+            pipewire_capture_adapter: Some(PipeWireCaptureAdapterRuntime::command_capture(config)),
         }
     }
 
@@ -541,10 +540,10 @@ impl PipeWireCaptureAdapterRuntime {
     }
 
     #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
-    pub fn command_capture(command: impl Into<String>, target: Option<String>) -> Self {
+    pub fn command_capture(config: PipeWireCaptureCommandConfig) -> Self {
         Self {
             state: PipeWireCaptureAdapterState::CommandCapture(PipeWireCaptureCommandRuntime::new(
-                command, target,
+                config,
             )),
         }
     }
@@ -647,7 +646,7 @@ impl PipeWireCaptureAdapterRuntime {
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 impl PartialEq for PipeWireCaptureCommandRuntime {
     fn eq(&self, other: &Self) -> bool {
-        self.command == other.command && self.target == other.target
+        self.config == other.config
     }
 }
 
@@ -655,14 +654,30 @@ impl PartialEq for PipeWireCaptureCommandRuntime {
 impl Eq for PipeWireCaptureCommandRuntime {}
 
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+impl PipeWireCaptureCommandConfig {
+    pub const DEFAULT_RATE: u32 = 48_000;
+    pub const DEFAULT_CHANNELS: u16 = 2;
+    pub const DEFAULT_FORMAT: &'static str = "s16";
+
+    pub fn new(command: impl Into<String>, target: Option<String>) -> Self {
+        Self {
+            command: command.into(),
+            target,
+            rate: Self::DEFAULT_RATE,
+            channels: Self::DEFAULT_CHANNELS,
+            format: Self::DEFAULT_FORMAT.to_string(),
+        }
+    }
+}
+
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 impl PipeWireCaptureCommandRuntime {
     const STARTUP_CHECK_INTERVAL: Duration = Duration::from_millis(10);
     const STARTUP_CHECK_TIMEOUT: Duration = Duration::from_millis(100);
 
-    fn new(command: impl Into<String>, target: Option<String>) -> Self {
+    fn new(config: PipeWireCaptureCommandConfig) -> Self {
         Self {
-            command: command.into(),
-            target,
+            config: Box::new(config),
             sessions: Arc::new(Mutex::new(PipeWireCaptureCommandState {
                 active: Vec::new(),
                 stopped_stream_ids: Vec::new(),
@@ -671,12 +686,29 @@ impl PipeWireCaptureCommandRuntime {
     }
 
     fn command_available(&self) -> bool {
-        Command::new(&self.command)
+        Command::new(&self.config.command)
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .is_ok_and(|status| status.success())
+    }
+
+    fn capture_args(&self) -> Vec<String> {
+        let mut args = vec![
+            "--rate".to_string(),
+            self.config.rate.to_string(),
+            "--channels".to_string(),
+            self.config.channels.to_string(),
+            "--format".to_string(),
+            self.config.format.clone(),
+        ];
+        if let Some(target) = &self.config.target {
+            args.push("--target".to_string());
+            args.push(target.clone());
+        }
+        args.push("-".to_string());
+        args
     }
 
     fn start_capture(&self, stream_id: &str) -> Option<NativeAudioMediaSession> {
@@ -689,22 +721,13 @@ impl PipeWireCaptureCommandRuntime {
             bytes: AtomicU64::new(0),
             running: AtomicBool::new(true),
         });
-        let mut command = Command::new(&self.command);
-        command
-            .arg("--rate")
-            .arg("48000")
-            .arg("--channels")
-            .arg("2")
-            .arg("--format")
-            .arg("s16")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-
-        if let Some(target) = &self.target {
-            command.arg("--target").arg(target);
+        let mut command = Command::new(&self.config.command);
+        for arg in self.capture_args() {
+            command.arg(arg);
         }
+        command.stdout(Stdio::piped()).stderr(Stdio::null());
 
-        let mut child = command.arg("-").spawn().ok()?;
+        let mut child = command.spawn().ok()?;
         let stdout = child.stdout.take()?;
         Self::read_capture_stdout(stdout, Arc::clone(&stats));
         if !Self::wait_for_capture_start(&mut child, &stats) {
@@ -2830,12 +2853,53 @@ mod tests {
     #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
     #[test]
     fn pipewire_command_runtime_rejects_immediate_process_exit() {
-        let adapter = PipeWireCaptureAdapterRuntime::command_capture("false", None);
+        let adapter = PipeWireCaptureAdapterRuntime::command_capture(
+            PipeWireCaptureCommandConfig::new("false", None),
+        );
 
         let session = adapter.start_capture("stream-1");
 
         assert_eq!(session, None);
         assert_eq!(adapter.capture_media("stream-1"), None);
+    }
+
+    #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+    #[test]
+    fn pipewire_command_runtime_builds_configured_pw_record_arguments() {
+        let mut config = PipeWireCaptureCommandConfig::new("pw-record", None);
+        config.rate = 44_100;
+        config.channels = 1;
+        config.format = "f32".to_string();
+        config.target = Some("alsa_output.test.monitor".to_string());
+        let runtime = PipeWireCaptureCommandRuntime::new(config);
+
+        assert_eq!(
+            runtime.capture_args(),
+            vec![
+                "--rate",
+                "44100",
+                "--channels",
+                "1",
+                "--format",
+                "f32",
+                "--target",
+                "alsa_output.test.monitor",
+                "-"
+            ]
+        );
+    }
+
+    #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+    #[test]
+    fn pipewire_command_runtime_keeps_default_pw_record_arguments() {
+        let runtime = PipeWireCaptureCommandRuntime::new(PipeWireCaptureCommandConfig::new(
+            "pw-record",
+            None,
+        ));
+        assert_eq!(
+            runtime.capture_args(),
+            vec!["--rate", "48000", "--channels", "2", "--format", "s16", "-"]
+        );
     }
 
     #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
@@ -2872,8 +2936,7 @@ mod tests {
             })
             .expect("create session");
         let native_readiness = AudioBackendNativeReadiness::with_linux_pipewire_command_capture(
-            script_path.to_string_lossy().to_string(),
-            None,
+            PipeWireCaptureCommandConfig::new(script_path.to_string_lossy().to_string(), None),
         );
         let capture_adapter = native_readiness
             .pipewire_capture_adapter
@@ -3018,8 +3081,7 @@ mod tests {
             })
             .expect("create session");
         let native_readiness = AudioBackendNativeReadiness::with_linux_pipewire_command_capture(
-            script_path.to_string_lossy().to_string(),
-            None,
+            PipeWireCaptureCommandConfig::new(script_path.to_string_lossy().to_string(), None),
         );
         let capture_adapter = native_readiness
             .pipewire_capture_adapter

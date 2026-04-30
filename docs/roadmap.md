@@ -327,9 +327,10 @@ Completed:
   and Windows
 - Linux server builds with the optional `pipewire-capture` feature can opt into
   command-backed PipeWire capture with `APPRELAY_PIPEWIRE_CAPTURE=1`; the
-  runtime uses `pw-record` by default, supports optional command/target
-  overrides, updates capture byte counters from the running process, and
-  retains explicit unavailable adapter-boundary reporting unless opted in
+  runtime uses `pw-record` by default, supports optional command/target plus
+  rate/channels/format overrides, updates capture byte counters from the
+  running process, and retains explicit unavailable adapter-boundary reporting
+  unless opted in
 
 Deferred:
 
