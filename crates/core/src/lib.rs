@@ -68,6 +68,7 @@ pub trait ApplicationLaunchBackend {
 pub enum ApplicationLaunchBackendService {
     RecordOnly,
     LinuxNative,
+    MacosNative { open_command: PathBuf },
     Unsupported { platform: Platform },
 }
 
@@ -109,6 +110,27 @@ impl ApplicationLaunchBackend for ApplicationLaunchBackendService {
                     status: LaunchIntentStatus::Attached,
                 }),
             },
+            Self::MacosNative { open_command } => match &application.launch {
+                Some(ApplicationLaunch::MacosBundle { bundle_path }) => {
+                    spawn_macos_bundle(open_command, bundle_path)?;
+                    Ok(ApplicationLaunchIntent {
+                        session_id: session_id.to_string(),
+                        application_id: application.id.clone(),
+                        launch: application.launch.clone(),
+                        status: LaunchIntentStatus::Recorded,
+                    })
+                }
+                Some(ApplicationLaunch::DesktopCommand { .. }) => Err(AppRelayError::unsupported(
+                    Platform::Macos,
+                    Feature::ApplicationLaunch,
+                )),
+                None => Ok(ApplicationLaunchIntent {
+                    session_id: session_id.to_string(),
+                    application_id: application.id.clone(),
+                    launch: None,
+                    status: LaunchIntentStatus::Attached,
+                }),
+            },
             Self::Unsupported { platform } => Err(AppRelayError::unsupported(
                 *platform,
                 Feature::ApplicationLaunch,
@@ -133,6 +155,28 @@ fn spawn_linux_desktop_command(command: &str) -> Result<(), AppRelayError> {
         .map_err(|error| {
             AppRelayError::ServiceUnavailable(format!(
                 "failed to launch desktop command `{program}`: {error}"
+            ))
+        })
+}
+
+fn spawn_macos_bundle(open_command: &Path, bundle_path: &str) -> Result<(), AppRelayError> {
+    if bundle_path.trim().is_empty() {
+        return Err(AppRelayError::InvalidRequest(
+            "macOS application bundle path is required".to_string(),
+        ));
+    }
+
+    Command::new(open_command)
+        .arg("-n")
+        .arg(bundle_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| {
+            AppRelayError::ServiceUnavailable(format!(
+                "failed to launch macOS application bundle `{bundle_path}`: {error}"
             ))
         })
 }
@@ -1441,7 +1485,12 @@ impl CapabilityService for DefaultCapabilityService {
                 Feature::ApplicationLaunch,
                 "Linux launches discovered .desktop Exec commands without a shell",
             ),
-            Platform::Macos | Platform::Windows => PlatformCapability::unsupported(
+            Platform::Macos => PlatformCapability::supported_with_reason(
+                self.platform,
+                Feature::ApplicationLaunch,
+                "macOS launches discovered .app bundles through the native open command",
+            ),
+            Platform::Windows => PlatformCapability::unsupported(
                 self.platform,
                 Feature::ApplicationLaunch,
                 "native launch backend records launch or attach intent but does not spawn applications yet",
@@ -2415,6 +2464,90 @@ event=request_authorized operation=health\n"
                 },
             )
             .expect_err("missing executable should fail launch");
+
+        assert!(matches!(error, AppRelayError::ServiceUnavailable(_)));
+        assert_eq!(service.active_sessions(), Vec::new());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn macos_launch_backend_opens_app_bundle() {
+        let root = unique_test_dir("macos-launch");
+        fs::create_dir_all(&root).expect("create test root");
+        let marker = root.join("open-marker");
+        let open_command = root.join("fake-open");
+        write_executable_script(
+            &open_command,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$1\" \"$2\" > {}\n",
+                marker.display()
+            ),
+        );
+        let bundle_path = root.join("Fake.app");
+        let mut service = InMemoryApplicationSessionService::with_launch_backend(
+            SessionPolicy::allow_all(),
+            ApplicationLaunchBackendService::MacosNative {
+                open_command: open_command.clone(),
+            },
+        );
+
+        let session = service
+            .create_session_for_application(
+                CreateSessionRequest {
+                    application_id: "dev.apprelay.fake".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+                ApplicationSummary {
+                    id: "dev.apprelay.fake".to_string(),
+                    name: "Fake Mac App".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::MacosBundle {
+                        bundle_path: bundle_path.display().to_string(),
+                    }),
+                },
+            )
+            .expect("create launched macOS session");
+
+        wait_for_path(&marker);
+        assert_eq!(
+            fs::read_to_string(&marker).expect("read launch marker"),
+            format!("-n\n{}\n", bundle_path.display())
+        );
+        assert_eq!(
+            session.launch_intent.expect("launch intent").status,
+            LaunchIntentStatus::Recorded
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_launch_backend_rejects_missing_open_command_without_ready_session() {
+        let root = unique_test_dir("macos-launch-failure");
+        let missing_open = root.join("missing-open");
+        let mut service = InMemoryApplicationSessionService::with_launch_backend(
+            SessionPolicy::allow_all(),
+            ApplicationLaunchBackendService::MacosNative {
+                open_command: missing_open,
+            },
+        );
+
+        let error = service
+            .create_session_for_application(
+                CreateSessionRequest {
+                    application_id: "dev.apprelay.fake".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+                ApplicationSummary {
+                    id: "dev.apprelay.fake".to_string(),
+                    name: "Fake Mac App".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::MacosBundle {
+                        bundle_path: "/Applications/Fake.app".to_string(),
+                    }),
+                },
+            )
+            .expect_err("missing open command should fail launch");
 
         assert!(matches!(error, AppRelayError::ServiceUnavailable(_)));
         assert_eq!(service.active_sessions(), Vec::new());

@@ -180,7 +180,9 @@ macOS currently uses `.app` bundles from:
 
 The macOS parser reads `Contents/Info.plist`, preferring
 `CFBundleDisplayName`, then `CFBundleName`, and falling back to the bundle
-directory name. Icons are not extracted yet.
+directory name. When a session is created for a discovered macOS application,
+the server launches the bundle through the native `open -n <bundle>` command.
+Icons are not extracted yet.
 
 Windows is an expected desktop server target, but its native application
 discovery backend is not implemented in this slice. It returns a typed

@@ -385,6 +385,73 @@ fn control_plane_launches_linux_desktop_entry_session() {
 }
 
 #[test]
+#[cfg(unix)]
+fn control_plane_launches_macos_app_bundle_session() {
+    let root = unique_test_dir("control-plane-macos-launch");
+    let applications = root.join("Applications");
+    let app_contents = applications.join("Fake.app/Contents");
+    std::fs::create_dir_all(&app_contents).expect("create app bundle");
+    std::fs::write(
+        app_contents.join("Info.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.fake</string>
+  <key>CFBundleDisplayName</key>
+  <string>Fake Mac App</string>
+</dict>
+</plist>
+"#,
+    )
+    .expect("write info plist");
+    let marker = root.join("open-marker");
+    let open_command = root.join("fake-open");
+    write_executable_script(
+        &open_command,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" \"$2\" > {}\n",
+            marker.display()
+        ),
+    );
+
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::with_macos_application_roots_and_open_command(
+            "integration-test",
+            vec![applications],
+            open_command,
+        ),
+        ServerConfig::local("correct-token"),
+    );
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "dev.apprelay.fake".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create launched macOS session");
+
+    wait_for_path(&marker);
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("read open marker"),
+        format!("-n\n{}\n", root.join("Applications/Fake.app").display())
+    );
+    assert_eq!(
+        session.selected_window.selection_method,
+        WindowSelectionMethod::LaunchIntent
+    );
+    assert_eq!(
+        session.launch_intent.expect("launch intent").status,
+        LaunchIntentStatus::Recorded
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn control_plane_authorizes_and_forwards_input_to_session() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),

@@ -15,12 +15,14 @@ desktop applications from a mobile or desktop client.
 
 ## Current Phase
 
-Phase 3 is complete. It includes the authenticated server control plane,
-server config persistence, SSH tunnel command planning and process lifecycle
-supervision, Linux/macOS application discovery, Rust-owned client profile and
-application permission persistence, structured logs, service manifest
-generation, and managed application window session state. Media streaming and
-input forwarding start in later phases.
+Phase 7 is active. Phases 1-6 are complete, including authenticated control,
+application discovery, managed sessions, selected-window video contracts, input
+forwarding contracts, and audio/microphone control-plane contracts.
+
+Current hardening work includes platform packaging, permissions, install and
+uninstall behavior, and explicit platform support gaps. Linux and macOS servers
+can discover and launch native desktop applications; Windows discovery and
+launch remain explicit unsupported gaps.
 
 See `docs/roadmap.md` for the full path from Phase 1 to production release.
 

@@ -376,6 +376,9 @@ Completed:
   user-facing reason
 - protocol errors expose stable user-facing messages for typed unsupported
   feature errors and control-plane service errors
+- macOS server launch support opens discovered `.app` bundles through the
+  native `open` command, and the client bundle configuration is active for
+  desktop packaging
 
 ## Phase 8: Security Review And Beta
 
