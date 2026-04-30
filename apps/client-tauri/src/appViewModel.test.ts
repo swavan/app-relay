@@ -53,6 +53,7 @@ describe("buildAppViewModel", () => {
           platform: "linux",
           feature: "appDiscovery",
           supported: true,
+          reason: "Available through the server adapter.",
         },
         {
           platform: "linux",
@@ -92,6 +93,13 @@ describe("buildAppViewModel", () => {
     expect(viewModel.connectionLabel).toBe("Linux PC");
     expect(viewModel.healthText).toBe("0.1.0");
     expect(viewModel.capabilitiesText).toBe("1/2");
+    expect(viewModel.capabilityNotes).toEqual([
+      {
+        feature: "App Discovery",
+        platform: "Linux",
+        reason: "Available through the server adapter.",
+      },
+    ]);
     expect(viewModel.unsupportedCapabilities).toEqual([
       {
         feature: "Window Resize",
@@ -118,7 +126,29 @@ describe("buildAppViewModel", () => {
     ]);
   });
 
-  it("surfaces only unsupported capability details", () => {
+  it("surfaces supported capability notes with trimmed server reasons", () => {
+    const viewModel = buildAppViewModel({
+      ...baseInput,
+      capabilities: [
+        {
+          platform: "windows_desktop",
+          feature: "keyboard-input",
+          supported: true,
+          reason: "  Routed by the active server profile.  ",
+        },
+      ],
+    });
+
+    expect(viewModel.capabilityNotes).toEqual([
+      {
+        feature: "Keyboard Input",
+        platform: "Windows Desktop",
+        reason: "Routed by the active server profile.",
+      },
+    ]);
+  });
+
+  it("omits unsupported capabilities and blank reasons from capability notes", () => {
     const viewModel = buildAppViewModel({
       ...baseInput,
       capabilities: [
@@ -129,27 +159,47 @@ describe("buildAppViewModel", () => {
           reason: "Native video capture is unavailable.",
         },
         {
-          platform: "windows_desktop",
-          feature: "keyboard-input",
-          supported: false,
-          reason: " ",
-        },
-        {
           platform: "linux",
           feature: "mouseInput",
           supported: true,
-          reason: "Implemented through native input forwarding.",
+          reason: " ",
+        },
+        {
+          platform: "ios",
+          feature: "audio-streaming",
+          supported: true,
+          reason: "",
         },
       ],
     });
 
-    expect(viewModel.capabilitiesText).toBe("1/3");
+    expect(viewModel.capabilitiesText).toBe("2/3");
+    expect(viewModel.capabilityNotes).toEqual([]);
     expect(viewModel.unsupportedCapabilities).toEqual([
       {
         feature: "Window Video",
         platform: "macOS",
         reason: "Native video capture is unavailable.",
       },
+    ]);
+  });
+
+  it("preserves unsupported capability fallback reasons", () => {
+    const viewModel = buildAppViewModel({
+      ...baseInput,
+      capabilities: [
+        {
+          platform: "windows_desktop",
+          feature: "keyboard-input",
+          supported: false,
+          reason: " ",
+        },
+      ],
+    });
+
+    expect(viewModel.capabilitiesText).toBe("0/1");
+    expect(viewModel.capabilityNotes).toEqual([]);
+    expect(viewModel.unsupportedCapabilities).toEqual([
       {
         feature: "Keyboard Input",
         platform: "Windows Desktop",

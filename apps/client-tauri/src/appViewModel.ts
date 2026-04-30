@@ -7,6 +7,7 @@ export type AppViewModel = {
   connectionLabel: string;
   healthText: string;
   capabilitiesText: string;
+  capabilityNotes: CapabilityNoteView[];
   unsupportedCapabilities: UnsupportedCapabilityView[];
   emptyText: string;
   errorText: string;
@@ -15,6 +16,12 @@ export type AppViewModel = {
 };
 
 export type UnsupportedCapabilityView = {
+  feature: string;
+  platform: string;
+  reason: string;
+};
+
+export type CapabilityNoteView = {
   feature: string;
   platform: string;
   reason: string;
@@ -57,6 +64,9 @@ export function buildAppViewModel(input: AppViewModelInput): AppViewModel {
     connectionLabel: input.selectedProfileLabel ?? "Local development",
     healthText: input.health?.version ?? "checking",
     capabilitiesText: `${supportedCapabilities.length}/${input.capabilities.length}`,
+    capabilityNotes: supportedCapabilities
+      .filter((capability) => capability.reason?.trim())
+      .map(buildCapabilityNoteView),
     unsupportedCapabilities: input.capabilities
       .filter((capability) => !capability.supported)
       .map(buildUnsupportedCapabilityView),
@@ -72,6 +82,14 @@ function buildAppListItem(app: AppSummary): AppListItem {
     ...app,
     iconView: buildAppIconView(app),
     launchLabel: buildLaunchLabel(app),
+  };
+}
+
+function buildCapabilityNoteView(capability: Capability): CapabilityNoteView {
+  return {
+    feature: humanizeToken(capability.feature),
+    platform: humanizePlatform(capability.platform),
+    reason: capability.reason?.trim() ?? "",
   };
 }
 
