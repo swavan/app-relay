@@ -984,10 +984,11 @@ impl NativeAudioMediaBackendLeg {
                 return false;
             };
             let selected_device_id = match self.leg {
-                AudioBackendLeg::Playback => devices.output_device_id.as_ref(),
+                AudioBackendLeg::Capture | AudioBackendLeg::Playback => {
+                    devices.output_device_id.as_ref()
+                }
                 AudioBackendLeg::ClientMicrophoneCapture
                 | AudioBackendLeg::ServerMicrophoneInjection => devices.input_device_id.as_ref(),
-                AudioBackendLeg::Capture => None,
             };
 
             selected_device_id.is_some_and(|device_id| {
@@ -3507,7 +3508,7 @@ mod tests {
             Some("selected output device speakers is unavailable")
         );
         assert_backend_leg_media(&output_lost, AudioBackendLeg::Playback, false);
-        assert_backend_leg_media(&output_lost, AudioBackendLeg::Capture, true);
+        assert_backend_leg_media(&output_lost, AudioBackendLeg::Capture, false);
         assert_backend_leg_media(&output_lost, AudioBackendLeg::ClientMicrophoneCapture, true);
         assert_backend_leg_media(
             &output_lost,
@@ -3517,8 +3518,8 @@ mod tests {
         assert_eq!(
             output_lost.stats,
             AudioStreamStats {
-                packets_sent: 80,
-                packets_received: 160,
+                packets_sent: 70,
+                packets_received: 140,
                 latency_ms: 15,
             }
         );
