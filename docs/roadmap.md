@@ -434,6 +434,13 @@ Acceptance criteria:
 - dependency audit has no unresolved production-critical issues
 - beta release notes include known limitations
 
+Completed:
+
+- completed threat model documentation slice in
+  [`threat-model.md`](threat-model.md), covering assets, trust boundaries,
+  actors, entry points, major threats, existing mitigations, explicit gaps and
+  assumptions, and the beta security review checklist
+
 ## Phase 9: Production Release
 
 Goal: ship a stable release suitable for daily use on the first supported
