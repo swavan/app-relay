@@ -135,6 +135,7 @@ fn pipewire_capture_enabled_from_env() -> bool {
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 fn pipewire_capture_command_from_env_value(value: Option<&str>) -> String {
     value
+        .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("pw-record")
         .to_string()
@@ -159,6 +160,7 @@ fn pipewire_capture_channels_from_env_value(value: Option<&str>) -> u16 {
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 fn pipewire_capture_format_from_env_value(value: Option<&str>) -> String {
     value
+        .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(PipeWireCaptureCommandConfig::DEFAULT_FORMAT)
         .to_string()
@@ -166,7 +168,10 @@ fn pipewire_capture_format_from_env_value(value: Option<&str>) -> String {
 
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 fn pipewire_capture_target_from_env_value(value: Option<&str>) -> Option<String> {
-    value.filter(|value| !value.is_empty()).map(str::to_string)
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -186,7 +191,15 @@ mod tests {
             "pw-cat"
         );
         assert_eq!(
+            pipewire_capture_command_from_env_value(Some("  pw-cat  ")),
+            "pw-cat"
+        );
+        assert_eq!(
             pipewire_capture_command_from_env_value(Some("")),
+            "pw-record"
+        );
+        assert_eq!(
+            pipewire_capture_command_from_env_value(Some("   ")),
             "pw-record"
         );
         assert_eq!(pipewire_capture_command_from_env_value(None), "pw-record");
@@ -202,14 +215,24 @@ mod tests {
         assert_eq!(pipewire_capture_channels_from_env_value(None), 2);
 
         assert_eq!(pipewire_capture_format_from_env_value(Some("f32")), "f32");
+        assert_eq!(
+            pipewire_capture_format_from_env_value(Some("  f32  ")),
+            "f32"
+        );
         assert_eq!(pipewire_capture_format_from_env_value(Some("")), "s16");
+        assert_eq!(pipewire_capture_format_from_env_value(Some("   ")), "s16");
         assert_eq!(pipewire_capture_format_from_env_value(None), "s16");
 
         assert_eq!(
             pipewire_capture_target_from_env_value(Some("bluez_output.test.monitor")),
             Some("bluez_output.test.monitor".to_string())
         );
+        assert_eq!(
+            pipewire_capture_target_from_env_value(Some("  bluez_output.test.monitor  ")),
+            Some("bluez_output.test.monitor".to_string())
+        );
         assert_eq!(pipewire_capture_target_from_env_value(Some("")), None);
+        assert_eq!(pipewire_capture_target_from_env_value(Some("   ")), None);
         assert_eq!(pipewire_capture_target_from_env_value(None), None);
     }
 }
