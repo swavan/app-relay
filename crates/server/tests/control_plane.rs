@@ -13,9 +13,25 @@ use apprelay_protocol::{
 };
 use apprelay_server::{ServerControlPlane, ServerServices};
 
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+fn pipewire_capture_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static PIPEWIRE_CAPTURE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    PIPEWIRE_CAPTURE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn server_services_for_platform(platform: Platform, version: impl Into<String>) -> ServerServices {
+    #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+    let _env_guard = pipewire_capture_env_lock();
+
+    ServerServices::new(platform, version)
+}
+
 fn start_audio_stream_for_platform(platform: Platform) -> AudioStreamSession {
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::new(platform, "integration-test"),
+        server_services_for_platform(platform, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let auth = ControlAuth::new("correct-token");
@@ -47,7 +63,7 @@ fn start_audio_stream_for_platform(platform: Platform) -> AudioStreamSession {
 #[test]
 fn control_plane_rejects_unauthorized_requests() {
     let control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
 
@@ -60,7 +76,7 @@ fn control_plane_rejects_unauthorized_requests() {
 #[test]
 fn control_plane_exposes_version_for_authorized_requests() {
     let control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Macos, "integration-test"),
+        server_services_for_platform(Platform::Macos, "integration-test"),
         ServerConfig::local("correct-token"),
     );
 
@@ -77,7 +93,7 @@ fn control_plane_exposes_version_for_authorized_requests() {
 #[test]
 fn control_plane_reports_linux_app_discovery_capability() {
     let control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let capabilities = control_plane
@@ -93,7 +109,7 @@ fn control_plane_reports_linux_app_discovery_capability() {
 fn control_plane_reports_desktop_audio_capabilities() {
     for platform in [Platform::Linux, Platform::Macos, Platform::Windows] {
         let control_plane = ServerControlPlane::new(
-            ServerServices::new(platform, "integration-test"),
+            server_services_for_platform(platform, "integration-test"),
             ServerConfig::local("correct-token"),
         );
         let capabilities = control_plane
@@ -112,7 +128,7 @@ fn control_plane_reports_desktop_audio_capabilities() {
 #[test]
 fn control_plane_reports_macos_app_discovery_capability() {
     let control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Macos, "integration-test"),
+        server_services_for_platform(Platform::Macos, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let capabilities = control_plane
@@ -127,7 +143,7 @@ fn control_plane_reports_macos_app_discovery_capability() {
 #[test]
 fn control_plane_maps_unsupported_application_discovery_errors() {
     let control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Windows, "integration-test"),
+        server_services_for_platform(Platform::Windows, "integration-test"),
         ServerConfig::local("correct-token"),
     );
 
@@ -143,7 +159,7 @@ fn control_plane_maps_unsupported_application_discovery_errors() {
 #[test]
 fn control_plane_heartbeat_supports_reconnect_checks() {
     let control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let auth = ControlAuth::new("correct-token");
@@ -163,7 +179,7 @@ fn control_plane_heartbeat_supports_reconnect_checks() {
 #[test]
 fn control_plane_manages_application_session_lifecycle() {
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let auth = ControlAuth::new("correct-token");
@@ -198,7 +214,7 @@ fn control_plane_manages_application_session_lifecycle() {
 #[test]
 fn control_plane_authorizes_and_forwards_input_to_session() {
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let auth = ControlAuth::new("correct-token");
@@ -252,7 +268,7 @@ fn control_plane_authorizes_and_forwards_input_to_session() {
 #[test]
 fn control_plane_rejects_unauthorized_input_requests() {
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
 
@@ -272,7 +288,7 @@ fn control_plane_rejects_unauthorized_input_requests() {
 #[test]
 fn control_plane_rejects_input_for_unknown_session() {
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
 
@@ -294,7 +310,7 @@ fn control_plane_rejects_input_for_unknown_session() {
 #[test]
 fn control_plane_manages_video_stream_lifecycle() {
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let auth = ControlAuth::new("correct-token");
@@ -357,7 +373,7 @@ fn control_plane_manages_video_stream_lifecycle() {
 #[test]
 fn control_plane_negotiates_video_stream() {
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let auth = ControlAuth::new("correct-token");
@@ -423,7 +439,7 @@ fn control_plane_negotiates_video_stream() {
 #[test]
 fn control_plane_reconnects_and_resizes_video_stream() {
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let auth = ControlAuth::new("correct-token");
@@ -491,7 +507,7 @@ fn control_plane_reconnects_and_resizes_video_stream() {
 #[test]
 fn control_plane_keeps_negotiated_video_encoding_coherent_after_resize() {
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let auth = ControlAuth::new("correct-token");
@@ -557,7 +573,7 @@ fn control_plane_keeps_negotiated_video_encoding_coherent_after_resize() {
 #[test]
 fn control_plane_marks_stream_failed_when_session_closes() {
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let auth = ControlAuth::new("correct-token");
@@ -620,7 +636,7 @@ fn control_plane_marks_stream_failed_when_session_closes() {
 #[test]
 fn control_plane_manages_audio_stream_independently_from_video() {
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let auth = ControlAuth::new("correct-token");
@@ -691,7 +707,7 @@ fn control_plane_manages_audio_stream_independently_from_video() {
 fn control_plane_starts_audio_stream_on_desktop_platforms() {
     for platform in [Platform::Linux, Platform::Macos, Platform::Windows] {
         let mut control_plane = ServerControlPlane::new(
-            ServerServices::new(platform, "integration-test"),
+            server_services_for_platform(platform, "integration-test"),
             ServerConfig::local("correct-token"),
         );
         let auth = ControlAuth::new("correct-token");
@@ -838,15 +854,19 @@ fn control_plane_pipewire_capture_feature_reports_linux_adapter_boundary_only() 
 fn control_plane_pipewire_capture_env_overrides_pw_record_arguments() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct EnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
         vars: Vec<(&'static str, Option<String>)>,
     }
 
     impl EnvGuard {
         fn set(vars: &[(&'static str, String)]) -> Self {
+            let lock = pipewire_capture_env_lock();
             let guard = Self {
+                _lock: lock,
                 vars: vars
                     .iter()
                     .map(|(key, _)| (*key, std::env::var(key).ok()))
@@ -871,6 +891,35 @@ fn control_plane_pipewire_capture_env_overrides_pw_record_arguments() {
         }
     }
 
+    struct TempFiles {
+        paths: Vec<PathBuf>,
+    }
+
+    impl Drop for TempFiles {
+        fn drop(&mut self) {
+            for path in &self.paths {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+
+    struct AudioStreamCleanup<'a> {
+        control_plane: &'a mut ServerControlPlane,
+        auth: ControlAuth,
+        stream_id: String,
+    }
+
+    impl Drop for AudioStreamCleanup<'_> {
+        fn drop(&mut self) {
+            let _ = self.control_plane.stop_audio_stream(
+                &self.auth,
+                StopAudioStreamRequest {
+                    stream_id: self.stream_id.clone(),
+                },
+            );
+        }
+    }
+
     let test_id = format!(
         "{}-{}",
         std::process::id(),
@@ -881,6 +930,9 @@ fn control_plane_pipewire_capture_env_overrides_pw_record_arguments() {
     );
     let script_path = std::env::temp_dir().join(format!("apprelay-server-pipewire-{test_id}"));
     let args_path = std::env::temp_dir().join(format!("apprelay-server-pipewire-{test_id}.txt"));
+    let _temp_files = TempFiles {
+        paths: vec![script_path.clone(), args_path.clone()],
+    };
     fs::write(
         &script_path,
         format!(
@@ -938,6 +990,11 @@ fn control_plane_pipewire_capture_env_overrides_pw_record_arguments() {
             },
         )
         .expect("start audio stream");
+    let _audio_cleanup = AudioStreamCleanup {
+        control_plane: &mut control_plane,
+        auth: auth.clone(),
+        stream_id: audio.id.clone(),
+    };
     assert_eq!(audio.state, AudioStreamState::Streaming);
 
     let args = fs::read_to_string(&args_path).expect("captured command arguments");
@@ -955,15 +1012,6 @@ fn control_plane_pipewire_capture_env_overrides_pw_record_arguments() {
             "-"
         ]
     );
-
-    let _ = control_plane.stop_audio_stream(
-        &auth,
-        StopAudioStreamRequest {
-            stream_id: audio.id,
-        },
-    );
-    let _ = fs::remove_file(script_path);
-    let _ = fs::remove_file(args_path);
 }
 
 #[cfg(feature = "pipewire-capture")]
@@ -990,7 +1038,7 @@ fn control_plane_pipewire_capture_feature_does_not_affect_macos_or_windows() {
 #[test]
 fn control_plane_updates_audio_mute_and_devices() {
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let auth = ControlAuth::new("correct-token");
@@ -1045,7 +1093,7 @@ fn control_plane_updates_audio_mute_and_devices() {
 #[test]
 fn control_plane_stops_audio_stream_when_session_closes() {
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::new(Platform::Linux, "integration-test"),
+        server_services_for_platform(Platform::Linux, "integration-test"),
         ServerConfig::local("correct-token"),
     );
     let auth = ControlAuth::new("correct-token");
