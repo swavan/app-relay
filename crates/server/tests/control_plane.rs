@@ -3,13 +3,14 @@ use apprelay_protocol::{
     AppRelayError, AudioBackendFailureKind, AudioBackendKind, AudioBackendLeg,
     AudioBackendReadiness, AudioStreamSession, AudioStreamState, ButtonAction, ClientPoint,
     ControlAuth, ControlError, CreateSessionRequest, Feature, ForwardInputRequest,
-    InputDeliveryStatus, InputEvent, MappedInputEvent, MicrophoneMode, NegotiateVideoStreamRequest,
-    Platform, PointerButton, ReconnectVideoStreamRequest, ResizeSessionRequest, ServerPoint,
-    ServerVersion, SessionState, StartAudioStreamRequest, StartVideoStreamRequest,
-    StopAudioStreamRequest, StopVideoStreamRequest, UpdateAudioStreamRequest,
-    VideoEncodingPipelineState, VideoResolutionAdaptationReason, VideoStreamFailureKind,
-    VideoStreamNegotiationState, VideoStreamRecoveryAction, VideoStreamState, ViewportSize,
-    WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription,
+    InputDeliveryStatus, InputEvent, LaunchIntentStatus, MappedInputEvent, MicrophoneMode,
+    NegotiateVideoStreamRequest, Platform, PointerButton, ReconnectVideoStreamRequest,
+    ResizeSessionRequest, ServerPoint, ServerVersion, SessionState, StartAudioStreamRequest,
+    StartVideoStreamRequest, StopAudioStreamRequest, StopVideoStreamRequest,
+    UpdateAudioStreamRequest, VideoEncodingPipelineState, VideoResolutionAdaptationReason,
+    VideoStreamFailureKind, VideoStreamNegotiationState, VideoStreamRecoveryAction,
+    VideoStreamState, ViewportSize, WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription,
+    WindowSelectionMethod,
 };
 use apprelay_server::{ServerControlPlane, ServerServices};
 
@@ -108,6 +109,41 @@ fn server_services_for_platform(platform: Platform, version: impl Into<String>) 
     let _env_guard = pipewire_capture_env_lock();
 
     ServerServices::new(platform, version)
+}
+
+#[cfg(unix)]
+fn unique_test_dir(name: &str) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after unix epoch")
+        .as_nanos();
+
+    std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()))
+}
+
+#[cfg(unix)]
+fn write_executable_script(path: &std::path::Path, contents: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::write(path, contents).expect("write executable script");
+    let mut permissions = std::fs::metadata(path)
+        .expect("read executable script metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).expect("mark executable script");
+}
+
+#[cfg(unix)]
+fn wait_for_path(path: &std::path::Path) {
+    for _ in 0..100 {
+        if path.exists() {
+            return;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    panic!("timed out waiting for {}", path.display());
 }
 
 fn start_audio_stream_for_platform(platform: Platform) -> AudioStreamSession {
@@ -290,6 +326,62 @@ fn control_plane_manages_application_session_lifecycle() {
     assert_eq!(resized.viewport, ViewportSize::new(1440, 900));
     assert_eq!(closed.state, SessionState::Closed);
     assert_eq!(control_plane.active_sessions(&auth), Ok(Vec::new()));
+}
+
+#[test]
+#[cfg(unix)]
+fn control_plane_launches_linux_desktop_entry_session() {
+    let root = unique_test_dir("control-plane-linux-launch");
+    let applications = root.join("applications");
+    std::fs::create_dir_all(&applications).expect("create desktop entry root");
+    let marker = root.join("launch-marker");
+    let executable = root.join("fake-app");
+    write_executable_script(
+        &executable,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" \"$2\" > {}\n",
+            marker.display()
+        ),
+    );
+    std::fs::write(
+        applications.join("fake.desktop"),
+        format!(
+            "[Desktop Entry]\nType=Application\nName=Fake App\nExec={} --label \"Fake App\" %U\n",
+            executable.display()
+        ),
+    )
+    .expect("write desktop entry");
+
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::with_linux_desktop_entry_roots("integration-test", vec![applications]),
+        ServerConfig::local("correct-token"),
+    );
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "fake".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create launched session");
+
+    wait_for_path(&marker);
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("read launch marker"),
+        "--label\nFake App\n"
+    );
+    assert_eq!(
+        session.selected_window.selection_method,
+        WindowSelectionMethod::LaunchIntent
+    );
+    assert_eq!(
+        session.launch_intent.expect("launch intent").status,
+        LaunchIntentStatus::Recorded
+    );
+
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

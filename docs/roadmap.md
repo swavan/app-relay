@@ -101,6 +101,8 @@ Scope:
 - completed launch intent slice: sessions record launch metadata from
   discovered applications and unsupported launch backends return typed
   unsupported errors
+- completed Linux native launch slice: discovered `.desktop` applications with
+  `Exec=` metadata spawn directly without a shell when sessions are created
 - completed client state slice: app list/session view model covers loading,
   empty, error, and success states
 - completed permission allowlist slice: Rust-owned application grants persist
