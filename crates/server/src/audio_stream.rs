@@ -151,6 +151,7 @@ fn pipewire_capture_command_from_env_value(value: Option<&str>) -> String {
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 fn pipewire_capture_rate_from_env_value(value: Option<&str>) -> u32 {
     value
+        .map(str::trim)
         .and_then(|value| value.parse::<u32>().ok())
         .filter(|rate| *rate > 0)
         .unwrap_or(PipeWireCaptureCommandConfig::DEFAULT_RATE)
@@ -159,6 +160,7 @@ fn pipewire_capture_rate_from_env_value(value: Option<&str>) -> u32 {
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 fn pipewire_capture_channels_from_env_value(value: Option<&str>) -> u16 {
     value
+        .map(str::trim)
         .and_then(|value| value.parse::<u16>().ok())
         .filter(|channels| *channels > 0)
         .unwrap_or(PipeWireCaptureCommandConfig::DEFAULT_CHANNELS)
@@ -223,12 +225,21 @@ mod tests {
         assert_eq!(pipewire_capture_command_from_env_value(None), "pw-record");
 
         assert_eq!(pipewire_capture_rate_from_env_value(Some("44100")), 44_100);
+        assert_eq!(
+            pipewire_capture_rate_from_env_value(Some(" 44100 ")),
+            44_100
+        );
         assert_eq!(pipewire_capture_rate_from_env_value(Some("0")), 48_000);
+        assert_eq!(pipewire_capture_rate_from_env_value(Some("")), 48_000);
+        assert_eq!(pipewire_capture_rate_from_env_value(Some("   ")), 48_000);
         assert_eq!(pipewire_capture_rate_from_env_value(Some("bad")), 48_000);
         assert_eq!(pipewire_capture_rate_from_env_value(None), 48_000);
 
         assert_eq!(pipewire_capture_channels_from_env_value(Some("1")), 1);
+        assert_eq!(pipewire_capture_channels_from_env_value(Some(" 1 ")), 1);
         assert_eq!(pipewire_capture_channels_from_env_value(Some("0")), 2);
+        assert_eq!(pipewire_capture_channels_from_env_value(Some("")), 2);
+        assert_eq!(pipewire_capture_channels_from_env_value(Some("   ")), 2);
         assert_eq!(pipewire_capture_channels_from_env_value(Some("-1")), 2);
         assert_eq!(pipewire_capture_channels_from_env_value(None), 2);
 
