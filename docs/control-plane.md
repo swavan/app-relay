@@ -126,12 +126,18 @@ The server binary supports:
 
 - `apprelay-server service-plan [linux|macos|windows]`
 - `apprelay-server install-service [linux|macos|windows]`
+- `apprelay-server uninstall-service-plan [linux|macos|windows]`
+- `apprelay-server uninstall-service [linux|macos|windows]`
 
 `service-plan` prints the platform manifest, config path, log path, and lifecycle
 commands. `install-service` writes the manifest or installer script to the
-platform service location and prints the start/status commands. Linux uses a
-user-level systemd unit, macOS uses a launchd agent, and Windows uses a
-PowerShell script that registers the native service with `sc.exe`.
+platform service location and prints the start/status commands.
+`uninstall-service-plan` prints the deterministic uninstall script path, target
+service manifest path, run command, and script contents. `uninstall-service`
+writes that uninstall script and prints the command to run it; it does not stop
+or delete services directly. Linux uses a user-level systemd unit, macOS uses a
+launchd agent, and Windows uses PowerShell scripts that register and unregister
+the native service with `sc.exe`.
 
 ## Events
 

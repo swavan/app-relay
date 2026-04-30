@@ -386,6 +386,9 @@ Completed:
   Tauri bundle identity, frontend build wiring, bundle activation, required
   generated icon assets, and built frontend output without running native OS
   bundle builds
+- server daemon install/uninstall lifecycle planning is explicit for Linux,
+  macOS, and Windows; the CLI can print and write deterministic uninstall
+  scripts without executing service-manager commands directly
 
 ## Phase 8: Security Review And Beta
 

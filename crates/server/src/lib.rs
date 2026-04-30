@@ -838,6 +838,15 @@ pub struct ServiceInstallPlan {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServiceUninstallPlan {
+    pub platform: Platform,
+    pub manifest_path: PathBuf,
+    pub service_manifest_path: PathBuf,
+    pub manifest_contents: String,
+    pub run_command: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ServiceInstallError {
     UnsupportedPlatform(Platform),
     MissingHomeDirectory,
@@ -866,6 +875,12 @@ impl DaemonServiceInstaller {
         self.plan_for_platform(Platform::current())
     }
 
+    pub fn uninstall_plan_for_current_platform(
+        &self,
+    ) -> Result<ServiceUninstallPlan, ServiceInstallError> {
+        self.uninstall_plan_for_platform(Platform::current())
+    }
+
     pub fn plan_for_platform(
         &self,
         platform: Platform,
@@ -874,6 +889,20 @@ impl DaemonServiceInstaller {
             Platform::Linux => self.linux_user_systemd_plan(),
             Platform::Macos => self.macos_launch_agent_plan(),
             Platform::Windows => self.windows_service_script_plan(),
+            Platform::Android | Platform::Ios | Platform::Unknown => {
+                Err(ServiceInstallError::UnsupportedPlatform(platform))
+            }
+        }
+    }
+
+    pub fn uninstall_plan_for_platform(
+        &self,
+        platform: Platform,
+    ) -> Result<ServiceUninstallPlan, ServiceInstallError> {
+        match platform {
+            Platform::Linux => self.linux_user_systemd_uninstall_plan(),
+            Platform::Macos => self.macos_launch_agent_uninstall_plan(),
+            Platform::Windows => self.windows_service_uninstall_script_plan(),
             Platform::Android | Platform::Ios | Platform::Unknown => {
                 Err(ServiceInstallError::UnsupportedPlatform(platform))
             }
@@ -889,10 +918,44 @@ impl DaemonServiceInstaller {
         Ok(())
     }
 
+    pub fn write_uninstall_manifest(
+        &self,
+        plan: &ServiceUninstallPlan,
+    ) -> Result<(), ServiceInstallError> {
+        if let Some(parent) = plan.manifest_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::write(&plan.manifest_path, &plan.manifest_contents)?;
+        Ok(())
+    }
+
     fn linux_user_systemd_plan(&self) -> Result<ServiceInstallPlan, ServiceInstallError> {
         let home = home_dir()?;
-        let config_path = xdg_config_home(&home).join("apprelay/server.conf");
-        let log_path = xdg_state_home(&home).join("apprelay/server.log");
+        Ok(self.linux_user_systemd_plan_for_paths(
+            &home,
+            &xdg_config_home(&home),
+            &xdg_state_home(&home),
+        ))
+    }
+
+    #[cfg(test)]
+    fn linux_user_systemd_plan_for_home(&self, home: &Path) -> ServiceInstallPlan {
+        self.linux_user_systemd_plan_for_paths(
+            home,
+            &home.join(".config"),
+            &home.join(".local/state"),
+        )
+    }
+
+    fn linux_user_systemd_plan_for_paths(
+        &self,
+        home: &Path,
+        config_home: &Path,
+        state_home: &Path,
+    ) -> ServiceInstallPlan {
+        let config_path = config_home.join("apprelay/server.conf");
+        let log_path = state_home.join("apprelay/server.log");
         let manifest_path = home.join(".config/systemd/user/apprelay.service");
         let executable_path = display_path(&self.executable_path);
         let config_arg = display_path(&config_path);
@@ -910,7 +973,7 @@ RestartSec=3\n\
 WantedBy=default.target\n"
         );
 
-        Ok(ServiceInstallPlan {
+        ServiceInstallPlan {
             platform: Platform::Linux,
             manifest_path,
             config_path,
@@ -922,11 +985,53 @@ WantedBy=default.target\n"
             uninstall_command:
                 "systemctl --user disable --now apprelay.service && rm ~/.config/systemd/user/apprelay.service && systemctl --user daemon-reload"
                     .to_string(),
-        })
+        }
+    }
+
+    fn linux_user_systemd_uninstall_plan(
+        &self,
+    ) -> Result<ServiceUninstallPlan, ServiceInstallError> {
+        let home = home_dir()?;
+        Ok(self.linux_user_systemd_uninstall_plan_for_paths(&home, &xdg_config_home(&home)))
+    }
+
+    #[cfg(test)]
+    fn linux_user_systemd_uninstall_plan_for_home(&self, home: &Path) -> ServiceUninstallPlan {
+        self.linux_user_systemd_uninstall_plan_for_paths(home, &home.join(".config"))
+    }
+
+    fn linux_user_systemd_uninstall_plan_for_paths(
+        &self,
+        home: &Path,
+        config_home: &Path,
+    ) -> ServiceUninstallPlan {
+        let manifest_path = config_home.join("apprelay/uninstall-service.sh");
+        let service_manifest_path = home.join(".config/systemd/user/apprelay.service");
+        let service_manifest_arg = shell_quote(&display_path(&service_manifest_path));
+        let manifest_arg = shell_quote(&display_path(&manifest_path));
+        let manifest_contents = format!(
+            "#!/bin/sh\n\
+set -eu\n\
+systemctl --user disable --now apprelay.service || true\n\
+rm -f {service_manifest_arg}\n\
+systemctl --user daemon-reload\n"
+        );
+
+        ServiceUninstallPlan {
+            platform: Platform::Linux,
+            manifest_path,
+            service_manifest_path,
+            manifest_contents,
+            run_command: format!("sh {manifest_arg}"),
+        }
     }
 
     fn macos_launch_agent_plan(&self) -> Result<ServiceInstallPlan, ServiceInstallError> {
         let home = home_dir()?;
+        Ok(self.macos_launch_agent_plan_for_home(&home))
+    }
+
+    fn macos_launch_agent_plan_for_home(&self, home: &Path) -> ServiceInstallPlan {
         let config_path = home.join("Library/Application Support/AppRelay/server.conf");
         let log_path = home.join("Library/Logs/AppRelay/server.log");
         let manifest_path = home.join("Library/LaunchAgents/dev.apprelay.server.plist");
@@ -957,7 +1062,7 @@ WantedBy=default.target\n"
 </plist>\n"
         );
 
-        Ok(ServiceInstallPlan {
+        ServiceInstallPlan {
             platform: Platform::Macos,
             manifest_path,
             config_path,
@@ -969,17 +1074,51 @@ WantedBy=default.target\n"
             uninstall_command: format!(
                 "launchctl bootout gui/$UID/dev.apprelay.server; rm {manifest_arg}"
             ),
-        })
+        }
+    }
+
+    fn macos_launch_agent_uninstall_plan(
+        &self,
+    ) -> Result<ServiceUninstallPlan, ServiceInstallError> {
+        let home = home_dir()?;
+        Ok(self.macos_launch_agent_uninstall_plan_for_home(&home))
+    }
+
+    fn macos_launch_agent_uninstall_plan_for_home(&self, home: &Path) -> ServiceUninstallPlan {
+        let service_manifest_path = home.join("Library/LaunchAgents/dev.apprelay.server.plist");
+        let manifest_path = home.join("Library/Application Support/AppRelay/uninstall-service.sh");
+        let service_manifest_arg = shell_quote(&display_path(&service_manifest_path));
+        let manifest_arg = shell_quote(&display_path(&manifest_path));
+        let manifest_contents = format!(
+            "#!/bin/sh\n\
+set -eu\n\
+launchctl bootout gui/$UID/dev.apprelay.server || true\n\
+rm -f {service_manifest_arg}\n"
+        );
+
+        ServiceUninstallPlan {
+            platform: Platform::Macos,
+            manifest_path,
+            service_manifest_path,
+            manifest_contents,
+            run_command: format!("sh {manifest_arg}"),
+        }
     }
 
     fn windows_service_script_plan(&self) -> Result<ServiceInstallPlan, ServiceInstallError> {
         let program_data = std::env::var_os("ProgramData")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("C:\\ProgramData"));
-        let service_root = program_data.join("AppRelay");
-        let config_path = service_root.join("server.conf");
-        let log_path = service_root.join("server.log");
-        let manifest_path = service_root.join("install-service.ps1");
+        Ok(self.windows_service_script_plan_for_program_data(&program_data))
+    }
+
+    fn windows_service_script_plan_for_program_data(
+        &self,
+        program_data: &Path,
+    ) -> ServiceInstallPlan {
+        let config_path = windows_path(program_data, &["AppRelay", "server.conf"]);
+        let log_path = windows_path(program_data, &["AppRelay", "server.log"]);
+        let manifest_path = windows_path(program_data, &["AppRelay", "install-service.ps1"]);
         let executable_path = display_path(&self.executable_path);
         let config_arg = display_path(&config_path);
         let log_arg = display_path(&log_path);
@@ -995,7 +1134,7 @@ sc.exe create $serviceName binPath= $binaryPath start= auto DisplayName= 'AppRel
 sc.exe start $serviceName\n"
         );
 
-        Ok(ServiceInstallPlan {
+        ServiceInstallPlan {
             platform: Platform::Windows,
             manifest_path,
             config_path,
@@ -1005,7 +1144,48 @@ sc.exe start $serviceName\n"
             stop_command: "sc.exe stop AppRelay".to_string(),
             status_command: "sc.exe query AppRelay".to_string(),
             uninstall_command: "sc.exe stop AppRelay && sc.exe delete AppRelay".to_string(),
-        })
+        }
+    }
+
+    fn windows_service_uninstall_script_plan(
+        &self,
+    ) -> Result<ServiceUninstallPlan, ServiceInstallError> {
+        let program_data = std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("C:\\ProgramData"));
+        Ok(self.windows_service_uninstall_script_plan_for_program_data(&program_data))
+    }
+
+    fn windows_service_uninstall_script_plan_for_program_data(
+        &self,
+        program_data: &Path,
+    ) -> ServiceUninstallPlan {
+        let manifest_path = windows_path(program_data, &["AppRelay", "uninstall-service.ps1"]);
+        let service_manifest_path =
+            windows_path(program_data, &["AppRelay", "install-service.ps1"]);
+        let manifest_arg = powershell_quote(&display_path(&manifest_path));
+        let service_manifest_arg = powershell_quote(&display_path(&service_manifest_path));
+        let manifest_contents = "$ErrorActionPreference = 'Stop'\n\
+$serviceName = 'AppRelay'\n\
+$service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue\n\
+if ($service) {\n\
+  if ($service.Status -ne 'Stopped') {\n\
+    sc.exe stop $serviceName | Out-Null\n\
+  }\n\
+  sc.exe delete $serviceName | Out-Null\n\
+}\n"
+        .to_string()
+            + &format!(
+                "Remove-Item -LiteralPath {service_manifest_arg} -Force -ErrorAction SilentlyContinue\n"
+            );
+
+        ServiceUninstallPlan {
+            platform: Platform::Windows,
+            manifest_path,
+            service_manifest_path,
+            manifest_contents,
+            run_command: format!("powershell.exe -ExecutionPolicy Bypass -File {manifest_arg}"),
+        }
     }
 }
 
@@ -1029,6 +1209,26 @@ fn xdg_state_home(home: &Path) -> PathBuf {
 
 fn display_path(path: &Path) -> String {
     path.display().to_string()
+}
+
+fn windows_path(root: &Path, children: &[&str]) -> PathBuf {
+    let mut path = display_path(root).replace('/', "\\");
+    path = path.trim_end_matches('\\').to_string();
+
+    for child in children {
+        path.push('\\');
+        path.push_str(child.trim_matches('\\'));
+    }
+
+    PathBuf::from(path)
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn xml_escape(value: &str) -> String {
@@ -1536,17 +1736,25 @@ mod tests {
     #[test]
     fn daemon_service_installer_builds_linux_user_systemd_plan() {
         let installer = DaemonServiceInstaller::new("/usr/bin/apprelay-server");
-        let plan = installer
-            .plan_for_platform(Platform::Linux)
-            .expect("linux service plan");
+        let home = PathBuf::from("/home/apprelay");
+        let plan = installer.linux_user_systemd_plan_for_home(&home);
 
         assert_eq!(plan.platform, Platform::Linux);
-        assert!(plan
-            .manifest_path
-            .ends_with(".config/systemd/user/apprelay.service"));
+        assert_eq!(
+            plan.manifest_path,
+            PathBuf::from("/home/apprelay/.config/systemd/user/apprelay.service")
+        );
+        assert_eq!(
+            plan.config_path,
+            PathBuf::from("/home/apprelay/.config/apprelay/server.conf")
+        );
+        assert_eq!(
+            plan.log_path,
+            PathBuf::from("/home/apprelay/.local/state/apprelay/server.log")
+        );
         assert!(plan
             .manifest_contents
-            .contains("ExecStart=/usr/bin/apprelay-server --config"));
+            .contains("ExecStart=/usr/bin/apprelay-server --config /home/apprelay/.config/apprelay/server.conf --log /home/apprelay/.local/state/apprelay/server.log"));
         assert!(plan
             .manifest_contents
             .contains("Restart=on-failure\nRestartSec=3"));
@@ -1559,14 +1767,22 @@ mod tests {
     #[test]
     fn daemon_service_installer_builds_macos_launch_agent_plan() {
         let installer = DaemonServiceInstaller::new("/Applications/AppRelay.app/server");
-        let plan = installer
-            .plan_for_platform(Platform::Macos)
-            .expect("macos service plan");
+        let home = PathBuf::from("/Users/apprelay");
+        let plan = installer.macos_launch_agent_plan_for_home(&home);
 
         assert_eq!(plan.platform, Platform::Macos);
-        assert!(plan
-            .manifest_path
-            .ends_with("Library/LaunchAgents/dev.apprelay.server.plist"));
+        assert_eq!(
+            plan.manifest_path,
+            PathBuf::from("/Users/apprelay/Library/LaunchAgents/dev.apprelay.server.plist")
+        );
+        assert_eq!(
+            plan.config_path,
+            PathBuf::from("/Users/apprelay/Library/Application Support/AppRelay/server.conf")
+        );
+        assert_eq!(
+            plan.log_path,
+            PathBuf::from("/Users/apprelay/Library/Logs/AppRelay/server.log")
+        );
         assert!(plan
             .manifest_contents
             .contains("<string>dev.apprelay.server</string>"));
@@ -1577,17 +1793,134 @@ mod tests {
     #[test]
     fn daemon_service_installer_builds_windows_service_script_plan() {
         let installer = DaemonServiceInstaller::new("C:\\Program Files\\AppRelay\\server.exe");
-        let plan = installer
-            .plan_for_platform(Platform::Windows)
-            .expect("windows service plan");
+        let program_data = PathBuf::from("C:\\ProgramData");
+        let plan = installer.windows_service_script_plan_for_program_data(&program_data);
 
         assert_eq!(plan.platform, Platform::Windows);
-        assert!(plan.manifest_path.ends_with("install-service.ps1"));
+        assert_eq!(
+            plan.manifest_path,
+            PathBuf::from("C:\\ProgramData\\AppRelay\\install-service.ps1")
+        );
+        assert_eq!(
+            plan.config_path,
+            PathBuf::from("C:\\ProgramData\\AppRelay\\server.conf")
+        );
+        assert_eq!(
+            plan.log_path,
+            PathBuf::from("C:\\ProgramData\\AppRelay\\server.log")
+        );
         assert!(plan.manifest_contents.contains("$serviceName = 'AppRelay'"));
         assert!(plan
             .manifest_contents
             .contains("sc.exe create $serviceName"));
         assert_eq!(plan.status_command, "sc.exe query AppRelay");
+    }
+
+    #[test]
+    fn daemon_service_installer_builds_linux_uninstall_plan() {
+        let installer = DaemonServiceInstaller::new("/usr/bin/apprelay-server");
+        let home = PathBuf::from("/home/app relay");
+        let plan = installer.linux_user_systemd_uninstall_plan_for_home(&home);
+
+        assert_eq!(plan.platform, Platform::Linux);
+        assert_eq!(
+            plan.manifest_path,
+            PathBuf::from("/home/app relay/.config/apprelay/uninstall-service.sh")
+        );
+        assert_eq!(
+            plan.service_manifest_path,
+            PathBuf::from("/home/app relay/.config/systemd/user/apprelay.service")
+        );
+        assert_eq!(
+            plan.manifest_contents,
+            "#!/bin/sh\nset -eu\nsystemctl --user disable --now apprelay.service || true\nrm -f '/home/app relay/.config/systemd/user/apprelay.service'\nsystemctl --user daemon-reload\n"
+        );
+        assert_eq!(
+            plan.run_command,
+            "sh '/home/app relay/.config/apprelay/uninstall-service.sh'"
+        );
+    }
+
+    #[test]
+    fn daemon_service_installer_builds_macos_uninstall_plan() {
+        let installer = DaemonServiceInstaller::new("/Applications/AppRelay.app/server");
+        let home = PathBuf::from("/Users/app relay");
+        let plan = installer.macos_launch_agent_uninstall_plan_for_home(&home);
+
+        assert_eq!(plan.platform, Platform::Macos);
+        assert_eq!(
+            plan.manifest_path,
+            PathBuf::from(
+                "/Users/app relay/Library/Application Support/AppRelay/uninstall-service.sh"
+            )
+        );
+        assert_eq!(
+            plan.service_manifest_path,
+            PathBuf::from("/Users/app relay/Library/LaunchAgents/dev.apprelay.server.plist")
+        );
+        assert_eq!(
+            plan.manifest_contents,
+            "#!/bin/sh\nset -eu\nlaunchctl bootout gui/$UID/dev.apprelay.server || true\nrm -f '/Users/app relay/Library/LaunchAgents/dev.apprelay.server.plist'\n"
+        );
+        assert_eq!(
+            plan.run_command,
+            "sh '/Users/app relay/Library/Application Support/AppRelay/uninstall-service.sh'"
+        );
+    }
+
+    #[test]
+    fn daemon_service_installer_builds_windows_uninstall_plan() {
+        let installer = DaemonServiceInstaller::new("C:\\Program Files\\AppRelay\\server.exe");
+        let program_data = PathBuf::from("C:\\ProgramData");
+        let plan = installer.windows_service_uninstall_script_plan_for_program_data(&program_data);
+
+        assert_eq!(plan.platform, Platform::Windows);
+        assert_eq!(
+            plan.manifest_path,
+            PathBuf::from("C:\\ProgramData\\AppRelay\\uninstall-service.ps1")
+        );
+        assert_eq!(
+            plan.service_manifest_path,
+            PathBuf::from("C:\\ProgramData\\AppRelay\\install-service.ps1")
+        );
+        assert!(plan
+            .manifest_contents
+            .contains("$service = Get-Service -Name $serviceName"));
+        assert!(plan
+            .manifest_contents
+            .contains("sc.exe delete $serviceName | Out-Null"));
+        assert!(plan
+            .manifest_contents
+            .contains("Remove-Item -LiteralPath 'C:\\ProgramData\\AppRelay\\install-service.ps1'"));
+        assert_eq!(
+            plan.run_command,
+            "powershell.exe -ExecutionPolicy Bypass -File 'C:\\ProgramData\\AppRelay\\uninstall-service.ps1'"
+        );
+    }
+
+    #[test]
+    fn daemon_service_installer_writes_uninstall_manifest() {
+        let root = unique_test_dir("apprelay-uninstall-manifest");
+        let manifest_path = root.join("service/uninstall-service.sh");
+        let service_manifest_path = root.join("service/apprelay.service");
+        let plan = ServiceUninstallPlan {
+            platform: Platform::Linux,
+            manifest_path: manifest_path.clone(),
+            service_manifest_path,
+            manifest_contents: "#!/bin/sh\nexit 0\n".to_string(),
+            run_command: format!("sh {}", manifest_path.display()),
+        };
+        let installer = DaemonServiceInstaller::new("/usr/bin/apprelay-server");
+
+        installer
+            .write_uninstall_manifest(&plan)
+            .expect("write uninstall manifest");
+
+        assert_eq!(
+            std::fs::read_to_string(&manifest_path).expect("read uninstall manifest"),
+            "#!/bin/sh\nexit 0\n"
+        );
+        std::fs::remove_dir_all(root).expect("remove uninstall manifest test dir");
     }
 
     #[test]
@@ -1597,6 +1930,10 @@ mod tests {
         assert_eq!(
             installer.plan_for_platform(Platform::Ios),
             Err(ServiceInstallError::UnsupportedPlatform(Platform::Ios))
+        );
+        assert_eq!(
+            installer.uninstall_plan_for_platform(Platform::Android),
+            Err(ServiceInstallError::UnsupportedPlatform(Platform::Android))
         );
     }
 }
