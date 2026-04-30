@@ -974,15 +974,55 @@ impl Eq for SshTunnelProcessError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ServerEvent {
-    ControlPlaneStarted { bind_address: String, port: u16 },
+    ControlPlaneStarted {
+        bind_address: String,
+        port: u16,
+    },
     ControlPlaneStopped,
-    SshTunnelStarted { process_id: u32 },
+    ForegroundConnectionAccepted {
+        peer_address: String,
+    },
+    ForegroundConnectionClosed {
+        peer_address: String,
+    },
+    SshTunnelStarted {
+        process_id: u32,
+    },
     SshTunnelStopped,
-    SshTunnelFailed { reason: String },
-    RequestAuthorized { operation: String },
-    RequestRejected { operation: String },
-    ConfigLoaded { path: PathBuf },
-    ConfigSaved { path: PathBuf },
+    SshTunnelFailed {
+        reason: String,
+    },
+    RequestAuthorized {
+        operation: String,
+    },
+    RequestRejected {
+        operation: String,
+    },
+    SessionCreated {
+        session_id: String,
+        application_id: String,
+        client_id: String,
+        viewport_width: u32,
+        viewport_height: u32,
+    },
+    SessionResized {
+        session_id: String,
+        application_id: String,
+        client_id: String,
+        viewport_width: u32,
+        viewport_height: u32,
+    },
+    SessionClosed {
+        session_id: String,
+        application_id: String,
+        client_id: String,
+    },
+    ConfigLoaded {
+        path: PathBuf,
+    },
+    ConfigSaved {
+        path: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1034,29 +1074,115 @@ impl EventSink for FileEventSink {
 fn format_event(event: &ServerEvent) -> String {
     match event {
         ServerEvent::ControlPlaneStarted { bind_address, port } => {
-            format!("event=control_plane_started bind_address={bind_address} port={port}")
+            format!(
+                "event=control_plane_started bind_address={} port={port}",
+                event_field_value(bind_address)
+            )
         }
         ServerEvent::ControlPlaneStopped => "event=control_plane_stopped".to_string(),
+        ServerEvent::ForegroundConnectionAccepted { peer_address } => {
+            format!(
+                "event=foreground_connection_accepted peer_address={}",
+                event_field_value(peer_address)
+            )
+        }
+        ServerEvent::ForegroundConnectionClosed { peer_address } => {
+            format!(
+                "event=foreground_connection_closed peer_address={}",
+                event_field_value(peer_address)
+            )
+        }
         ServerEvent::SshTunnelStarted { process_id } => {
             format!("event=ssh_tunnel_started process_id={process_id}")
         }
         ServerEvent::SshTunnelStopped => "event=ssh_tunnel_stopped".to_string(),
         ServerEvent::SshTunnelFailed { reason } => {
-            format!("event=ssh_tunnel_failed reason={}", encode_field(reason))
+            format!(
+                "event=ssh_tunnel_failed reason={}",
+                event_field_value(reason)
+            )
         }
         ServerEvent::RequestAuthorized { operation } => {
-            format!("event=request_authorized operation={operation}")
+            format!(
+                "event=request_authorized operation={}",
+                event_field_value(operation)
+            )
         }
         ServerEvent::RequestRejected { operation } => {
-            format!("event=request_rejected operation={operation}")
+            format!(
+                "event=request_rejected operation={}",
+                event_field_value(operation)
+            )
+        }
+        ServerEvent::SessionCreated {
+            session_id,
+            application_id,
+            client_id,
+            viewport_width,
+            viewport_height,
+        } => {
+            format!(
+                "event=session_created session_id={} application_id={} client_id={} viewport_width={viewport_width} viewport_height={viewport_height}",
+                event_field_value(session_id),
+                event_field_value(application_id),
+                event_field_value(client_id),
+            )
+        }
+        ServerEvent::SessionResized {
+            session_id,
+            application_id,
+            client_id,
+            viewport_width,
+            viewport_height,
+        } => {
+            format!(
+                "event=session_resized session_id={} application_id={} client_id={} viewport_width={viewport_width} viewport_height={viewport_height}",
+                event_field_value(session_id),
+                event_field_value(application_id),
+                event_field_value(client_id),
+            )
+        }
+        ServerEvent::SessionClosed {
+            session_id,
+            application_id,
+            client_id,
+        } => {
+            format!(
+                "event=session_closed session_id={} application_id={} client_id={}",
+                event_field_value(session_id),
+                event_field_value(application_id),
+                event_field_value(client_id),
+            )
         }
         ServerEvent::ConfigLoaded { path } => {
-            format!("event=config_loaded path={}", path.display())
+            format!(
+                "event=config_loaded path={}",
+                event_field_value(&path.display().to_string())
+            )
         }
         ServerEvent::ConfigSaved { path } => {
-            format!("event=config_saved path={}", path.display())
+            format!(
+                "event=config_saved path={}",
+                event_field_value(&path.display().to_string())
+            )
         }
     }
+}
+
+fn event_field_value(value: &str) -> String {
+    let mut encoded = String::new();
+
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(byte, b'-' | b'_' | b'.' | b'~' | b':' | b'/' | b'[' | b']')
+        {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+
+    encoded
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2526,12 +2652,20 @@ mod tests {
         sink.record(ServerEvent::RequestAuthorized {
             operation: "health".to_string(),
         });
+        sink.record(ServerEvent::SessionCreated {
+            session_id: "session 1".to_string(),
+            application_id: "terminal".to_string(),
+            client_id: "client-1".to_string(),
+            viewport_width: 1280,
+            viewport_height: 720,
+        });
 
         let contents = fs::read_to_string(&path).expect("read event log");
         assert_eq!(
             contents,
             "event=control_plane_started bind_address=127.0.0.1 port=7676\n\
-event=request_authorized operation=health\n"
+event=request_authorized operation=health\n\
+event=session_created session_id=session%201 application_id=terminal client_id=client-1 viewport_width=1280 viewport_height=720\n"
         );
 
         let _ = fs::remove_dir_all(root);

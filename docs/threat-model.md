@@ -153,9 +153,11 @@ Out of scope for this document:
   [network-tunnel-guidance.md](network-tunnel-guidance.md). It remains a
   release-runner boundary until final transport hardening and pairing UI work
   are complete.
-- Structured events exist, but production audit logging is incomplete. Beta
-  needs connection, pairing, session, stream, input, and denial events with
-  retention and redaction rules.
+- Structured events now cover foreground connections, authorized and rejected
+  foreground requests, and session create/resize/close lifecycle events without
+  writing tokens, media contents, or raw input payloads. Production retention,
+  centralized collection, final audit review, and pairing/stream/input/audio
+  lifecycle coverage remain incomplete.
 - Release signing is not implemented. Installers and packages remain
   release-runner/manual boundaries until signed artifacts exist.
 - Dependency audit policy is not complete. CI and release notes must define
@@ -180,7 +182,9 @@ Out of scope for this document:
   application-discovery calls authenticate before performing work.
 - Confirm audit logs cover successful and rejected connections, pairing events,
   session creation/close, stream start/stop, input enable/disable, and
-  authorization failures without writing tokens or media contents.
+  authorization failures without writing tokens, media contents, or raw input
+  payloads. The current implementation only covers the foreground connection
+  and request contract plus session create/resize/close events.
 - Confirm diagnostics remain telemetry-free and redact secrets.
 - Confirm application launch paths do not invoke shells for untrusted metadata.
 - Confirm unsupported feature paths return typed errors with user-facing
