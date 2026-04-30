@@ -7,7 +7,7 @@ use apprelay_protocol::{
     MicrophoneMode, Platform, SessionState, StartAudioStreamRequest, StopAudioStreamRequest,
     UpdateAudioStreamRequest,
 };
-#[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 use std::{
     io::Read,
     process::{Child, Command, Stdio},
@@ -16,6 +16,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
+    time::{Duration, Instant},
 };
 
 pub trait AudioStreamService {
@@ -133,7 +134,7 @@ struct ServerMicrophoneInjectionRuntime {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum PipeWireCaptureAdapterState {
     BoundaryOnly,
-    #[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+    #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
     CommandCapture(PipeWireCaptureCommandRuntime),
     #[cfg(all(test, feature = "pipewire-capture"))]
     FakeCapture {
@@ -143,7 +144,7 @@ enum PipeWireCaptureAdapterState {
     FakeStartFailure,
 }
 
-#[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 #[derive(Clone, Debug)]
 struct PipeWireCaptureCommandRuntime {
     command: String,
@@ -151,7 +152,7 @@ struct PipeWireCaptureCommandRuntime {
     sessions: Arc<Mutex<Vec<PipeWireCaptureCommandSession>>>,
 }
 
-#[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 #[derive(Debug)]
 struct PipeWireCaptureCommandSession {
     stream_id: String,
@@ -159,7 +160,7 @@ struct PipeWireCaptureCommandSession {
     stats: Arc<PipeWireCaptureCommandStats>,
 }
 
-#[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 #[derive(Debug)]
 struct PipeWireCaptureCommandStats {
     bytes: AtomicU64,
@@ -220,6 +221,20 @@ impl AudioBackendNativeReadiness {
         Self {
             available_legs: Vec::new(),
             pipewire_capture_adapter: Some(PipeWireCaptureAdapterRuntime::fake_start_failure()),
+            ..Self::default()
+        }
+    }
+
+    #[cfg(all(test, feature = "pipewire-capture", target_os = "linux"))]
+    fn with_linux_pipewire_command_capture(
+        command: impl Into<String>,
+        target: Option<String>,
+    ) -> Self {
+        Self {
+            available_legs: Vec::new(),
+            pipewire_capture_adapter: Some(PipeWireCaptureAdapterRuntime::command_capture(
+                command, target,
+            )),
             ..Self::default()
         }
     }
@@ -518,7 +533,7 @@ impl PipeWireCaptureAdapterRuntime {
         }
     }
 
-    #[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+    #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
     pub fn command_capture(command: impl Into<String>, target: Option<String>) -> Self {
         Self {
             state: PipeWireCaptureAdapterState::CommandCapture(PipeWireCaptureCommandRuntime::new(
@@ -547,7 +562,7 @@ impl PipeWireCaptureRuntimeAdapter for PipeWireCaptureAdapterRuntime {
     fn can_start_capture(&self) -> bool {
         match &self.state {
             PipeWireCaptureAdapterState::BoundaryOnly => false,
-            #[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+            #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
             PipeWireCaptureAdapterState::CommandCapture(runtime) => runtime.command_available(),
             #[cfg(all(test, feature = "pipewire-capture"))]
             PipeWireCaptureAdapterState::FakeCapture { .. } => true,
@@ -559,7 +574,7 @@ impl PipeWireCaptureRuntimeAdapter for PipeWireCaptureAdapterRuntime {
     fn start_capture(&self, _stream_id: &str) -> Option<NativeAudioMediaSession> {
         match &self.state {
             PipeWireCaptureAdapterState::BoundaryOnly => None,
-            #[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+            #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
             PipeWireCaptureAdapterState::CommandCapture(runtime) => {
                 runtime.start_capture(_stream_id)
             }
@@ -582,7 +597,7 @@ impl PipeWireCaptureRuntimeAdapter for PipeWireCaptureAdapterRuntime {
     fn stop_capture(&self, _stream_id: &str) {
         match &self.state {
             PipeWireCaptureAdapterState::BoundaryOnly => {}
-            #[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+            #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
             PipeWireCaptureAdapterState::CommandCapture(runtime) => {
                 runtime.stop_capture(_stream_id)
             }
@@ -594,7 +609,7 @@ impl PipeWireCaptureRuntimeAdapter for PipeWireCaptureAdapterRuntime {
     }
 }
 
-#[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 impl PipeWireCaptureAdapterRuntime {
     fn capture_media(&self, stream_id: &str) -> Option<AudioBackendMediaStats> {
         match &self.state {
@@ -602,22 +617,29 @@ impl PipeWireCaptureAdapterRuntime {
                 runtime.capture_media(stream_id)
             }
             PipeWireCaptureAdapterState::BoundaryOnly => None,
+            #[cfg(all(test, feature = "pipewire-capture"))]
+            PipeWireCaptureAdapterState::FakeCapture { .. } => None,
+            #[cfg(all(test, feature = "pipewire-capture"))]
+            PipeWireCaptureAdapterState::FakeStartFailure => None,
         }
     }
 }
 
-#[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 impl PartialEq for PipeWireCaptureCommandRuntime {
     fn eq(&self, other: &Self) -> bool {
         self.command == other.command && self.target == other.target
     }
 }
 
-#[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 impl Eq for PipeWireCaptureCommandRuntime {}
 
-#[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 impl PipeWireCaptureCommandRuntime {
+    const STARTUP_CHECK_INTERVAL: Duration = Duration::from_millis(10);
+    const STARTUP_CHECK_TIMEOUT: Duration = Duration::from_millis(100);
+
     fn new(command: impl Into<String>, target: Option<String>) -> Self {
         Self {
             command: command.into(),
@@ -660,6 +682,12 @@ impl PipeWireCaptureCommandRuntime {
         let mut child = command.arg("-").spawn().ok()?;
         let stdout = child.stdout.take()?;
         Self::read_capture_stdout(stdout, Arc::clone(&stats));
+        if !Self::wait_for_capture_start(&mut child, &stats) {
+            stats.running.store(false, Ordering::Relaxed);
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
 
         let Ok(mut sessions) = self.sessions.lock() else {
             let _ = child.kill();
@@ -679,6 +707,32 @@ impl PipeWireCaptureCommandRuntime {
                 media: Self::media_from_stats(&stats),
             }],
         })
+    }
+
+    fn wait_for_capture_start(child: &mut Child, stats: &PipeWireCaptureCommandStats) -> bool {
+        let deadline = Instant::now() + Self::STARTUP_CHECK_TIMEOUT;
+        loop {
+            if !stats.running.load(Ordering::Relaxed) {
+                let _ = child.try_wait();
+                return false;
+            }
+
+            match child.try_wait() {
+                Ok(Some(_)) | Err(_) => {
+                    stats.running.store(false, Ordering::Relaxed);
+                    return false;
+                }
+                Ok(None) => {}
+            }
+
+            if stats.bytes.load(Ordering::Relaxed) > 0 {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return true;
+            }
+            thread::sleep(Self::STARTUP_CHECK_INTERVAL);
+        }
     }
 
     fn stop_capture(&self, stream_id: &str) {
@@ -1320,6 +1374,36 @@ impl AudioBackendService {
         }
     }
 
+    #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+    fn pipewire_capture_runtime_stopped(&self, stream_id: &str) -> bool {
+        let Self::DesktopControl {
+            platform: Platform::Linux,
+            native_readiness,
+        } = self
+        else {
+            return false;
+        };
+
+        native_readiness
+            .pipewire_capture_adapter
+            .as_ref()
+            .and_then(|adapter| adapter.capture_media(stream_id))
+            .is_some_and(|media| !media.available)
+    }
+
+    #[cfg(not(all(feature = "pipewire-capture", target_os = "linux")))]
+    fn pipewire_capture_runtime_stopped(&self, _stream_id: &str) -> bool {
+        false
+    }
+
+    fn pipewire_capture_runtime_stopped_failure() -> AudioBackendFailure {
+        AudioBackendFailure {
+            kind: AudioBackendFailureKind::NativeBackendNotImplemented,
+            message: "desktop audio capture via PipeWire stopped before media could continue".to_string(),
+            recovery: "restart the audio stream and check the PipeWire capture command, target, and session permissions".to_string(),
+        }
+    }
+
     #[cfg(not(any(test, feature = "pipewire-capture")))]
     fn start_pipewire_capture(&self, _stream_id: &str) -> Option<NativeAudioMediaSession> {
         None
@@ -1795,6 +1879,13 @@ impl InMemoryAudioStreamService {
             },
         );
         self.apply_native_runtime_failures(&stream.id, &mut backend_contract);
+        if self.backend.pipewire_capture_runtime_stopped(&stream.id) {
+            Self::apply_native_runtime_leg_failure(
+                &mut backend_contract,
+                &AudioBackendLeg::Capture,
+                AudioBackendService::pipewire_capture_runtime_stopped_failure(),
+            );
+        }
         backend_contract
     }
 
@@ -1813,12 +1904,33 @@ impl InMemoryAudioStreamService {
     ) {
         for status in &mut backend_contract.statuses {
             if let Some(failure) = native_runtime.leg_failure(stream_id, &status.leg) {
-                status.available = false;
-                status.readiness = AudioBackendReadiness::PlannedNative;
-                status.media = AudioBackendMediaStats::default();
-                status.failure = Some(failure.clone());
+                Self::apply_native_runtime_status_failure(status, failure.clone());
             }
         }
+    }
+
+    fn apply_native_runtime_leg_failure(
+        backend_contract: &mut AudioBackendContract,
+        leg: &AudioBackendLeg,
+        failure: AudioBackendFailure,
+    ) {
+        if let Some(status) = backend_contract
+            .statuses
+            .iter_mut()
+            .find(|status| &status.leg == leg)
+        {
+            Self::apply_native_runtime_status_failure(status, failure);
+        }
+    }
+
+    fn apply_native_runtime_status_failure(
+        status: &mut AudioBackendStatus,
+        failure: AudioBackendFailure,
+    ) {
+        status.available = false;
+        status.readiness = AudioBackendReadiness::PlannedNative;
+        status.media = AudioBackendMediaStats::default();
+        status.failure = Some(failure);
     }
 }
 
@@ -2629,6 +2741,94 @@ mod tests {
             .expect("capture status");
         assert!(!refreshed_capture.available);
         assert!(refreshed_capture.failure.is_some());
+    }
+
+    #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+    #[test]
+    fn pipewire_command_runtime_rejects_immediate_process_exit() {
+        let adapter = PipeWireCaptureAdapterRuntime::command_capture("false", None);
+
+        let session = adapter.start_capture("stream-1");
+
+        assert_eq!(session, None);
+        assert_eq!(adapter.capture_media("stream-1"), None);
+    }
+
+    #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+    #[test]
+    fn audio_stream_status_reports_pipewire_process_exit_failure() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let script_path = std::env::temp_dir().join(format!(
+            "apprelay-pipewire-exit-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        fs::write(&script_path, "#!/bin/sh\nprintf audio-data\nsleep 0.2\n").expect("write script");
+        let mut permissions = fs::metadata(&script_path)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&script_path, permissions).expect("script permissions");
+
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::new(
+            AudioBackendService::for_platform_with_native_readiness(
+                Platform::Linux,
+                AudioBackendNativeReadiness::with_linux_pipewire_command_capture(
+                    script_path.to_string_lossy().to_string(),
+                    None,
+                ),
+            ),
+        );
+        let stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Disabled,
+                    system_audio_muted: false,
+                    microphone_muted: true,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+                &session,
+            )
+            .expect("start audio stream");
+
+        std::thread::sleep(std::time::Duration::from_millis(350));
+        let status = stream_service
+            .stream_status(&stream.id)
+            .expect("stream status");
+        let capture = status
+            .backend
+            .as_ref()
+            .expect("backend contract")
+            .statuses
+            .iter()
+            .find(|status| status.leg == AudioBackendLeg::Capture)
+            .expect("capture status");
+
+        assert!(!capture.available);
+        assert_eq!(capture.media, AudioBackendMediaStats::default());
+        assert!(capture
+            .failure
+            .as_ref()
+            .expect("capture failure")
+            .message
+            .contains("stopped"));
+
+        let _ = fs::remove_file(script_path);
     }
 
     #[test]
