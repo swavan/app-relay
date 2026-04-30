@@ -63,6 +63,22 @@ pub struct HeartbeatStatus {
     pub sequence: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiagnosticsBundle {
+    pub format_version: u16,
+    pub telemetry_enabled: bool,
+    pub secrets_redacted: bool,
+    pub service: String,
+    pub version: String,
+    pub platform: Platform,
+    pub bind_address: String,
+    pub control_port: u16,
+    pub heartbeat_interval_millis: u64,
+    pub supported_capabilities: usize,
+    pub total_capabilities: usize,
+    pub active_sessions: usize,
+}
+
 impl HealthStatus {
     pub fn healthy(service: impl Into<String>, version: impl Into<String>) -> Self {
         Self {
@@ -448,5 +464,27 @@ mod tests {
                 height: 720,
             }
         );
+    }
+
+    #[test]
+    fn diagnostics_bundle_keeps_redaction_and_telemetry_flags_explicit() {
+        let bundle = DiagnosticsBundle {
+            format_version: 1,
+            telemetry_enabled: false,
+            secrets_redacted: true,
+            service: "apprelay-server".to_string(),
+            version: "0.1.0".to_string(),
+            platform: Platform::Linux,
+            bind_address: "127.0.0.1".to_string(),
+            control_port: 7676,
+            heartbeat_interval_millis: 5_000,
+            supported_capabilities: 4,
+            total_capabilities: 8,
+            active_sessions: 0,
+        };
+
+        assert!(!bundle.telemetry_enabled);
+        assert!(bundle.secrets_redacted);
+        assert_eq!(bundle.format_version, 1);
     }
 }

@@ -258,6 +258,25 @@ fn control_plane_reports_macos_app_discovery_capability() {
 }
 
 #[test]
+fn control_plane_reports_telemetry_free_diagnostics() {
+    let control_plane = ServerControlPlane::new(
+        server_services_for_platform(Platform::Macos, "integration-test"),
+        ServerConfig::local("correct-token"),
+    );
+
+    let diagnostics = control_plane
+        .diagnostics(&ControlAuth::new("correct-token"))
+        .expect("authorized diagnostics response");
+
+    assert_eq!(diagnostics.format_version, 1);
+    assert!(!diagnostics.telemetry_enabled);
+    assert!(diagnostics.secrets_redacted);
+    assert_eq!(diagnostics.platform, Platform::Macos);
+    assert_eq!(diagnostics.total_capabilities, 8);
+    assert_eq!(diagnostics.active_sessions, 0);
+}
+
+#[test]
 fn control_plane_maps_unsupported_application_discovery_errors() {
     let control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Windows, "integration-test"),
