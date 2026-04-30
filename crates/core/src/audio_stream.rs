@@ -668,8 +668,16 @@ impl PipeWireCaptureCommandConfig {
     pub const DEFAULT_FORMAT: &'static str = "s16";
 
     pub fn new(command: impl Into<String>, target: Option<String>) -> Self {
+        let command = command.into();
+        let command = command.trim();
+        let command = if command.is_empty() {
+            "pw-record".to_string()
+        } else {
+            command.to_string()
+        };
+
         Self {
-            command: command.into(),
+            command,
             target,
             rate: Self::DEFAULT_RATE,
             channels: Self::DEFAULT_CHANNELS,
@@ -2927,6 +2935,33 @@ mod tests {
             runtime.capture_args(None),
             vec!["--rate", "48000", "--channels", "2", "--format", "s16", "-"]
         );
+    }
+
+    #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+    #[test]
+    fn pipewire_command_config_defaults_blank_command_to_pw_record() {
+        let runtime =
+            PipeWireCaptureCommandRuntime::new(PipeWireCaptureCommandConfig::new(" \t\n ", None));
+
+        assert_eq!(runtime.config.command, "pw-record");
+        assert_eq!(
+            runtime.capture_args(None),
+            vec!["--rate", "48000", "--channels", "2", "--format", "s16", "-"]
+        );
+    }
+
+    #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+    #[test]
+    fn pipewire_command_config_trims_configured_command() {
+        let config = PipeWireCaptureCommandConfig::new(" /usr/bin/pw-record \n", None);
+
+        assert_eq!(config.command, "/usr/bin/pw-record");
+        assert_eq!(config.rate, PipeWireCaptureCommandConfig::DEFAULT_RATE);
+        assert_eq!(
+            config.channels,
+            PipeWireCaptureCommandConfig::DEFAULT_CHANNELS
+        );
+        assert_eq!(config.format, PipeWireCaptureCommandConfig::DEFAULT_FORMAT);
     }
 
     #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
