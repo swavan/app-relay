@@ -36,8 +36,8 @@ jobs:
           cache-dependency-path: apps/client-tauri/package-lock.json
       - name: Install
         run: npm ci
-      - name: Audit production dependencies
-        run: npm audit --omit=dev
+      - name: Audit beta dependencies
+        run: npm run audit:beta
       - name: Test
         run: npm test
       - name: Build
