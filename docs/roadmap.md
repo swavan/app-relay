@@ -325,13 +325,19 @@ Completed:
   to the core boundary and reports the Linux PipeWire capture adapter boundary
   as unavailable without changing default server behavior or affecting macOS
   and Windows
+- Linux server builds with the optional `pipewire-capture` feature can opt into
+  command-backed PipeWire capture with `APPRELAY_PIPEWIRE_CAPTURE=1`; the
+  runtime uses `pw-record` by default, supports optional command/target
+  overrides, updates capture byte counters from the running process, and
+  retains explicit unavailable adapter-boundary reporting unless opted in
 
 Deferred:
 
 - no Phase 6 control-plane or native-runtime contract work remains; real
-  PipeWire, CoreAudio, WASAPI, and microphone injection media integrations are
-  deferred to cross-platform hardening and production release work so Phase 6
-  does not claim unsupported OS audio packets
+  CoreAudio, WASAPI, playback, client microphone capture, and microphone
+  injection media integrations are deferred to cross-platform hardening and
+  production release work so Phase 6 does not claim unsupported OS audio
+  packets
 
 ## Phase 7: Cross-Platform Hardening
 
