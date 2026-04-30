@@ -59,8 +59,9 @@ Out of scope for this document:
   code can generate scripts and manifests, but release runners execute native
   lifecycle operations outside CI.
 - Future release pipeline to beta users: signing and package distribution are
-  not yet implemented. Dependency audit policy is documented, but Rust advisory
-  checks remain a release-runner boundary until deterministic tooling exists.
+  not yet implemented. Signed artifact policy and dependency audit policy are
+  documented, but native signing/publishing and Rust advisory checks remain
+  release-runner boundaries until deterministic tooling exists.
 
 ## Actors
 
@@ -159,8 +160,11 @@ Out of scope for this document:
   writing tokens, media contents, or raw input payloads. Production retention,
   centralized collection, final audit review, and pairing/stream/input/audio
   lifecycle coverage remain incomplete.
-- Release signing is not implemented. Installers and packages remain
-  release-runner/manual boundaries until signed artifacts exist.
+- Release signing is not implemented. Signed release artifact policy is
+  documented in
+  [signed-release-artifact-policy.md](signed-release-artifact-policy.md), but
+  installers and packages remain release-runner/manual boundaries until signed
+  artifacts exist.
 - Dependency audit policy is documented in
   [dependency-audit-policy.md](dependency-audit-policy.md). Current CI runs the
   Node beta dependency audit, but Rust advisory checks remain a
@@ -197,7 +201,7 @@ Out of scope for this document:
 - Confirm dependency audit results have no unresolved production-critical
   findings according to
   [dependency-audit-policy.md](dependency-audit-policy.md).
-- Confirm beta artifacts are signed or the release is explicitly blocked until
-  signing is complete.
+- Confirm beta artifacts are signed, explicitly limited to the documented
+  unsigned manual-runner channel, or blocked until signing is complete.
 - Confirm beta release notes list known limitations, unsupported platforms, and
   any manual release-runner boundaries.

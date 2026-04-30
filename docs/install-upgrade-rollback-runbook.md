@@ -4,6 +4,8 @@ Phase 7 treats native installer execution as a release-runner/manual boundary.
 CI validates deterministic service plans, uninstall plans, package
 configuration, assets, and permission intent; it does not install OS services,
 run native bundle builders, sign artifacts, or exercise OS package managers.
+Phase 8 signed artifact evidence and blocking rules are documented in
+[`signed-release-artifact-policy.md`](signed-release-artifact-policy.md).
 
 This runbook defines what a release runner must verify when native packages are
 available, and what remains covered by deterministic checks before that point.
@@ -157,3 +159,10 @@ Android, and iOS remains manual until platform package runners exist. A release
 runner that executes this runbook should record the platform, package or binary
 version, install result, upgrade result, uninstall result, rollback result, and
 any retained runtime data paths in release notes or CI artifacts.
+
+If the runbook is used for a beta artifact, the release runner must also record
+the artifact checksum and signature status required by
+[`signed-release-artifact-policy.md`](signed-release-artifact-policy.md). A
+native package that cannot satisfy that policy must not be offered for public
+beta distribution. It may be used only in the explicitly documented
+manual-runner channel allowed by that policy.
