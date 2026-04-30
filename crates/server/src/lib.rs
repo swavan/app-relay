@@ -75,6 +75,22 @@ impl ServerServices {
         services
     }
 
+    #[doc(hidden)]
+    pub fn with_macos_application_roots_and_open_command(
+        version: impl Into<String>,
+        roots: Vec<PathBuf>,
+        open_command: PathBuf,
+    ) -> Self {
+        let mut services = Self::new(Platform::Macos, version);
+        services.application_discovery =
+            ApplicationDiscoveryService::MacosApplications(MacosApplicationDiscovery::new(roots));
+        services.session_service = InMemoryApplicationSessionService::with_launch_backend(
+            SessionPolicy::allow_all(),
+            ApplicationLaunchBackendService::MacosNative { open_command },
+        );
+        services
+    }
+
     pub fn health(&self) -> HealthStatus {
         self.health_service.status()
     }
@@ -211,11 +227,12 @@ impl ServerServices {
 fn launch_backend_for_platform(platform: Platform) -> ApplicationLaunchBackendService {
     match platform {
         Platform::Linux => ApplicationLaunchBackendService::LinuxNative,
-        Platform::Macos
-        | Platform::Windows
-        | Platform::Android
-        | Platform::Ios
-        | Platform::Unknown => ApplicationLaunchBackendService::RecordOnly,
+        Platform::Macos => ApplicationLaunchBackendService::MacosNative {
+            open_command: PathBuf::from("/usr/bin/open"),
+        },
+        Platform::Windows | Platform::Android | Platform::Ios | Platform::Unknown => {
+            ApplicationLaunchBackendService::RecordOnly
+        }
     }
 }
 
@@ -1231,6 +1248,27 @@ mod tests {
     fn foreground_server_reports_linux_application_launch_capability() {
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        let response = server.handle_request("capabilities correct-token", &mut events);
+
+        assert!(response.starts_with("OK capabilities supported="));
+        assert!(response.contains(" total=8 "));
+        assert!(response.contains("application-launch:supported"));
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::RequestAuthorized {
+                operation: "capabilities".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn foreground_server_reports_macos_application_launch_capability() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Macos, "test"),
             ServerConfig::local("correct-token"),
         ));
         let mut events = InMemoryEventSink::default();
