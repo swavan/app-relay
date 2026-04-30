@@ -11,18 +11,21 @@ desktop applications from a mobile or desktop client.
 - `apps/client-tauri`: Tauri v2 + Svelte client skeleton
 - `docs/architecture.md`: Phase 1 architecture decisions
 - `docs/control-plane.md`: Phase 2 control-plane design
+- `docs/threat-model.md`: Phase 8 beta security threat model
 - `docs/roadmap.md`: phase-by-phase production release plan
 
 ## Current Phase
 
-Phase 7 is active. Phases 1-6 are complete, including authenticated control,
+Phase 8 is active. Phases 1-7 are complete, including authenticated control,
 application discovery, managed sessions, selected-window video contracts, input
-forwarding contracts, and audio/microphone control-plane contracts.
+forwarding contracts, audio/microphone control-plane contracts, and
+cross-platform hardening documentation.
 
-Current hardening work includes platform packaging, permissions, install and
-uninstall behavior, and explicit platform support gaps. Linux and macOS servers
-can discover and launch native desktop applications; Windows discovery and
-launch remain explicit unsupported gaps.
+Current beta security work includes the threat model, pairing and server
+authorization policy, local network and remote tunnel guidance, audit logging,
+dependency audit policy, signed release artifacts, and beta feedback process.
+Linux and macOS servers can discover and launch native desktop applications;
+Windows discovery and launch remain explicit unsupported gaps.
 
 See `docs/roadmap.md` for the full path from Phase 1 to production release.
 
