@@ -232,6 +232,30 @@ describe("buildAppViewModel", () => {
     });
   });
 
+  it("renders normalized macOS icon PNGs from the bridge", () => {
+    const viewModel = buildAppViewModel({
+      ...baseInput,
+      apps: [
+        {
+          id: "com.apple.Terminal",
+          name: "Terminal",
+          icon: {
+            mimeType: "image/png",
+            dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+            source: "Contents/Resources/Terminal.icns",
+          },
+        },
+      ],
+    });
+
+    expect(viewModel.apps[0].iconView).toEqual({
+      kind: "image",
+      url: "data:image/png;base64,iVBORw0KGgo=",
+      label: "Terminal",
+      title: "Contents/Resources/Terminal.icns",
+    });
+  });
+
   it("uses fallback labels for non-web image icon data", () => {
     const viewModel = buildAppViewModel({
       ...baseInput,

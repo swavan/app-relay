@@ -431,10 +431,12 @@ impl From<apprelay_protocol::ApplicationSummary> for AppSummaryDto {
 
 impl From<AppIcon> for AppIconDto {
     fn from(icon: AppIcon) -> Self {
-        let data_url = icon_data_url(&icon);
+        let (mime_type, data_url) = icon_data_url(&icon)
+            .map(|data_url| (normalized_icon_mime_type(&icon).to_string(), Some(data_url)))
+            .unwrap_or_else(|| (icon.mime_type.clone(), None));
 
         Self {
-            mime_type: icon.mime_type,
+            mime_type,
             data_url,
             source: icon.source,
         }
@@ -446,11 +448,69 @@ fn icon_data_url(icon: &AppIcon) -> Option<String> {
         return None;
     }
 
+    if icon.mime_type.eq_ignore_ascii_case("image/icns") {
+        if let Some(png_bytes) = extract_icns_png_payload(&icon.bytes) {
+            return Some(format!(
+                "data:image/png;base64,{}",
+                base64_encode(png_bytes)
+            ));
+        }
+    }
+
     Some(format!(
         "data:{};base64,{}",
         icon.mime_type,
         base64_encode(&icon.bytes)
     ))
+}
+
+fn normalized_icon_mime_type(icon: &AppIcon) -> &str {
+    if icon.mime_type.eq_ignore_ascii_case("image/icns")
+        && extract_icns_png_payload(&icon.bytes).is_some()
+    {
+        "image/png"
+    } else {
+        icon.mime_type.as_str()
+    }
+}
+
+fn extract_icns_png_payload(bytes: &[u8]) -> Option<&[u8]> {
+    const ICNS_HEADER_LEN: usize = 8;
+    const CHUNK_HEADER_LEN: usize = 8;
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+
+    if bytes.len() < ICNS_HEADER_LEN || &bytes[..4] != b"icns" {
+        return None;
+    }
+
+    let declared_len = u32::from_be_bytes(bytes[4..8].try_into().ok()?) as usize;
+    if declared_len < ICNS_HEADER_LEN || declared_len > bytes.len() {
+        return None;
+    }
+
+    let mut png_payload = None;
+    let mut offset = ICNS_HEADER_LEN;
+    while offset < declared_len {
+        if declared_len - offset < CHUNK_HEADER_LEN {
+            return None;
+        }
+
+        let chunk_len = u32::from_be_bytes(bytes[offset + 4..offset + 8].try_into().ok()?) as usize;
+        let chunk_end = offset.checked_add(chunk_len)?;
+        if chunk_len < CHUNK_HEADER_LEN || chunk_end > declared_len {
+            return None;
+        }
+
+        let payload_start = offset.checked_add(CHUNK_HEADER_LEN)?;
+        let payload = &bytes[payload_start..chunk_end];
+        if png_payload.is_none() && payload.starts_with(PNG_SIGNATURE) {
+            png_payload = Some(payload);
+        }
+
+        offset = chunk_end;
+    }
+
+    png_payload
 }
 
 fn base64_encode(bytes: &[u8]) -> String {
@@ -679,6 +739,83 @@ mod tests {
         assert_eq!(
             icon_data_url(&icon),
             Some("data:image/png;base64,iVBORw==".to_string())
+        );
+    }
+
+    #[test]
+    fn icon_data_url_extracts_png_from_icns_icon_bytes() {
+        let png_bytes = b"\x89PNG\r\n\x1a\npng payload";
+        let mut icns_bytes = Vec::new();
+        icns_bytes.extend_from_slice(b"icns");
+        icns_bytes.extend_from_slice(&((8 + 8 + png_bytes.len()) as u32).to_be_bytes());
+        icns_bytes.extend_from_slice(b"ic10");
+        icns_bytes.extend_from_slice(&((8 + png_bytes.len()) as u32).to_be_bytes());
+        icns_bytes.extend_from_slice(png_bytes);
+
+        let dto = AppIconDto::from(AppIcon {
+            mime_type: "image/icns".to_string(),
+            bytes: icns_bytes,
+            source: Some("Contents/Resources/Test.icns".to_string()),
+        });
+
+        assert_eq!(dto.mime_type, "image/png");
+        assert_eq!(
+            dto.data_url,
+            Some(format!(
+                "data:image/png;base64,{}",
+                base64_encode(png_bytes)
+            ))
+        );
+    }
+
+    #[test]
+    fn icon_data_url_preserves_icns_fallback_for_malformed_or_no_png_bytes() {
+        let malformed_icon = AppIcon {
+            mime_type: "image/icns".to_string(),
+            bytes: b"icns\0\0\0\x20bad".to_vec(),
+            source: Some("Malformed.icns".to_string()),
+        };
+        let no_png_icns = b"icns\0\0\0\x10TOC \0\0\0\x08".to_vec();
+        let no_png_icon = AppIcon {
+            mime_type: "image/icns".to_string(),
+            bytes: no_png_icns.clone(),
+            source: Some("NoPng.icns".to_string()),
+        };
+
+        let malformed_dto = AppIconDto::from(malformed_icon);
+        let no_png_dto = AppIconDto::from(no_png_icon);
+
+        assert_eq!(malformed_dto.mime_type, "image/icns");
+        assert_eq!(
+            malformed_dto.data_url,
+            Some("data:image/icns;base64,aWNucwAAACBiYWQ=".to_string())
+        );
+        assert_eq!(no_png_dto.mime_type, "image/icns");
+        assert_eq!(
+            no_png_dto.data_url,
+            Some(format!(
+                "data:image/icns;base64,{}",
+                base64_encode(&no_png_icns)
+            ))
+        );
+    }
+
+    #[test]
+    fn icon_data_url_preserves_icns_fallback_for_oversized_chunk_length() {
+        let oversized_chunk_icns = b"icns\0\0\0\x10ic10\xff\xff\xff\xff".to_vec();
+        let dto = AppIconDto::from(AppIcon {
+            mime_type: "image/icns".to_string(),
+            bytes: oversized_chunk_icns.clone(),
+            source: Some("Oversized.icns".to_string()),
+        });
+
+        assert_eq!(dto.mime_type, "image/icns");
+        assert_eq!(
+            dto.data_url,
+            Some(format!(
+                "data:image/icns;base64,{}",
+                base64_encode(&oversized_chunk_icns)
+            ))
         );
     }
 
