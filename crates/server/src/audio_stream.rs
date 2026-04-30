@@ -133,10 +133,9 @@ fn pipewire_capture_enabled_from_env() -> bool {
 
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 fn pipewire_capture_enabled_from_env_value(value: Option<&str>) -> bool {
-    matches!(
-        value.map(str::trim),
-        Some("1" | "true" | "TRUE" | "yes" | "YES")
-    )
+    value.map(str::trim).is_some_and(|value| {
+        value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("yes")
+    })
 }
 
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
@@ -201,8 +200,10 @@ mod tests {
         assert!(pipewire_capture_enabled_from_env_value(Some("1")));
         assert!(pipewire_capture_enabled_from_env_value(Some(" true ")));
         assert!(pipewire_capture_enabled_from_env_value(Some("TRUE")));
+        assert!(pipewire_capture_enabled_from_env_value(Some("TrUe")));
         assert!(pipewire_capture_enabled_from_env_value(Some(" yes ")));
         assert!(pipewire_capture_enabled_from_env_value(Some("YES")));
+        assert!(pipewire_capture_enabled_from_env_value(Some("YeS")));
         assert!(!pipewire_capture_enabled_from_env_value(Some("false")));
         assert!(!pipewire_capture_enabled_from_env_value(Some("on")));
 
