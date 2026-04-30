@@ -35,9 +35,13 @@ Native Android and iOS verification remains a release-runner/manual boundary for
 this slice. A release runner should:
 
 1. Build or install the platform package with the current Tauri mobile toolchain.
-2. Configure a profile that points at the test server tunnel or local network
-   endpoint and uses the known test control-plane token. The profile id should
-   match the server-side paired-client policy entry for this test device.
+2. Configure a profile with the known test control-plane token and a profile id
+   that matches the server-side paired-client policy entry for this test device.
+   The checked-in Tauri service path still calls an in-process control plane; a
+   real test server tunnel or approved local network endpoint is a
+   release-runner/manual native transport boundary until remote client transport
+   is wired. Follow the binding and exposure rules in
+   [network-tunnel-guidance.md](network-tunnel-guidance.md).
 3. Launch the mobile client on the device, emulator, or simulator.
 4. Confirm the profile reaches the same control-plane path covered by the unit
    contract: health, capabilities, applications, and active sessions.

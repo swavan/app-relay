@@ -149,9 +149,10 @@ Out of scope for this document:
   through the config repository remains future work.
 - Token storage is file-backed. Moving client secrets to a platform keychain or
   encrypted store remains future work.
-- Local network exposure guidance is not complete. Beta docs must state when
-  to bind locally, when to use SSH tunneling, and when not to expose a control
-  endpoint directly.
+- Local network exposure guidance is documented in
+  [network-tunnel-guidance.md](network-tunnel-guidance.md). It remains a
+  release-runner boundary until final transport hardening and pairing UI work
+  are complete.
 - Structured events exist, but production audit logging is incomplete. Beta
   needs connection, pairing, session, stream, input, and denial events with
   retention and redaction rules.

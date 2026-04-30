@@ -68,6 +68,8 @@ tunnel and expose a small control API. Platform-specific implementations live
 behind Rust traits so each OS backend can be tested independently.
 
 The Phase 2 control-plane contract is documented in `docs/control-plane.md`.
+Beta and release-runner binding rules live in
+`docs/network-tunnel-guidance.md`.
 
 ## Client Shape
 
@@ -95,3 +97,6 @@ Future phases need explicit decisions for:
 - per-application permission grants
 - media encryption behavior
 - audit logging for remote control sessions
+
+Current beta guidance requires loopback binding by default, SSH tunneling for
+untrusted network paths, and no direct public exposure of the control endpoint.

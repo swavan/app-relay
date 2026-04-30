@@ -73,6 +73,11 @@ Production runners should use `SystemSshTunnelSpawner`. Tests use an injectable
 fake child so lifecycle behavior is covered without opening a real SSH
 connection.
 
+Beta and release runners must keep the server bound to loopback unless they are
+following the narrow local-LAN exception documented in
+[network-tunnel-guidance.md](network-tunnel-guidance.md). The same guidance
+defines when SSH tunneling is required and when direct exposure is prohibited.
+
 ## Platform Capabilities
 
 The current server support matrix is documented in
