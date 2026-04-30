@@ -19,6 +19,7 @@ pub use video_stream::{
     WindowCaptureBackendService,
 };
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
 #[cfg(unix)]
@@ -2024,13 +2025,7 @@ impl ApplicationDiscovery for DesktopEntryApplicationDiscovery {
             Self::discover_root(root, &mut applications);
         }
 
-        applications.sort_by(|left, right| {
-            left.name
-                .to_lowercase()
-                .cmp(&right.name.to_lowercase())
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        applications.dedup_by(|left, right| left.id == right.id);
+        deduplicate_and_sort_applications(&mut applications);
 
         Ok(applications)
     }
@@ -2105,7 +2100,10 @@ pub struct MacosApplicationDiscovery {
 
 impl MacosApplicationDiscovery {
     pub fn macos_defaults() -> Self {
-        let mut roots = vec![PathBuf::from("/Applications")];
+        let mut roots = vec![
+            PathBuf::from("/Applications"),
+            PathBuf::from("/System/Applications"),
+        ];
 
         if let Some(home) = std::env::var_os("HOME") {
             roots.push(PathBuf::from(home).join("Applications"));
@@ -2119,16 +2117,46 @@ impl MacosApplicationDiscovery {
     }
 
     fn discover_root(root: &Path, applications: &mut Vec<ApplicationSummary>) {
+        Self::discover_app_bundles_in_directory(root, applications);
+
         let Ok(entries) = fs::read_dir(root) else {
             return;
         };
 
         for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+
+            if !file_type.is_dir() || file_type.is_symlink() {
+                continue;
+            }
+
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("app") {
+                Self::discover_app_bundles_in_directory(&path, applications);
+            }
+        }
+    }
+
+    fn discover_app_bundles_in_directory(root: &Path, applications: &mut Vec<ApplicationSummary>) {
+        let Ok(entries) = fs::read_dir(root) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+
+            if !file_type.is_dir() || file_type.is_symlink() {
+                continue;
+            }
+
             let path = entry.path();
             if path.extension().and_then(|extension| extension.to_str()) != Some("app") {
                 continue;
             }
-
             if let Some(application) = parse_macos_app_bundle(&path) {
                 applications.push(application);
             }
@@ -2144,13 +2172,7 @@ impl ApplicationDiscovery for MacosApplicationDiscovery {
             Self::discover_root(root, &mut applications);
         }
 
-        applications.sort_by(|left, right| {
-            left.name
-                .to_lowercase()
-                .cmp(&right.name.to_lowercase())
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        applications.dedup_by(|left, right| left.id == right.id);
+        deduplicate_and_sort_applications(&mut applications);
 
         Ok(applications)
     }
@@ -2186,6 +2208,36 @@ fn parse_macos_app_bundle(path: &Path) -> Option<ApplicationSummary> {
             bundle_path: path.display().to_string(),
         }),
     })
+}
+
+fn deduplicate_and_sort_applications(applications: &mut Vec<ApplicationSummary>) {
+    applications.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then_with(|| {
+                application_launch_sort_key(left).cmp(&application_launch_sort_key(right))
+            })
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    let mut seen_ids = HashSet::new();
+    applications.retain(|application| seen_ids.insert(application.id.clone()));
+    applications.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.id.cmp(&right.id))
+            .then_with(|| {
+                application_launch_sort_key(left).cmp(&application_launch_sort_key(right))
+            })
+    });
+}
+
+fn application_launch_sort_key(application: &ApplicationSummary) -> (bool, &str) {
+    match &application.launch {
+        Some(ApplicationLaunch::DesktopCommand { command }) => (false, command.as_str()),
+        Some(ApplicationLaunch::MacosBundle { bundle_path }) => (false, bundle_path.as_str()),
+        None => (true, ""),
+    }
 }
 
 fn macos_bundle_icon(path: &Path, icon_file: &str) -> Option<AppIcon> {
@@ -3267,6 +3319,80 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
     }
 
     #[test]
+    fn desktop_entry_discovery_prefers_launchable_duplicate() {
+        let root = unique_test_dir("desktop-entry-launchable-dedup");
+        let launchless_root = root.join("launchless");
+        let launchable_root = root.join("launchable");
+        fs::create_dir_all(&launchless_root).expect("create launchless directory");
+        fs::create_dir_all(&launchable_root).expect("create launchable directory");
+        fs::write(
+            launchless_root.join("duplicate.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Duplicate App\n",
+        )
+        .expect("write launchless desktop entry");
+        fs::write(
+            launchable_root.join("duplicate.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Duplicate App\nExec=duplicate --launch\n",
+        )
+        .expect("write launchable desktop entry");
+
+        let discovery =
+            DesktopEntryApplicationDiscovery::new(vec![launchless_root, launchable_root]);
+        let applications = discovery.available_applications().expect("discover apps");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "duplicate".to_string(),
+                name: "Duplicate App".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::DesktopCommand {
+                    command: "duplicate --launch".to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn desktop_entry_discovery_prefers_launchable_duplicate_with_later_name() {
+        let root = unique_test_dir("desktop-entry-launchable-name-dedup");
+        let launchless_root = root.join("launchless");
+        let launchable_root = root.join("launchable");
+        fs::create_dir_all(&launchless_root).expect("create launchless directory");
+        fs::create_dir_all(&launchable_root).expect("create launchable directory");
+        fs::write(
+            launchless_root.join("duplicate.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Alpha Duplicate\n",
+        )
+        .expect("write launchless desktop entry");
+        fs::write(
+            launchable_root.join("duplicate.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Zulu Duplicate\nExec=duplicate --launch\n",
+        )
+        .expect("write launchable desktop entry");
+
+        let discovery =
+            DesktopEntryApplicationDiscovery::new(vec![launchless_root, launchable_root]);
+        let applications = discovery.available_applications().expect("discover apps");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "duplicate".to_string(),
+                name: "Zulu Duplicate".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::DesktopCommand {
+                    command: "duplicate --launch".to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn macos_application_discovery_returns_app_bundles() {
         let root = unique_test_dir("macos-app-discovery");
         let app_contents = root.join("Visible.app/Contents");
@@ -3316,6 +3442,268 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
                 }),
                 launch: Some(ApplicationLaunch::MacosBundle {
                     bundle_path: root.join("Visible.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_returns_direct_and_nested_utility_apps() {
+        let root = unique_test_dir("macos-app-nested-discovery");
+        let direct_contents = root.join("Direct.app/Contents");
+        fs::create_dir_all(&direct_contents).expect("create direct app bundle");
+        fs::write(
+            direct_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.direct</string>
+  <key>CFBundleName</key>
+  <string>Direct Mac App</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write direct info plist");
+
+        let terminal_contents = root.join("Utilities/Terminal.app/Contents");
+        fs::create_dir_all(&terminal_contents).expect("create nested utility app bundle");
+        fs::write(
+            terminal_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.apple.Terminal</string>
+  <key>CFBundleName</key>
+  <string>Terminal</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write terminal info plist");
+
+        let deep_contents = root.join("Utilities/More/Deep.app/Contents");
+        fs::create_dir_all(&deep_contents).expect("create too-deep app bundle");
+        fs::write(
+            deep_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.deep</string>
+  <key>CFBundleName</key>
+  <string>Deep Utility App</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write deep info plist");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![
+                ApplicationSummary {
+                    id: "dev.apprelay.direct".to_string(),
+                    name: "Direct Mac App".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::MacosBundle {
+                        bundle_path: root.join("Direct.app").display().to_string(),
+                    }),
+                },
+                ApplicationSummary {
+                    id: "com.apple.Terminal".to_string(),
+                    name: "Terminal".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::MacosBundle {
+                        bundle_path: root.join("Utilities/Terminal.app").display().to_string(),
+                    }),
+                },
+            ]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn macos_application_discovery_ignores_symlink_app_bundles() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_test_dir("macos-app-symlink-bundle");
+        let external_contents = root.join("External.app/Contents");
+        fs::create_dir_all(&external_contents).expect("create external app bundle");
+        fs::write(
+            external_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.symlink-bundle</string>
+  <key>CFBundleName</key>
+  <string>Symlink Bundle App</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write symlink target info plist");
+        let visible_root = root.join("Visible");
+        fs::create_dir_all(&visible_root).expect("create visible root");
+        symlink(root.join("External.app"), visible_root.join("Linked.app"))
+            .expect("create linked app bundle");
+
+        let discovery = MacosApplicationDiscovery::new(vec![visible_root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(applications, Vec::<ApplicationSummary>::new());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_deduplicates_by_id_after_sorting() {
+        let root = unique_test_dir("macos-app-dedup");
+        let primary_contents = root.join("Primary.app/Contents");
+        fs::create_dir_all(&primary_contents).expect("create primary app bundle");
+        fs::write(
+            primary_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.duplicate</string>
+  <key>CFBundleName</key>
+  <string>Alpha Duplicate</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write primary info plist");
+
+        let middle_contents = root.join("Middle.app/Contents");
+        fs::create_dir_all(&middle_contents).expect("create middle app bundle");
+        fs::write(
+            middle_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.middle</string>
+  <key>CFBundleName</key>
+  <string>Middle App</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write middle info plist");
+
+        let duplicate_contents = root.join("Utilities/Duplicate.app/Contents");
+        fs::create_dir_all(&duplicate_contents).expect("create duplicate app bundle");
+        fs::write(
+            duplicate_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.duplicate</string>
+  <key>CFBundleName</key>
+  <string>Zulu Duplicate</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write duplicate info plist");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![
+                ApplicationSummary {
+                    id: "dev.apprelay.duplicate".to_string(),
+                    name: "Alpha Duplicate".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::MacosBundle {
+                        bundle_path: root.join("Primary.app").display().to_string(),
+                    }),
+                },
+                ApplicationSummary {
+                    id: "dev.apprelay.middle".to_string(),
+                    name: "Middle App".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::MacosBundle {
+                        bundle_path: root.join("Middle.app").display().to_string(),
+                    }),
+                },
+            ]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_deduplicates_same_name_by_deterministic_path_order() {
+        let root = unique_test_dir("macos-app-dedup-same-name");
+        let first_contents = root.join("Alpha.app/Contents");
+        fs::create_dir_all(&first_contents).expect("create first app bundle");
+        fs::write(
+            first_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.same-name</string>
+  <key>CFBundleName</key>
+  <string>Same Name App</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write first info plist");
+
+        let second_contents = root.join("Utilities/Same.app/Contents");
+        fs::create_dir_all(&second_contents).expect("create second app bundle");
+        fs::write(
+            second_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.same-name</string>
+  <key>CFBundleName</key>
+  <string>Same Name App</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write second info plist");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.join("Utilities"), root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.same-name".to_string(),
+                name: "Same Name App".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("Alpha.app").display().to_string(),
                 }),
             }]
         );
