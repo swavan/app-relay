@@ -446,6 +446,11 @@ Completed:
   controls, pending pairing and explicit local/admin approval are modeled in
   protocol/core/server services, and foreground commands exercise the policy
   without treating caller-supplied client ids as authenticated device proof
+- completed local network and remote tunnel guidance slice in
+  [`network-tunnel-guidance.md`](network-tunnel-guidance.md), covering default
+  loopback binding, constrained local-LAN beta exceptions, SSH tunnel use,
+  prohibited direct exposure, release-runner checks, threat assumptions, and
+  known gaps
 
 ## Phase 9: Production Release
 
