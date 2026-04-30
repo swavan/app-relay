@@ -126,9 +126,16 @@ fn pipewire_capture_command_config_from_env() -> PipeWireCaptureCommandConfig {
 
 #[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
 fn pipewire_capture_enabled_from_env() -> bool {
+    pipewire_capture_enabled_from_env_value(
+        std::env::var("APPRELAY_PIPEWIRE_CAPTURE").ok().as_deref(),
+    )
+}
+
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+fn pipewire_capture_enabled_from_env_value(value: Option<&str>) -> bool {
     matches!(
-        std::env::var("APPRELAY_PIPEWIRE_CAPTURE").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+        value.map(str::trim),
+        Some("1" | "true" | "TRUE" | "yes" | "YES")
     )
 }
 
@@ -179,13 +186,24 @@ mod tests {
     #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
     use super::{
         pipewire_capture_channels_from_env_value, pipewire_capture_command_from_env_value,
-        pipewire_capture_format_from_env_value, pipewire_capture_rate_from_env_value,
-        pipewire_capture_target_from_env_value,
+        pipewire_capture_enabled_from_env_value, pipewire_capture_format_from_env_value,
+        pipewire_capture_rate_from_env_value, pipewire_capture_target_from_env_value,
     };
 
     #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
     #[test]
     fn pipewire_capture_env_parameter_parsing_falls_back_conservatively() {
+        assert!(!pipewire_capture_enabled_from_env_value(None));
+        assert!(!pipewire_capture_enabled_from_env_value(Some("")));
+        assert!(!pipewire_capture_enabled_from_env_value(Some("   ")));
+        assert!(pipewire_capture_enabled_from_env_value(Some("1")));
+        assert!(pipewire_capture_enabled_from_env_value(Some(" true ")));
+        assert!(pipewire_capture_enabled_from_env_value(Some("TRUE")));
+        assert!(pipewire_capture_enabled_from_env_value(Some(" yes ")));
+        assert!(pipewire_capture_enabled_from_env_value(Some("YES")));
+        assert!(!pipewire_capture_enabled_from_env_value(Some("false")));
+        assert!(!pipewire_capture_enabled_from_env_value(Some("on")));
+
         assert_eq!(
             pipewire_capture_command_from_env_value(Some("pw-cat")),
             "pw-cat"
