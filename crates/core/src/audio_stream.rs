@@ -680,6 +680,9 @@ impl PipeWireCaptureCommandRuntime {
     }
 
     fn start_capture(&self, stream_id: &str) -> Option<NativeAudioMediaSession> {
+        if self.stopped_stream_observed(stream_id) {
+            return None;
+        }
         self.stop_capture(stream_id);
 
         let stats = Arc::new(PipeWireCaptureCommandStats {
@@ -840,6 +843,12 @@ impl PipeWireCaptureCommandRuntime {
             return;
         };
         sessions.clear_stopped_stream(stream_id);
+    }
+
+    fn stopped_stream_observed(&self, stream_id: &str) -> bool {
+        self.sessions
+            .lock()
+            .is_ok_and(|sessions| sessions.stopped_stream_observed(stream_id))
     }
 
     #[cfg(test)]
@@ -2908,6 +2917,63 @@ mod tests {
         assert!(!capture.available);
         assert_eq!(capture.media, AudioBackendMediaStats::default());
         assert!(capture
+            .failure
+            .as_ref()
+            .expect("capture failure")
+            .message
+            .contains("stopped"));
+        assert_eq!(capture_adapter.command_capture_session_count(), 0);
+
+        let repeated_status = stream_service
+            .stream_status(&stream.id)
+            .expect("repeated stream status");
+        let repeated_capture = repeated_status
+            .backend
+            .as_ref()
+            .expect("backend contract")
+            .statuses
+            .iter()
+            .find(|status| status.leg == AudioBackendLeg::Capture)
+            .expect("capture status");
+
+        assert!(!repeated_capture.available);
+        assert_eq!(repeated_capture.media, AudioBackendMediaStats::default());
+        assert!(repeated_capture
+            .failure
+            .as_ref()
+            .expect("capture failure")
+            .message
+            .contains("stopped"));
+        assert_eq!(capture_adapter.command_capture_session_count(), 0);
+
+        stream_service.configure_native_readiness(AudioBackendNativeReadiness {
+            available_legs: Vec::new(),
+            pipewire_capture_adapter: Some(capture_adapter.clone()),
+            ..AudioBackendNativeReadiness::default()
+        });
+        assert_eq!(capture_adapter.command_capture_session_count(), 0);
+
+        let updated = stream_service
+            .update_stream(UpdateAudioStreamRequest {
+                stream_id: stream.id.clone(),
+                system_audio_muted: false,
+                microphone_muted: true,
+                output_device_id: None,
+                input_device_id: None,
+            })
+            .expect("update stream after stopped capture");
+        let updated_capture = updated
+            .backend
+            .as_ref()
+            .expect("backend contract")
+            .statuses
+            .iter()
+            .find(|status| status.leg == AudioBackendLeg::Capture)
+            .expect("capture status");
+
+        assert!(!updated_capture.available);
+        assert_eq!(updated_capture.media, AudioBackendMediaStats::default());
+        assert!(updated_capture
             .failure
             .as_ref()
             .expect("capture failure")
