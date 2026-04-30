@@ -37,6 +37,24 @@ const expectPng = (path, expectedWidth, expectedHeight) => {
 
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
 const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+const cargoToml = readFileSync("src-tauri/Cargo.toml", "utf8");
+const permissionIntent = JSON.parse(
+  readFileSync("src-tauri/packaging-permissions.json", "utf8"),
+);
+
+const expectArray = (value, message) => {
+  expect(Array.isArray(value), message);
+  return value;
+};
+
+const expectExactArray = (value, expected, message) => {
+  expectArray(value, message);
+  expect(
+    value.length === expected.length &&
+      value.every((entry, index) => entry === expected[index]),
+    `${message}; expected ${JSON.stringify(expected)}, got ${JSON.stringify(value)}`,
+  );
+};
 
 expect(
   config["$schema"] === "https://schema.tauri.app/config/2",
@@ -70,6 +88,144 @@ expect(config.bundle?.active === true, "bundle.active must stay true");
 expect(
   config.bundle?.targets === "all",
   "bundle.targets must stay all for desktop packaging",
+);
+
+expect(
+  permissionIntent.schemaVersion === 1,
+  "packaging permission intent schemaVersion must remain 1",
+);
+expect(
+  permissionIntent.tauri?.usesPluginPermissions === false,
+  "Tauri plugin permissions must stay explicitly disabled until a plugin is packaged",
+);
+expectExactArray(
+  permissionIntent.tauri?.allowedPluginPermissions,
+  [],
+  "Tauri plugin permission allowlist must be explicit and empty",
+);
+expect(
+  !/\btauri-plugin-[A-Za-z0-9_-]+\b/.test(cargoToml),
+  "src-tauri/Cargo.toml must not declare Tauri plugin crates without updating packaging-permissions.json",
+);
+expect(
+  !existsSync("src-tauri/capabilities"),
+  "src-tauri/capabilities must not be introduced without updating packaging-permissions.json",
+);
+expect(
+  !existsSync("src-tauri/permissions"),
+  "src-tauri/permissions must not be introduced without updating packaging-permissions.json",
+);
+
+const expectedPlatforms = ["android", "ios", "linux", "macos", "windows"];
+const configuredPlatforms = Object.keys(permissionIntent.platforms ?? {}).sort();
+expectExactArray(
+  configuredPlatforms,
+  expectedPlatforms,
+  "packaging permission intent must cover every desktop and mobile platform exactly once",
+);
+
+const platform = (name) => permissionIntent.platforms[name] ?? {};
+expectExactArray(
+  platform("android").requiredPermissions,
+  ["android.permission.INTERNET"],
+  "Android package permissions must explicitly allow outbound network access",
+);
+expectExactArray(
+  platform("ios").requiredPermissions,
+  [],
+  "iOS package permissions must be explicit",
+);
+expectExactArray(
+  platform("linux").requiredPermissions,
+  [],
+  "Linux package permissions must be explicit",
+);
+expectExactArray(
+  platform("macos").requiredPermissions,
+  [],
+  "macOS package permissions must be explicit",
+);
+expectExactArray(
+  platform("windows").requiredPermissions,
+  [],
+  "Windows package permissions must be explicit",
+);
+
+for (const name of expectedPlatforms) {
+  expectExactArray(
+    platform(name).requiredEntitlements,
+    [],
+    `${name} requiredEntitlements must be explicit and empty`,
+  );
+}
+
+expectExactArray(
+  platform("macos").requiredInfoPlistUsageDescriptions,
+  [],
+  "macOS Info.plist usage descriptions must be explicit",
+);
+expectExactArray(
+  platform("ios").requiredInfoPlistUsageDescriptions,
+  [],
+  "iOS Info.plist usage descriptions must be explicit",
+);
+
+const deferredEntry = (name, entries, expectedName, message) => {
+  expectArray(entries, message);
+  expect(entries.length === 1, `${message}; expected one deferred entry`);
+  expect(
+    entries[0]?.name === expectedName,
+    `${message}; expected ${expectedName}, got ${JSON.stringify(entries[0])}`,
+  );
+  expect(
+    entries[0]?.reason?.length > 0,
+    `${name} ${expectedName} deferred entry must include a reason`,
+  );
+};
+
+for (const name of ["linux", "windows"]) {
+  expectExactArray(
+    platform(name).deferredPermissions,
+    [],
+    `${name} deferredPermissions must be explicit and empty`,
+  );
+  expectExactArray(
+    platform(name).deferredEntitlements,
+    [],
+    `${name} deferredEntitlements must be explicit and empty`,
+  );
+}
+
+for (const name of ["ios", "macos"]) {
+  deferredEntry(
+    name,
+    platform(name).deferredPermissions,
+    "NSMicrophoneUsageDescription",
+    `${name} must explicitly defer microphone usage description until native capture ships`,
+  );
+}
+
+deferredEntry(
+  "android",
+  platform("android").deferredPermissions,
+  "android.permission.RECORD_AUDIO",
+  "Android must explicitly defer RECORD_AUDIO until native capture ships",
+);
+deferredEntry(
+  "macos",
+  platform("macos").deferredEntitlements,
+  "com.apple.security.device.audio-input",
+  "macOS must explicitly defer audio-input entitlement until native capture ships",
+);
+expectExactArray(
+  platform("android").deferredEntitlements,
+  [],
+  "Android deferredEntitlements must be explicit and empty",
+);
+expectExactArray(
+  platform("ios").deferredEntitlements,
+  [],
+  "iOS deferredEntitlements must be explicit and empty",
 );
 
 expectFile(

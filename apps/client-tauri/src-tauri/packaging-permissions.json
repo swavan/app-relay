@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "description": "Source-controlled packaging permission and entitlement intent for AppRelay client packages. This file is checked without running native package builders.",
+  "tauri": {
+    "usesPluginPermissions": false,
+    "allowedPluginPermissions": [],
+    "nativeCommandSurface": "Tauri commands only; no Tauri filesystem, shell, clipboard, notification, updater, process, or HTTP plugin permissions are packaged."
+  },
+  "platforms": {
+    "linux": {
+      "requiredPermissions": [],
+      "requiredEntitlements": [],
+      "deferredPermissions": [],
+      "deferredEntitlements": []
+    },
+    "macos": {
+      "requiredPermissions": [],
+      "requiredEntitlements": [],
+      "requiredInfoPlistUsageDescriptions": [],
+      "deferredPermissions": [
+        {
+          "name": "NSMicrophoneUsageDescription",
+          "reason": "Declare only when native client microphone capture ships in the packaged client."
+        }
+      ],
+      "deferredEntitlements": [
+        {
+          "name": "com.apple.security.device.audio-input",
+          "reason": "Declare only when native client microphone capture ships in the packaged client."
+        }
+      ]
+    },
+    "windows": {
+      "requiredPermissions": [],
+      "requiredEntitlements": [],
+      "deferredPermissions": [],
+      "deferredEntitlements": []
+    },
+    "android": {
+      "requiredPermissions": [
+        "android.permission.INTERNET"
+      ],
+      "requiredEntitlements": [],
+      "deferredEntitlements": [],
+      "deferredPermissions": [
+        {
+          "name": "android.permission.RECORD_AUDIO",
+          "reason": "Declare only when native client microphone capture ships in the packaged client."
+        }
+      ]
+    },
+    "ios": {
+      "requiredPermissions": [],
+      "requiredEntitlements": [],
+      "requiredInfoPlistUsageDescriptions": [],
+      "deferredEntitlements": [],
+      "deferredPermissions": [
+        {
+          "name": "NSMicrophoneUsageDescription",
+          "reason": "Declare only when native client microphone capture ships in the packaged client."
+        }
+      ]
+    }
+  }
+}
