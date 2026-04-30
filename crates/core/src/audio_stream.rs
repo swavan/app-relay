@@ -80,6 +80,13 @@ struct NativeAudioMediaBackendLeg {
     state: NativeAudioMediaBackendLegState,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct AudioDeviceAvailability<'a> {
+    devices: Option<&'a AudioDeviceSelection>,
+    #[cfg(test)]
+    unavailable_device_ids: &'a [String],
+}
+
 #[cfg(any(test, feature = "pipewire-capture"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PipeWireCaptureAdapterRuntime {
@@ -314,6 +321,7 @@ impl NativeAudioMediaBackend {
         &self,
         media_session: Option<&NativeAudioMediaSession>,
         mute: Option<&AudioMuteState>,
+        device_availability: AudioDeviceAvailability<'_>,
     ) -> Vec<AudioBackendStatus> {
         self.legs
             .iter()
@@ -326,7 +334,7 @@ impl NativeAudioMediaBackend {
                 } else {
                     AudioBackendReadiness::PlannedNative
                 },
-                media: backend_leg.media_stats(media_session, mute),
+                media: backend_leg.media_stats(media_session, mute, device_availability),
                 failure: if backend_leg.is_available() {
                     None
                 } else {
@@ -478,6 +486,7 @@ impl NativeAudioMediaBackendLeg {
         &self,
         media_session: Option<&NativeAudioMediaSession>,
         mute: Option<&AudioMuteState>,
+        device_availability: AudioDeviceAvailability<'_>,
     ) -> AudioBackendMediaStats {
         if !self.is_available() {
             return AudioBackendMediaStats::default();
@@ -485,11 +494,41 @@ impl NativeAudioMediaBackendLeg {
         if self.is_muted(mute) {
             return AudioBackendMediaStats::default();
         }
+        if self.device_unavailable(device_availability) {
+            return AudioBackendMediaStats::default();
+        }
 
         media_session
             .and_then(|session| session.media_stats(&self.leg))
             .cloned()
             .unwrap_or_default()
+    }
+
+    fn device_unavailable(&self, device_availability: AudioDeviceAvailability<'_>) -> bool {
+        #[cfg(not(test))]
+        {
+            let _ = device_availability;
+            false
+        }
+
+        #[cfg(test)]
+        {
+            let Some(devices) = device_availability.devices else {
+                return false;
+            };
+            let selected_device_id = match self.leg {
+                AudioBackendLeg::Playback => devices.output_device_id.as_ref(),
+                AudioBackendLeg::ClientMicrophoneCapture
+                | AudioBackendLeg::ServerMicrophoneInjection => devices.input_device_id.as_ref(),
+                AudioBackendLeg::Capture => None,
+            };
+
+            selected_device_id.is_some_and(|device_id| {
+                device_availability
+                    .unavailable_device_ids
+                    .contains(device_id)
+            })
+        }
     }
 
     fn is_muted(&self, mute: Option<&AudioMuteState>) -> bool {
@@ -744,13 +783,14 @@ impl AudioBackendService {
     }
 
     pub fn backend_contract(&self) -> AudioBackendContract {
-        self.backend_contract_for_media_session(None, None)
+        self.backend_contract_for_media_session(None, None, AudioDeviceAvailability::default())
     }
 
     fn backend_contract_for_media_session(
         &self,
         media_session: Option<&NativeAudioMediaSession>,
         mute: Option<&AudioMuteState>,
+        device_availability: AudioDeviceAvailability<'_>,
     ) -> AudioBackendContract {
         match self {
             Self::DesktopControl {
@@ -770,7 +810,7 @@ impl AudioBackendService {
                     planned_capture: native_backend_kind.clone(),
                     planned_playback: native_backend_kind.clone(),
                     planned_microphone: native_backend_kind,
-                    statuses: native_backend.statuses(media_session, mute),
+                    statuses: native_backend.statuses(media_session, mute, device_availability),
                     readiness: native_backend.readiness(),
                     notes: native_backend.notes(),
                 }
@@ -1051,6 +1091,8 @@ impl AudioBackendService {
 pub struct InMemoryAudioStreamService {
     backend: AudioBackendService,
     native_runtime: NativeAudioMediaRuntime,
+    #[cfg(test)]
+    unavailable_device_ids: Vec<String>,
     streams: Vec<AudioStreamSession>,
     next_stream_number: u64,
 }
@@ -1060,6 +1102,8 @@ impl InMemoryAudioStreamService {
         Self {
             backend,
             native_runtime: NativeAudioMediaRuntime::default(),
+            #[cfg(test)]
+            unavailable_device_ids: Vec::new(),
             streams: Vec::new(),
             next_stream_number: 1,
         }
@@ -1082,6 +1126,22 @@ impl InMemoryAudioStreamService {
         legs: impl IntoIterator<Item = (AudioBackendLeg, AudioBackendMediaStats)>,
     ) {
         self.native_runtime.start_test_session(stream_id, legs);
+        self.refresh_active_stream_backend_state();
+    }
+
+    #[cfg(test)]
+    fn disconnect_audio_device_for_test(&mut self, device_id: impl Into<String>) {
+        let device_id = device_id.into();
+        if !self.unavailable_device_ids.contains(&device_id) {
+            self.unavailable_device_ids.push(device_id);
+        }
+        self.refresh_active_stream_backend_state();
+    }
+
+    #[cfg(test)]
+    fn reconnect_audio_device_for_test(&mut self, device_id: &str) {
+        self.unavailable_device_ids
+            .retain(|unavailable_id| unavailable_id != device_id);
         self.refresh_active_stream_backend_state();
     }
 
@@ -1190,6 +1250,7 @@ impl InMemoryAudioStreamService {
     fn refresh_active_stream_backend_state(&mut self) {
         let backend = self.backend.clone();
         let capabilities = self.backend.capabilities();
+        let unavailable_device_ids = self.unavailable_device_ids.clone();
         for stream in self
             .streams
             .iter_mut()
@@ -1198,14 +1259,68 @@ impl InMemoryAudioStreamService {
             stream.backend = Some(self.backend.backend_contract_for_media_session(
                 self.native_runtime.session_for_stream(&stream.id),
                 Some(&stream.mute),
+                AudioDeviceAvailability {
+                    devices: Some(&stream.devices),
+                    unavailable_device_ids: &unavailable_device_ids,
+                },
             ));
             stream.capabilities = capabilities.clone();
             stream.microphone_injection =
                 backend.microphone_injection_state(&stream.microphone, &capabilities);
-            stream.health = AudioStreamHealth {
-                healthy: true,
-                message: Some("audio backend readiness updated".to_string()),
+            stream.health = Self::stream_health_for_devices(
+                &stream.devices,
+                &unavailable_device_ids,
+                "audio backend readiness updated",
+            );
+        }
+    }
+
+    #[cfg(test)]
+    fn stream_health_for_devices(
+        devices: &AudioDeviceSelection,
+        unavailable_device_ids: &[String],
+        healthy_message: &str,
+    ) -> AudioStreamHealth {
+        if let Some(output_device_id) = devices
+            .output_device_id
+            .as_ref()
+            .filter(|device_id| unavailable_device_ids.contains(device_id))
+        {
+            return AudioStreamHealth {
+                healthy: false,
+                message: Some(format!(
+                    "selected output device {output_device_id} is unavailable"
+                )),
             };
+        }
+        if let Some(input_device_id) = devices
+            .input_device_id
+            .as_ref()
+            .filter(|device_id| unavailable_device_ids.contains(device_id))
+        {
+            return AudioStreamHealth {
+                healthy: false,
+                message: Some(format!(
+                    "selected input device {input_device_id} is unavailable"
+                )),
+            };
+        }
+
+        AudioStreamHealth {
+            healthy: true,
+            message: Some(healthy_message.to_string()),
+        }
+    }
+
+    #[cfg(not(test))]
+    fn stream_health_for_devices(
+        _devices: &AudioDeviceSelection,
+        _unavailable_device_ids: &[String],
+        healthy_message: &str,
+    ) -> AudioStreamHealth {
+        AudioStreamHealth {
+            healthy: true,
+            message: Some(healthy_message.to_string()),
         }
     }
 }
@@ -1274,20 +1389,28 @@ impl AudioStreamService for InMemoryAudioStreamService {
             system_audio_muted: request.system_audio_muted,
             microphone_muted: request.microphone_muted,
         };
+        let devices = AudioDeviceSelection {
+            output_device_id: request.output_device_id,
+            input_device_id: request.input_device_id,
+        };
+        #[cfg(test)]
+        let unavailable_device_ids = self.unavailable_device_ids.clone();
 
         let stream = AudioStreamSession {
             backend: Some(self.backend.backend_contract_for_media_session(
                 self.native_runtime.session_for_stream(&stream_id),
                 Some(&mute),
+                AudioDeviceAvailability {
+                    devices: Some(&devices),
+                    #[cfg(test)]
+                    unavailable_device_ids: &unavailable_device_ids,
+                },
             )),
             id: stream_id,
             session_id: session.id.clone(),
             selected_window_id: session.selected_window.id.clone(),
             source,
-            devices: AudioDeviceSelection {
-                output_device_id: request.output_device_id,
-                input_device_id: request.input_device_id,
-            },
+            devices,
             microphone: request.microphone,
             microphone_injection,
             mute,
@@ -1331,7 +1454,11 @@ impl AudioStreamService for InMemoryAudioStreamService {
         #[cfg(test)]
         self.backend.stop_server_microphone_injection(&stream.id);
         self.native_runtime.clear_stream(&stream.id);
-        stream.backend = Some(self.backend.backend_contract_for_media_session(None, None));
+        stream.backend = Some(self.backend.backend_contract_for_media_session(
+            None,
+            None,
+            AudioDeviceAvailability::default(),
+        ));
         stream.health = AudioStreamHealth {
             healthy: false,
             message: Some("audio stream stopped by client".to_string()),
@@ -1343,6 +1470,10 @@ impl AudioStreamService for InMemoryAudioStreamService {
         &mut self,
         request: UpdateAudioStreamRequest,
     ) -> Result<AudioStreamSession, AppRelayError> {
+        #[cfg(test)]
+        let unavailable_device_ids = self.unavailable_device_ids.clone();
+        #[cfg(not(test))]
+        let unavailable_device_ids: Vec<String> = Vec::new();
         let stream = self
             .streams
             .iter_mut()
@@ -1369,11 +1500,17 @@ impl AudioStreamService for InMemoryAudioStreamService {
         stream.backend = Some(self.backend.backend_contract_for_media_session(
             self.native_runtime.session_for_stream(&stream.id),
             Some(&stream.mute),
+            AudioDeviceAvailability {
+                devices: Some(&stream.devices),
+                #[cfg(test)]
+                unavailable_device_ids: &unavailable_device_ids,
+            },
         ));
-        stream.health = AudioStreamHealth {
-            healthy: true,
-            message: Some("audio stream controls updated".to_string()),
-        };
+        stream.health = Self::stream_health_for_devices(
+            &stream.devices,
+            &unavailable_device_ids,
+            "audio stream controls updated",
+        );
         Ok(stream.clone())
     }
 
@@ -1400,7 +1537,11 @@ impl AudioStreamService for InMemoryAudioStreamService {
             #[cfg(test)]
             self.backend.stop_server_microphone_injection(&stream.id);
             self.native_runtime.clear_stream(&stream.id);
-            stream.backend = Some(self.backend.backend_contract_for_media_session(None, None));
+            stream.backend = Some(self.backend.backend_contract_for_media_session(
+                None,
+                None,
+                AudioDeviceAvailability::default(),
+            ));
             stream.health = AudioStreamHealth {
                 healthy: false,
                 message: Some(format!("application session {session_id} closed")),
@@ -2111,6 +2252,75 @@ mod tests {
     }
 
     #[test]
+    fn audio_backend_runtime_media_status_respects_device_availability() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::default();
+        stream_service.configure_native_readiness(
+            AudioBackendNativeReadiness::with_available_legs(
+                AudioBackendNativeReadiness::native_legs(),
+            ),
+        );
+        let stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Enabled,
+                    system_audio_muted: false,
+                    microphone_muted: false,
+                    output_device_id: Some("speakers".to_string()),
+                    input_device_id: Some("mic".to_string()),
+                },
+                &session,
+            )
+            .expect("start audio stream");
+        stream_service
+            .start_native_media_session_for_test(&stream.id, native_media_stats_for_test());
+
+        stream_service.disconnect_audio_device_for_test("speakers");
+        let output_lost = stream_service
+            .stream_status(&stream.id)
+            .expect("stream status after output disconnect");
+        assert!(!output_lost.health.healthy);
+        assert_eq!(
+            output_lost.health.message.as_deref(),
+            Some("selected output device speakers is unavailable")
+        );
+        assert_backend_leg_media(&output_lost, AudioBackendLeg::Playback, false);
+        assert_backend_leg_media(&output_lost, AudioBackendLeg::Capture, true);
+        assert_backend_leg_media(&output_lost, AudioBackendLeg::ClientMicrophoneCapture, true);
+        assert_backend_leg_media(
+            &output_lost,
+            AudioBackendLeg::ServerMicrophoneInjection,
+            true,
+        );
+
+        stream_service.reconnect_audio_device_for_test("speakers");
+        stream_service.disconnect_audio_device_for_test("mic");
+        let input_lost = stream_service
+            .stream_status(&stream.id)
+            .expect("stream status after input disconnect");
+        assert!(!input_lost.health.healthy);
+        assert_eq!(
+            input_lost.health.message.as_deref(),
+            Some("selected input device mic is unavailable")
+        );
+        assert_backend_leg_media(&input_lost, AudioBackendLeg::Capture, true);
+        assert_backend_leg_media(&input_lost, AudioBackendLeg::Playback, true);
+        assert_backend_leg_media(&input_lost, AudioBackendLeg::ClientMicrophoneCapture, false);
+        assert_backend_leg_media(
+            &input_lost,
+            AudioBackendLeg::ServerMicrophoneInjection,
+            false,
+        );
+    }
+
+    #[test]
     fn server_microphone_injection_runtime_starts_for_opt_in_streams() {
         let mut session_service = InMemoryApplicationSessionService::default();
         let session = session_service
@@ -2778,6 +2988,34 @@ mod tests {
             bytes_sent: 5300,
             bytes_received: 5900,
             latency_ms: 8,
+        }
+    }
+
+    fn assert_backend_leg_media(
+        stream: &AudioStreamSession,
+        leg: AudioBackendLeg,
+        media_available: bool,
+    ) {
+        let status = stream
+            .backend
+            .as_ref()
+            .expect("backend contract")
+            .statuses
+            .iter()
+            .find(|status| status.leg == leg)
+            .expect("backend leg status");
+        assert!(status.available);
+        assert_eq!(status.readiness, AudioBackendReadiness::NativeAvailable);
+        assert_eq!(status.failure, None);
+        assert_eq!(status.media.available, media_available);
+        if media_available {
+            assert!(status.media.packets_sent > 0);
+            assert!(status.media.packets_received > 0);
+            assert!(status.media.bytes_sent > 0);
+            assert!(status.media.bytes_received > 0);
+            assert!(status.media.latency_ms > 0);
+        } else {
+            assert_eq!(status.media, AudioBackendMediaStats::default());
         }
     }
 
