@@ -42,3 +42,5 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+      - name: Check packaging config
+        run: npm run package:check
