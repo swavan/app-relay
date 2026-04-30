@@ -92,6 +92,13 @@ describe("buildAppViewModel", () => {
     expect(viewModel.connectionLabel).toBe("Linux PC");
     expect(viewModel.healthText).toBe("0.1.0");
     expect(viewModel.capabilitiesText).toBe("1/2");
+    expect(viewModel.unsupportedCapabilities).toEqual([
+      {
+        feature: "Window Resize",
+        platform: "Linux",
+        reason: "No reason provided by server.",
+      },
+    ]);
     expect(viewModel.sessionTitle).toBe("Terminal");
     expect(viewModel.apps).toEqual([
       {
@@ -107,6 +114,46 @@ describe("buildAppViewModel", () => {
           label: "TE",
           title: "Terminal",
         },
+      },
+    ]);
+  });
+
+  it("surfaces only unsupported capability details", () => {
+    const viewModel = buildAppViewModel({
+      ...baseInput,
+      capabilities: [
+        {
+          platform: "macos",
+          feature: "windowVideo",
+          supported: false,
+          reason: "Native video capture is unavailable.",
+        },
+        {
+          platform: "windows_desktop",
+          feature: "keyboard-input",
+          supported: false,
+          reason: " ",
+        },
+        {
+          platform: "linux",
+          feature: "mouseInput",
+          supported: true,
+          reason: "Implemented through native input forwarding.",
+        },
+      ],
+    });
+
+    expect(viewModel.capabilitiesText).toBe("1/3");
+    expect(viewModel.unsupportedCapabilities).toEqual([
+      {
+        feature: "Window Video",
+        platform: "macOS",
+        reason: "Native video capture is unavailable.",
+      },
+      {
+        feature: "Keyboard Input",
+        platform: "Windows Desktop",
+        reason: "No reason provided by server.",
       },
     ]);
   });

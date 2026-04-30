@@ -7,10 +7,17 @@ export type AppViewModel = {
   connectionLabel: string;
   healthText: string;
   capabilitiesText: string;
+  unsupportedCapabilities: UnsupportedCapabilityView[];
   emptyText: string;
   errorText: string;
   sessionTitle: string;
   apps: AppListItem[];
+};
+
+export type UnsupportedCapabilityView = {
+  feature: string;
+  platform: string;
+  reason: string;
 };
 
 export type AppListItem = AppSummary & {
@@ -50,6 +57,9 @@ export function buildAppViewModel(input: AppViewModelInput): AppViewModel {
     connectionLabel: input.selectedProfileLabel ?? "Local development",
     healthText: input.health?.version ?? "checking",
     capabilitiesText: `${supportedCapabilities.length}/${input.capabilities.length}`,
+    unsupportedCapabilities: input.capabilities
+      .filter((capability) => !capability.supported)
+      .map(buildUnsupportedCapabilityView),
     emptyText: "No applications found for this server.",
     errorText: input.errorMessage,
     sessionTitle: input.activeSession?.selectedWindow.title ?? "",
@@ -62,6 +72,14 @@ function buildAppListItem(app: AppSummary): AppListItem {
     ...app,
     iconView: buildAppIconView(app),
     launchLabel: buildLaunchLabel(app),
+  };
+}
+
+function buildUnsupportedCapabilityView(capability: Capability): UnsupportedCapabilityView {
+  return {
+    feature: humanizeToken(capability.feature),
+    platform: humanizePlatform(capability.platform),
+    reason: capability.reason?.trim() || "No reason provided by server.",
   };
 }
 
@@ -128,6 +146,35 @@ function commandName(command: string): string {
 
 function appFallbackLabel(value: string): string {
   return value.trim() || "application";
+}
+
+function humanizeToken(value: string): string {
+  const words = value
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[\s_-]+/)
+    .filter((word) => word.length > 0);
+
+  if (words.length === 0) {
+    return "Unknown";
+  }
+
+  return words
+    .map((word) => `${word[0].toUpperCase()}${word.slice(1).toLowerCase()}`)
+    .join(" ");
+}
+
+function humanizePlatform(value: string): string {
+  const knownPlatformLabels: Record<string, string> = {
+    android: "Android",
+    ios: "iOS",
+    linux: "Linux",
+    macos: "macOS",
+    windows: "Windows",
+  };
+
+  const normalized = value.trim().toLowerCase();
+  return knownPlatformLabels[normalized] ?? humanizeToken(value);
 }
 
 function resolveLoadState(input: AppViewModelInput): ClientLoadState {
