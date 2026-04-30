@@ -115,6 +115,8 @@ foreground integration testing. It currently supports:
 - `applications <token>`
 - `pairing-request <token> <client_id> <client_label>`
 - `create-session <token> <client_id> <application_id> <width> <height>`
+- `resize-session <token> <client_id> <session_id> <width> <height>`
+- `close-session <token> <client_id> <session_id>`
 - `sessions <token> <client_id>`
 
 This is a foreground development listener, not the final daemon transport. It
@@ -149,7 +151,10 @@ Manual foreground smoke test:
    when the selected application was discovered from a `.desktop` entry with
    `Exec=` metadata, this command triggers the native launch path and spawns
    that command without a shell.
-7. Send `sessions <token> <client_id>` to confirm the created session is active.
+7. Send `resize-session <token> <client_id> <session_id> 1440 900` to record a
+   resize intent for the selected session.
+8. Send `sessions <token> <client_id>` to confirm the created session is active.
+9. Send `close-session <token> <client_id> <session_id>` to close the session.
 
 ## Daemon Installation
 
@@ -179,10 +184,16 @@ Tests assert these generated artifacts without crashing installed services.
 
 ## Events
 
-The server emits structured events for control-plane start, stop, authorized
-requests, rejected requests, and config persistence operations. Tests can use
-`InMemoryEventSink`; foreground and service runners can use `FileEventSink` to
-append line-oriented structured events to a log file.
+The server emits structured events for control-plane start and stop, foreground
+TCP connection accept and close, authorized requests, rejected requests, session
+creation, session resize, session close, SSH tunnel lifecycle, and config
+persistence operations. Tests can use `InMemoryEventSink`; foreground and
+service runners can use `FileEventSink` to append line-oriented structured
+events to a log file.
+
+The current audit logging contract is documented in
+[audit-logging.md](audit-logging.md). It explicitly excludes auth tokens, media
+contents, raw input payloads, production retention policy, and SIEM integration.
 
 ## Client Profiles
 

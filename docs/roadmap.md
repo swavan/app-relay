@@ -451,6 +451,12 @@ Completed:
   loopback binding, constrained local-LAN beta exceptions, SSH tunnel use,
   prohibited direct exposure, release-runner checks, threat assumptions, and
   known gaps
+- completed initial audit logging contract slice in
+  [`audit-logging.md`](audit-logging.md), covering structured foreground
+  connection accept/close events, authorized and rejected foreground requests,
+  session create/resize/close lifecycle events, and the current redaction
+  boundary without claiming production retention, SIEM integration, or final
+  audit review
 
 ## Phase 9: Production Release
 

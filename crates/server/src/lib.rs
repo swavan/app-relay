@@ -573,13 +573,26 @@ impl ForegroundControlServer {
         stream: &mut TcpStream,
         events: &mut impl EventSink,
     ) -> std::io::Result<()> {
-        let mut request = String::new();
-        BufReader::new(stream.try_clone()?).read_line(&mut request)?;
-        let response = self.handle_request(request.trim(), events);
+        let peer_address = stream
+            .peer_addr()
+            .map(|address| address.to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        events.record(ServerEvent::ForegroundConnectionAccepted {
+            peer_address: peer_address.clone(),
+        });
 
-        stream.write_all(response.as_bytes())?;
-        stream.write_all(b"\n")?;
-        Ok(())
+        let result = (|| {
+            let mut request = String::new();
+            BufReader::new(stream.try_clone()?).read_line(&mut request)?;
+            let response = self.handle_request(request.trim(), events);
+
+            stream.write_all(response.as_bytes())?;
+            stream.write_all(b"\n")?;
+            Ok(())
+        })();
+
+        events.record(ServerEvent::ForegroundConnectionClosed { peer_address });
+        result
     }
 
     pub fn handle_request(&self, request: &str, events: &mut impl EventSink) -> String {
@@ -599,10 +612,10 @@ impl ForegroundControlServer {
                 }
 
                 self.control_plane.borrow().health(&auth).map(|health| {
-                    format!(
+                    response_only(format!(
                         "OK health service={} version={} healthy={}",
                         health.service, health.version, health.healthy
-                    )
+                    ))
                 })
             }
             "version" => {
@@ -611,10 +624,10 @@ impl ForegroundControlServer {
                 }
 
                 self.control_plane.borrow().version(&auth).map(|version| {
-                    format!(
+                    response_only(format!(
                         "OK version service={} version={} platform={:?}",
                         version.service, version.version, version.platform
-                    )
+                    ))
                 })
             }
             "heartbeat" => {
@@ -626,10 +639,10 @@ impl ForegroundControlServer {
                     .borrow()
                     .heartbeat(&auth)
                     .map(|heartbeat| {
-                        format!(
+                        response_only(format!(
                             "OK heartbeat healthy={} sequence={}",
                             heartbeat.healthy, heartbeat.sequence
-                        )
+                        ))
                     })
             }
             "capabilities" => {
@@ -640,7 +653,7 @@ impl ForegroundControlServer {
                 self.control_plane
                     .borrow()
                     .capabilities(&auth)
-                    .map(format_capabilities_response)
+                    .map(|capabilities| response_only(format_capabilities_response(capabilities)))
             }
             "diagnostics" => {
                 if args.next().is_some() {
@@ -650,7 +663,7 @@ impl ForegroundControlServer {
                 self.control_plane
                     .borrow()
                     .diagnostics(&auth)
-                    .map(format_diagnostics_response)
+                    .map(|diagnostics| response_only(format_diagnostics_response(diagnostics)))
             }
             "applications" => {
                 if args.next().is_some() {
@@ -660,7 +673,7 @@ impl ForegroundControlServer {
                 self.control_plane
                     .borrow()
                     .available_applications(&auth)
-                    .map(format_applications_response)
+                    .map(|applications| response_only(format_applications_response(applications)))
             }
             "pairing-request" => {
                 let Some(client_id) = args.next() else {
@@ -682,7 +695,7 @@ impl ForegroundControlServer {
                             label: label.replace("%20", " "),
                         },
                     )
-                    .map(format_pairing_request_response)
+                    .map(|pending| response_only(format_pairing_request_response(pending)))
             }
             "create-session" => {
                 let Some(client_id) = args.next() else {
@@ -701,16 +714,75 @@ impl ForegroundControlServer {
                     return "ERROR bad-request".to_string();
                 }
 
+                let client_id = client_id.to_string();
                 self.control_plane
                     .borrow_mut()
                     .create_session(
-                        &ControlAuth::with_client_id(auth.token(), client_id),
+                        &ControlAuth::with_client_id(auth.token(), &client_id),
                         CreateSessionRequest {
                             application_id: application_id.to_string(),
                             viewport: ViewportSize::new(width, height),
                         },
                     )
-                    .map(format_create_session_response)
+                    .map(|session| {
+                        let event = session_created_event(&client_id, &session);
+                        (format_create_session_response(session), vec![event])
+                    })
+            }
+            "resize-session" => {
+                let Some(client_id) = args.next() else {
+                    return "ERROR bad-request".to_string();
+                };
+                let Some(session_id) = args.next() else {
+                    return "ERROR bad-request".to_string();
+                };
+                let Some(width) = args.next().and_then(|value| value.parse::<u32>().ok()) else {
+                    return "ERROR bad-request".to_string();
+                };
+                let Some(height) = args.next().and_then(|value| value.parse::<u32>().ok()) else {
+                    return "ERROR bad-request".to_string();
+                };
+                if args.next().is_some() {
+                    return "ERROR bad-request".to_string();
+                }
+
+                let client_id = client_id.to_string();
+                self.control_plane
+                    .borrow_mut()
+                    .resize_session(
+                        &ControlAuth::with_client_id(auth.token(), &client_id),
+                        ResizeSessionRequest {
+                            session_id: session_id.to_string(),
+                            viewport: ViewportSize::new(width, height),
+                        },
+                    )
+                    .map(|session| {
+                        let event = session_resized_event(&client_id, &session);
+                        (format_resize_session_response(session), vec![event])
+                    })
+            }
+            "close-session" => {
+                let Some(client_id) = args.next() else {
+                    return "ERROR bad-request".to_string();
+                };
+                let Some(session_id) = args.next() else {
+                    return "ERROR bad-request".to_string();
+                };
+                if args.next().is_some() {
+                    return "ERROR bad-request".to_string();
+                }
+
+                let client_id = client_id.to_string();
+                self.control_plane
+                    .borrow_mut()
+                    .close_session(
+                        &ControlAuth::with_client_id(auth.token(), &client_id),
+                        session_id,
+                    )
+                    .map(|session| {
+                        let event = session_closed_event(&client_id, &session);
+                        (format_close_session_response(session), vec![event])
+                    })
             }
             "sessions" => {
                 let Some(client_id) = args.next() else {
@@ -723,16 +795,19 @@ impl ForegroundControlServer {
                 self.control_plane
                     .borrow()
                     .active_sessions(&ControlAuth::with_client_id(auth.token(), client_id))
-                    .map(format_sessions_response)
+                    .map(|sessions| response_only(format_sessions_response(sessions)))
             }
             _ => return "ERROR unknown-operation".to_string(),
         };
 
         match result {
-            Ok(response) => {
+            Ok((response, audit_events)) => {
                 events.record(ServerEvent::RequestAuthorized {
                     operation: operation.to_string(),
                 });
+                for event in audit_events {
+                    events.record(event);
+                }
                 response
             }
             Err(ControlError::Unauthorized) => {
@@ -741,9 +816,20 @@ impl ForegroundControlServer {
                 });
                 "ERROR unauthorized".to_string()
             }
-            Err(ControlError::Service(error)) => format!("ERROR service {}", error.user_message()),
+            Err(ControlError::Service(error)) => {
+                if matches!(&error, AppRelayError::PermissionDenied(_)) {
+                    events.record(ServerEvent::RequestRejected {
+                        operation: operation.to_string(),
+                    });
+                }
+                format!("ERROR service {}", error.user_message())
+            }
         }
     }
+}
+
+fn response_only(response: String) -> (String, Vec<ServerEvent>) {
+    (response, Vec::new())
 }
 
 fn format_capabilities_response(mut capabilities: Vec<PlatformCapability>) -> String {
@@ -827,6 +913,53 @@ fn format_create_session_response(session: ApplicationSession) -> String {
         session.viewport.width,
         session.viewport.height
     )
+}
+
+fn format_resize_session_response(session: ApplicationSession) -> String {
+    format!(
+        "OK resize-session id={} app={} viewport={}x{}",
+        line_token(&session.id),
+        line_token(&session.application_id),
+        session.viewport.width,
+        session.viewport.height
+    )
+}
+
+fn format_close_session_response(session: ApplicationSession) -> String {
+    format!(
+        "OK close-session id={} app={} state={:?}",
+        line_token(&session.id),
+        line_token(&session.application_id),
+        session.state
+    )
+}
+
+fn session_created_event(client_id: &str, session: &ApplicationSession) -> ServerEvent {
+    ServerEvent::SessionCreated {
+        session_id: session.id.clone(),
+        application_id: session.application_id.clone(),
+        client_id: client_id.to_string(),
+        viewport_width: session.viewport.width,
+        viewport_height: session.viewport.height,
+    }
+}
+
+fn session_resized_event(client_id: &str, session: &ApplicationSession) -> ServerEvent {
+    ServerEvent::SessionResized {
+        session_id: session.id.clone(),
+        application_id: session.application_id.clone(),
+        client_id: client_id.to_string(),
+        viewport_width: session.viewport.width,
+        viewport_height: session.viewport.height,
+    }
+}
+
+fn session_closed_event(client_id: &str, session: &ApplicationSession) -> ServerEvent {
+    ServerEvent::SessionClosed {
+        session_id: session.id.clone(),
+        application_id: session.application_id.clone(),
+        client_id: client_id.to_string(),
+    }
 }
 
 fn format_sessions_response(mut sessions: Vec<ApplicationSession>) -> String {
@@ -1816,6 +1949,56 @@ mod tests {
     }
 
     #[test]
+    fn foreground_server_records_connection_events_without_tokens() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config(),
+        ));
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind foreground listener");
+        let address = listener.local_addr().expect("listener address");
+        let client = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).expect("connect foreground listener");
+            stream
+                .write_all(b"health correct-token\n")
+                .expect("write request");
+            let mut response = String::new();
+            BufReader::new(stream)
+                .read_line(&mut response)
+                .expect("read response");
+            response
+        });
+        let (mut stream, _) = listener.accept().expect("accept foreground connection");
+        let mut events = InMemoryEventSink::default();
+
+        server
+            .handle_stream(&mut stream, &mut events)
+            .expect("handle foreground stream");
+
+        assert_eq!(
+            client.join().expect("join foreground client"),
+            "OK health service=apprelay-server version=test healthy=true\n"
+        );
+        assert_eq!(events.events().len(), 3);
+        assert!(matches!(
+            &events.events()[0],
+            ServerEvent::ForegroundConnectionAccepted { peer_address }
+                if peer_address.starts_with("127.0.0.1:")
+        ));
+        assert_eq!(
+            events.events()[1],
+            ServerEvent::RequestAuthorized {
+                operation: "health".to_string(),
+            }
+        );
+        assert!(matches!(
+            &events.events()[2],
+            ServerEvent::ForegroundConnectionClosed { peer_address }
+                if peer_address.starts_with("127.0.0.1:")
+        ));
+        assert!(!format!("{:?}", events.events()).contains("correct-token"));
+    }
+
+    #[test]
     fn foreground_server_rejects_unknown_operation() {
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
@@ -2068,12 +2251,86 @@ mod tests {
         );
         assert_eq!(
             events.events(),
-            &[ServerEvent::RequestAuthorized {
-                operation: "create-session".to_string(),
-            }]
+            &[
+                ServerEvent::RequestAuthorized {
+                    operation: "create-session".to_string(),
+                },
+                ServerEvent::SessionCreated {
+                    session_id: "session-1".to_string(),
+                    application_id: "fake".to_string(),
+                    client_id: "test-client".to_string(),
+                    viewport_width: 1280,
+                    viewport_height: 720,
+                },
+            ]
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn foreground_server_records_session_lifecycle_events() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config(),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request(
+                "create-session correct-token test-client terminal 1280 720",
+                &mut events,
+            ),
+            "OK create-session id=session-1 app=terminal window_id=window-session-1 window_title=terminal selection=existing-window launch=attached viewport=1280x720"
+        );
+        assert_eq!(
+            server.handle_request(
+                "resize-session correct-token test-client session-1 1440 900",
+                &mut events,
+            ),
+            "OK resize-session id=session-1 app=terminal viewport=1440x900"
+        );
+        assert_eq!(
+            server.handle_request(
+                "close-session correct-token test-client session-1",
+                &mut events,
+            ),
+            "OK close-session id=session-1 app=terminal state=Closed"
+        );
+
+        assert_eq!(
+            events.events(),
+            &[
+                ServerEvent::RequestAuthorized {
+                    operation: "create-session".to_string(),
+                },
+                ServerEvent::SessionCreated {
+                    session_id: "session-1".to_string(),
+                    application_id: "terminal".to_string(),
+                    client_id: "test-client".to_string(),
+                    viewport_width: 1280,
+                    viewport_height: 720,
+                },
+                ServerEvent::RequestAuthorized {
+                    operation: "resize-session".to_string(),
+                },
+                ServerEvent::SessionResized {
+                    session_id: "session-1".to_string(),
+                    application_id: "terminal".to_string(),
+                    client_id: "test-client".to_string(),
+                    viewport_width: 1440,
+                    viewport_height: 900,
+                },
+                ServerEvent::RequestAuthorized {
+                    operation: "close-session".to_string(),
+                },
+                ServerEvent::SessionClosed {
+                    session_id: "session-1".to_string(),
+                    application_id: "terminal".to_string(),
+                    client_id: "test-client".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]
@@ -2108,6 +2365,29 @@ mod tests {
                 &mut events,
             ),
             "ERROR unauthorized"
+        );
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::RequestRejected {
+                operation: "create-session".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn foreground_server_records_paired_client_denial_as_rejected_request() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request(
+                "create-session correct-token unknown-client terminal 1280 720",
+                &mut events,
+            ),
+            "ERROR service client unknown-client is not paired"
         );
         assert_eq!(
             events.events(),
