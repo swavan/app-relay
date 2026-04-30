@@ -18,6 +18,7 @@ Use this checklist before promoting Phase 6 beyond the desktop audio control-pla
 - Confirm the test-only client microphone capture runtime starts media telemetry only when the stream opts into microphone input and clears telemetry when readiness is downgraded.
 - Confirm active runtime media status masks system audio and microphone media counters while muted without downgrading native leg readiness.
 - Confirm selected output or input device loss masks only the affected runtime media counters, keeps the stream alive, and reports actionable stream health.
+- Confirm active stream packet and latency stats aggregate visible runtime media counters and exclude muted or unavailable-device media.
 - Confirm the optional `pipewire-capture` feature is treated as a Linux capture adapter boundary only: it must not claim live PipeWire packets until the real runtime is wired, and playback/client microphone/server microphone legs must remain planned unless separately implemented.
 - Confirm enabling the server `pipewire-capture` feature only changes Linux capture status messaging to the unavailable PipeWire adapter boundary; default server builds and macOS/Windows feature builds must keep the planned native status without PipeWire boundary messaging.
 - Confirm active audio stream status reports whether server-side microphone injection was requested, whether it is active, the native readiness state, and the reason when inactive.
