@@ -394,6 +394,9 @@ Completed:
   active-session control-plane calls; native device, emulator, simulator,
   signing, and package launch checks remain documented release-runner/manual
   boundaries
+- client platform permission and entitlement intent is source controlled and
+  checked deterministically for Linux, macOS, Windows, Android, and iOS without
+  generated native project directories
 
 ## Phase 8: Security Review And Beta
 
