@@ -1693,6 +1693,78 @@ mod tests {
     }
 
     #[test]
+    fn platform_capability_matrix_covers_every_target_feature() {
+        let platforms = [
+            Platform::Linux,
+            Platform::Macos,
+            Platform::Windows,
+            Platform::Android,
+            Platform::Ios,
+            Platform::Unknown,
+        ];
+        let features = [
+            Feature::AppDiscovery,
+            Feature::ApplicationLaunch,
+            Feature::WindowResize,
+            Feature::WindowVideoStream,
+            Feature::SystemAudioStream,
+            Feature::ClientMicrophoneInput,
+            Feature::KeyboardInput,
+            Feature::MouseInput,
+        ];
+
+        for platform in platforms {
+            let service = DefaultCapabilityService::new(platform);
+            let capabilities = service.platform_capabilities();
+
+            assert_eq!(capabilities.len(), features.len());
+            assert!(capabilities
+                .iter()
+                .all(|capability| capability.platform == platform));
+
+            for feature in features.iter().cloned() {
+                assert_eq!(
+                    capabilities
+                        .iter()
+                        .filter(|capability| capability.feature == feature)
+                        .count(),
+                    1,
+                    "expected exactly one {feature:?} capability for {platform:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_capabilities_include_user_facing_reasons() {
+        let platforms = [
+            Platform::Linux,
+            Platform::Macos,
+            Platform::Windows,
+            Platform::Android,
+            Platform::Ios,
+            Platform::Unknown,
+        ];
+
+        for platform in platforms {
+            let service = DefaultCapabilityService::new(platform);
+
+            for capability in service.platform_capabilities() {
+                if !capability.supported {
+                    assert!(
+                        capability
+                            .reason
+                            .as_deref()
+                            .is_some_and(|reason| !reason.trim().is_empty()),
+                        "unsupported {platform:?} {:?} capability needs a reason",
+                        capability.feature
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn desktop_audio_capabilities_report_planned_native_backend() {
         let cases = [
             (Platform::Linux, "PipeWire"),
