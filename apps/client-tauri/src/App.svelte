@@ -427,6 +427,16 @@
     <span>Capabilities</span>
     <div class="capability-summary">
       <strong>{appView.capabilitiesText}</strong>
+      {#if appView.capabilityNotes.length > 0}
+        <ul class="capability-notes" aria-label="Capability notes">
+          {#each appView.capabilityNotes as capability}
+            <li>
+              <span>{capability.feature}</span>
+              <small>{capability.platform}: {capability.reason}</small>
+            </li>
+          {/each}
+        </ul>
+      {/if}
       {#if appView.unsupportedCapabilities.length > 0}
         <ul class="unsupported-capabilities" aria-label="Unsupported capabilities">
           {#each appView.unsupportedCapabilities as capability}

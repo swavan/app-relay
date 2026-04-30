@@ -108,6 +108,7 @@ h1 {
   text-align: right;
 }
 
+.capability-notes,
 .unsupported-capabilities {
   display: grid;
   gap: 6px;
@@ -117,17 +118,25 @@ h1 {
   padding: 0;
 }
 
+.capability-notes {
+  border-bottom: 1px solid var(--apprelay-border);
+  padding-bottom: 8px;
+}
+
+.capability-notes li,
 .unsupported-capabilities li {
   display: grid;
   gap: 2px;
 }
 
+.capability-notes span,
 .unsupported-capabilities span {
   font-size: 0.82rem;
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 
+.capability-notes small,
 .unsupported-capabilities small {
   overflow-wrap: anywhere;
 }
