@@ -382,6 +382,10 @@ Completed:
 - telemetry-free diagnostics bundle contract and foreground command report
   redacted local server state, capability counts, runtime config shape, and
   active session count without uploading data
+- client packaging config has a deterministic CI check that validates the
+  Tauri bundle identity, frontend build wiring, bundle activation, required
+  generated icon assets, and built frontend output without running native OS
+  bundle builds
 
 ## Phase 8: Security Review And Beta
 
