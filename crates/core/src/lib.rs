@@ -4,6 +4,8 @@ mod audio_stream;
 mod input;
 mod video_stream;
 
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+pub use audio_stream::PipeWireCaptureCommandConfig;
 pub use audio_stream::{
     AudioBackendNativeReadiness, AudioBackendService, AudioStreamService,
     InMemoryAudioStreamService,

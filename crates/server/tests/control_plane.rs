@@ -833,6 +833,139 @@ fn control_plane_pipewire_capture_feature_reports_linux_adapter_boundary_only() 
     }
 }
 
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+#[test]
+fn control_plane_pipewire_capture_env_overrides_pw_record_arguments() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct EnvGuard {
+        vars: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn set(vars: &[(&'static str, String)]) -> Self {
+            let guard = Self {
+                vars: vars
+                    .iter()
+                    .map(|(key, _)| (*key, std::env::var(key).ok()))
+                    .collect(),
+            };
+            for (key, value) in vars {
+                std::env::set_var(key, value);
+            }
+            guard
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.vars {
+                if let Some(value) = value {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
+            }
+        }
+    }
+
+    let test_id = format!(
+        "{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos()
+    );
+    let script_path = std::env::temp_dir().join(format!("apprelay-server-pipewire-{test_id}"));
+    let args_path = std::env::temp_dir().join(format!("apprelay-server-pipewire-{test_id}.txt"));
+    fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > '{}'\nwhile :; do printf audio-data; sleep 1; done\n",
+            args_path.display()
+        ),
+    )
+    .expect("write script");
+    let mut permissions = fs::metadata(&script_path)
+        .expect("script metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).expect("script permissions");
+
+    let mut control_plane = {
+        let _env = EnvGuard::set(&[
+            ("APPRELAY_PIPEWIRE_CAPTURE", "1".to_string()),
+            (
+                "APPRELAY_PIPEWIRE_CAPTURE_COMMAND",
+                script_path.to_string_lossy().to_string(),
+            ),
+            (
+                "APPRELAY_PIPEWIRE_CAPTURE_TARGET",
+                "bluez_output.test.monitor".to_string(),
+            ),
+            ("APPRELAY_PIPEWIRE_CAPTURE_RATE", "44100".to_string()),
+            ("APPRELAY_PIPEWIRE_CAPTURE_CHANNELS", "1".to_string()),
+            ("APPRELAY_PIPEWIRE_CAPTURE_FORMAT", "f32".to_string()),
+        ]);
+        ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "integration-test"),
+            ServerConfig::local("correct-token"),
+        )
+    };
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let audio = control_plane
+        .start_audio_stream(
+            &auth,
+            StartAudioStreamRequest {
+                session_id: session.id,
+                microphone: MicrophoneMode::Disabled,
+                system_audio_muted: false,
+                microphone_muted: true,
+                output_device_id: None,
+                input_device_id: None,
+            },
+        )
+        .expect("start audio stream");
+    assert_eq!(audio.state, AudioStreamState::Streaming);
+
+    let args = fs::read_to_string(&args_path).expect("captured command arguments");
+    assert_eq!(
+        args.lines().collect::<Vec<_>>(),
+        vec![
+            "--rate",
+            "44100",
+            "--channels",
+            "1",
+            "--format",
+            "f32",
+            "--target",
+            "bluez_output.test.monitor",
+            "-"
+        ]
+    );
+
+    let _ = control_plane.stop_audio_stream(
+        &auth,
+        StopAudioStreamRequest {
+            stream_id: audio.id,
+        },
+    );
+    let _ = fs::remove_file(script_path);
+    let _ = fs::remove_file(args_path);
+}
+
 #[cfg(feature = "pipewire-capture")]
 #[test]
 fn control_plane_pipewire_capture_feature_does_not_affect_macos_or_windows() {
