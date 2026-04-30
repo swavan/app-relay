@@ -469,6 +469,12 @@ Completed:
   checksum/signature evidence, key-material boundaries, unsupported native
   package gaps, and known limitations without claiming signed native artifacts
   or publishing are implemented
+- completed beta feedback and crash reporting process slice in
+  [`beta-feedback-process.md`](beta-feedback-process.md), covering private beta
+  feedback intake, severity triage, manual crash and local-log collection,
+  redaction/no-secrets rules, and a beta release-notes known-limitations
+  checklist without claiming production support, automatic telemetry, or
+  automated crash upload
 
 ## Phase 9: Production Release
 
