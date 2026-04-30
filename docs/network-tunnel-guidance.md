@@ -136,7 +136,9 @@ After the run:
 - TLS and production transport hardening are not implemented for the foreground
   control listener.
 - Real WebRTC/media transport security review is not complete.
-- Production audit logging, retention, redaction policy, release signing, and
-  dependency audit policy remain separate Phase 8 work.
+- Production audit logging, retention, redaction policy, and release signing
+  remain separate Phase 8 work. Dependency audit policy is documented in
+  [dependency-audit-policy.md](dependency-audit-policy.md), with Rust advisory
+  checks still a release-runner boundary.
 - Server-side per-client application grants and persisted runtime pairing
   approvals remain incomplete.

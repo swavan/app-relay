@@ -27,7 +27,7 @@ Acceptance criteria:
 - `cargo test --workspace` passes
 - `npm test` passes for the client
 - `npm run build` passes for the client
-- `npm audit --omit=dev` reports no production vulnerabilities
+- beta dependency audit reports no production-critical vulnerabilities
 - unsupported features return typed errors
 
 ## Phase 2: Server Control Plane
@@ -457,6 +457,12 @@ Completed:
   session create/resize/close lifecycle events, and the current redaction
   boundary without claiming production retention, SIEM integration, or final
   audit review
+- completed dependency audit policy slice in
+  [`dependency-audit-policy.md`](dependency-audit-policy.md), distinguishing
+  production and development dependencies, defining beta-blocking severity
+  rules, documenting the current Node CI audit and Rust release-runner boundary,
+  and listing required release evidence and known gaps without claiming signed
+  releases, final security review, or production artifact publishing
 
 ## Phase 9: Production Release
 

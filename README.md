@@ -12,6 +12,7 @@ desktop applications from a mobile or desktop client.
 - `docs/architecture.md`: Phase 1 architecture decisions
 - `docs/control-plane.md`: Phase 2 control-plane design
 - `docs/threat-model.md`: Phase 8 beta security threat model
+- `docs/dependency-audit-policy.md`: Phase 8 beta dependency audit policy
 - `docs/roadmap.md`: phase-by-phase production release plan
 
 ## Current Phase
@@ -44,5 +45,5 @@ cd apps/client-tauri
 npm install
 npm test
 npm run build
-npm audit --omit=dev
+npm run audit:beta
 ```

@@ -21,7 +21,7 @@ Out of scope for this document:
 
 - a completed first-time pairing flow
 - signed release publishing
-- production dependency audit policy
+- completed remediation of all future dependency advisories
 - native OS package-manager execution
 - real WebRTC media transport hardening beyond the current control contracts
 - full third-party penetration test or external security review
@@ -58,8 +58,9 @@ Out of scope for this document:
 - Generated install/uninstall artifacts to native service managers: checked-in
   code can generate scripts and manifests, but release runners execute native
   lifecycle operations outside CI.
-- Future release pipeline to beta users: signing, package distribution, and
-  dependency audit gates are not yet implemented.
+- Future release pipeline to beta users: signing and package distribution are
+  not yet implemented. Dependency audit policy is documented, but Rust advisory
+  checks remain a release-runner boundary until deterministic tooling exists.
 
 ## Actors
 
@@ -160,8 +161,10 @@ Out of scope for this document:
   lifecycle coverage remain incomplete.
 - Release signing is not implemented. Installers and packages remain
   release-runner/manual boundaries until signed artifacts exist.
-- Dependency audit policy is not complete. CI and release notes must define
-  how production-critical findings block beta.
+- Dependency audit policy is documented in
+  [dependency-audit-policy.md](dependency-audit-policy.md). Current CI runs the
+  Node beta dependency audit, but Rust advisory checks remain a
+  release-runner/manual boundary until deterministic tooling is added.
 - Real native media and input backends remain partial or planned on several
   platforms; unsupported states must continue to be visible and typed.
 - The threat model assumes local OS accounts protect config, profile, log, and
@@ -192,7 +195,8 @@ Out of scope for this document:
 - Confirm package permission and entitlement intent matches the features
   enabled in the beta build.
 - Confirm dependency audit results have no unresolved production-critical
-  findings.
+  findings according to
+  [dependency-audit-policy.md](dependency-audit-policy.md).
 - Confirm beta artifacts are signed or the release is explicitly blocked until
   signing is complete.
 - Confirm beta release notes list known limitations, unsupported platforms, and
