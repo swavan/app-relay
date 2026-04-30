@@ -29,6 +29,7 @@ Implemented:
 - macOS `.app` bundle application discovery
 - explicit unsupported application discovery errors for other platforms
 - documented platform support matrix
+- telemetry-free diagnostics bundle command with redacted local server state
 
 ## Authentication
 
@@ -87,6 +88,7 @@ foreground integration testing. It currently supports:
 - `version <token>`
 - `heartbeat <token>`
 - `capabilities <token>`
+- `diagnostics <token>`
 - `applications <token>`
 - `create-session <token> <application_id> <width> <height>`
 - `sessions <token>`
@@ -106,14 +108,17 @@ Manual foreground smoke test:
 2. Send `capabilities <token>` and confirm the response includes
    `supported=... total=...` plus `feature:supported` or
    `feature:unsupported` pairs.
-3. Send `applications <token>` and choose an `appN.id=...` value from the
+3. Send `diagnostics <token>` and confirm it reports `telemetry=false`,
+   `secrets=redacted`, the server version/platform, capability counts, and the
+   active session count without exposing the configured auth token.
+4. Send `applications <token>` and choose an `appN.id=...` value from the
    response. Application names are percent-escaped so each response remains one
    parseable line.
-4. Send `create-session <token> <application_id> 1280 720`. On Linux, when the
+5. Send `create-session <token> <application_id> 1280 720`. On Linux, when the
    selected application was discovered from a `.desktop` entry with `Exec=`
    metadata, this command triggers the native launch path and spawns that
    command without a shell.
-5. Send `sessions <token>` to confirm the created session is active.
+6. Send `sessions <token>` to confirm the created session is active.
 
 ## Daemon Installation
 

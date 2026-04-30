@@ -19,11 +19,12 @@ use apprelay_core::{
 };
 use apprelay_protocol::{
     AppRelayError, ApplicationLaunch, ApplicationSession, ApplicationSummary, AudioStreamSession,
-    ControlAuth, ControlError, ControlResult, CreateSessionRequest, Feature, ForwardInputRequest,
-    HealthStatus, HeartbeatStatus, InputDelivery, LaunchIntentStatus, NegotiateVideoStreamRequest,
-    Platform, PlatformCapability, ReconnectVideoStreamRequest, ResizeSessionRequest, ServerVersion,
-    StartAudioStreamRequest, StartVideoStreamRequest, StopAudioStreamRequest,
-    StopVideoStreamRequest, UpdateAudioStreamRequest, VideoStreamSession, ViewportSize,
+    ControlAuth, ControlError, ControlResult, CreateSessionRequest, DiagnosticsBundle, Feature,
+    ForwardInputRequest, HealthStatus, HeartbeatStatus, InputDelivery, LaunchIntentStatus,
+    NegotiateVideoStreamRequest, Platform, PlatformCapability, ReconnectVideoStreamRequest,
+    ResizeSessionRequest, ServerVersion, StartAudioStreamRequest, StartVideoStreamRequest,
+    StopAudioStreamRequest, StopVideoStreamRequest, UpdateAudioStreamRequest, VideoStreamSession,
+    ViewportSize,
 };
 
 use crate::audio_stream::AudioStreamControl;
@@ -224,6 +225,30 @@ impl ServerServices {
     }
 }
 
+impl ServerServices {
+    fn diagnostics(&self, config: &ServerConfig) -> DiagnosticsBundle {
+        let capabilities = self.capabilities();
+
+        DiagnosticsBundle {
+            format_version: 1,
+            telemetry_enabled: false,
+            secrets_redacted: true,
+            service: "apprelay-server".to_string(),
+            version: self.version.clone(),
+            platform: self.platform,
+            bind_address: config.bind_address.clone(),
+            control_port: config.control_port,
+            heartbeat_interval_millis: config.heartbeat_interval_millis,
+            supported_capabilities: capabilities
+                .iter()
+                .filter(|capability| capability.supported)
+                .count(),
+            total_capabilities: capabilities.len(),
+            active_sessions: self.active_sessions().len(),
+        }
+    }
+}
+
 fn launch_backend_for_platform(platform: Platform) -> ApplicationLaunchBackendService {
     match platform {
         Platform::Linux => ApplicationLaunchBackendService::LinuxNative,
@@ -300,6 +325,11 @@ impl ServerControlPlane {
     pub fn version(&self, auth: &ControlAuth) -> ControlResult<ServerVersion> {
         self.authorize(auth)?;
         Ok(self.services.version())
+    }
+
+    pub fn diagnostics(&self, auth: &ControlAuth) -> ControlResult<DiagnosticsBundle> {
+        self.authorize(auth)?;
+        Ok(self.services.diagnostics(&self.config))
     }
 
     pub fn available_applications(
@@ -575,6 +605,16 @@ impl ForegroundControlServer {
                     .capabilities(&auth)
                     .map(format_capabilities_response)
             }
+            "diagnostics" => {
+                if args.next().is_some() {
+                    return "ERROR bad-request".to_string();
+                }
+
+                self.control_plane
+                    .borrow()
+                    .diagnostics(&auth)
+                    .map(format_diagnostics_response)
+            }
             "applications" => {
                 if args.next().is_some() {
                     return "ERROR bad-request".to_string();
@@ -664,6 +704,24 @@ fn format_capabilities_response(mut capabilities: Vec<PlatformCapability>) -> St
     }
 
     response
+}
+
+fn format_diagnostics_response(bundle: DiagnosticsBundle) -> String {
+    format!(
+        "OK diagnostics format={} telemetry={} secrets={} service={} version={} platform={:?} bind={} port={} heartbeat_ms={} capabilities={}/{} sessions={}",
+        bundle.format_version,
+        bundle.telemetry_enabled,
+        if bundle.secrets_redacted { "redacted" } else { "included" },
+        line_token(&bundle.service),
+        line_token(&bundle.version),
+        bundle.platform,
+        line_token(&bundle.bind_address),
+        bundle.control_port,
+        bundle.heartbeat_interval_millis,
+        bundle.supported_capabilities,
+        bundle.total_capabilities,
+        bundle.active_sessions
+    )
 }
 
 fn format_applications_response(mut applications: Vec<ApplicationSummary>) -> String {
@@ -1041,6 +1099,35 @@ mod tests {
     }
 
     #[test]
+    fn server_services_build_telemetry_free_diagnostics() {
+        let services = ServerServices::new(Platform::Linux, "test");
+        let mut config = ServerConfig::local("secret-token");
+        config.bind_address = "127.0.0.1".to_string();
+        config.control_port = 9898;
+        config.heartbeat_interval_millis = 2_500;
+
+        let diagnostics = services.diagnostics(&config);
+
+        assert_eq!(
+            diagnostics,
+            DiagnosticsBundle {
+                format_version: 1,
+                telemetry_enabled: false,
+                secrets_redacted: true,
+                service: "apprelay-server".to_string(),
+                version: "test".to_string(),
+                platform: Platform::Linux,
+                bind_address: "127.0.0.1".to_string(),
+                control_port: 9898,
+                heartbeat_interval_millis: 2_500,
+                supported_capabilities: 4,
+                total_capabilities: 8,
+                active_sessions: 0,
+            }
+        );
+    }
+
+    #[test]
     fn server_services_report_capabilities_for_platform() {
         let services = ServerServices::new(Platform::Ios, "test");
 
@@ -1084,6 +1171,23 @@ mod tests {
             control_plane.health(&ControlAuth::new("correct-token")),
             Ok(HealthStatus::healthy("apprelay-server", "test"))
         );
+    }
+
+    #[test]
+    fn control_plane_returns_authorized_diagnostics_without_token() {
+        let control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        );
+
+        let diagnostics = control_plane
+            .diagnostics(&ControlAuth::new("correct-token"))
+            .expect("authorized diagnostics response");
+
+        assert!(!diagnostics.telemetry_enabled);
+        assert!(diagnostics.secrets_redacted);
+        assert_eq!(diagnostics.service, "apprelay-server");
+        assert_eq!(diagnostics.control_port, 7676);
     }
 
     #[test]
@@ -1261,6 +1365,28 @@ mod tests {
             events.events(),
             &[ServerEvent::RequestAuthorized {
                 operation: "capabilities".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn foreground_server_returns_diagnostics_bundle() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        let response = server.handle_request("diagnostics correct-token", &mut events);
+
+        assert_eq!(
+            response,
+            "OK diagnostics format=1 telemetry=false secrets=redacted service=apprelay-server version=test platform=Linux bind=127.0.0.1 port=7676 heartbeat_ms=5000 capabilities=4/8 sessions=0"
+        );
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::RequestAuthorized {
+                operation: "diagnostics".to_string(),
             }]
         );
     }

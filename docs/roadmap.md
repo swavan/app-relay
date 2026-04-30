@@ -379,6 +379,9 @@ Completed:
 - macOS server launch support opens discovered `.app` bundles through the
   native `open` command, and the client bundle configuration is active for
   desktop packaging
+- telemetry-free diagnostics bundle contract and foreground command report
+  redacted local server state, capability counts, runtime config shape, and
+  active session count without uploading data
 
 ## Phase 8: Security Review And Beta
 
