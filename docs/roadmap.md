@@ -312,6 +312,9 @@ Completed:
   telemetry when native readiness is downgraded
 - active runtime media status enforces mute state by masking system audio and
   microphone media counters while preserving native leg readiness
+- active runtime media status models selected output and input device loss in
+  tests by masking affected media counters and reporting actionable stream
+  health while keeping the stream alive
 - server composition has an optional `pipewire-capture` feature that forwards
   to the core boundary and reports the Linux PipeWire capture adapter boundary
   as unavailable without changing default server behavior or affecting macOS
