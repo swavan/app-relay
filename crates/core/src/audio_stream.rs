@@ -632,6 +632,20 @@ impl PipeWireCaptureAdapterRuntime {
     }
 
     #[cfg(test)]
+    fn capture_running(&self, stream_id: &str) -> bool {
+        match &self.state {
+            PipeWireCaptureAdapterState::CommandCapture(runtime) => {
+                runtime.capture_running(stream_id)
+            }
+            PipeWireCaptureAdapterState::BoundaryOnly => false,
+            #[cfg(all(test, feature = "pipewire-capture"))]
+            PipeWireCaptureAdapterState::FakeCapture { .. } => false,
+            #[cfg(all(test, feature = "pipewire-capture"))]
+            PipeWireCaptureAdapterState::FakeStartFailure => false,
+        }
+    }
+
+    #[cfg(test)]
     fn command_capture_session_count(&self) -> usize {
         match &self.state {
             PipeWireCaptureAdapterState::CommandCapture(runtime) => runtime.session_count(),
@@ -849,6 +863,15 @@ impl PipeWireCaptureCommandRuntime {
         self.sessions
             .lock()
             .is_ok_and(|sessions| sessions.stopped_stream_observed(stream_id))
+    }
+
+    #[cfg(test)]
+    fn capture_running(&self, stream_id: &str) -> bool {
+        self.sessions.lock().is_ok_and(|sessions| {
+            sessions.active.iter().any(|session| {
+                session.stream_id == stream_id && session.stats.running.load(Ordering::Relaxed)
+            })
+        })
     }
 
     #[cfg(test)]
@@ -1480,8 +1503,29 @@ impl AudioBackendService {
             .is_some_and(|media| !media.available)
     }
 
+    #[cfg(all(test, feature = "pipewire-capture", target_os = "linux"))]
+    fn pipewire_capture_runtime_active(&self, stream_id: &str) -> bool {
+        let Self::DesktopControl {
+            platform: Platform::Linux,
+            native_readiness,
+        } = self
+        else {
+            return false;
+        };
+
+        native_readiness
+            .pipewire_capture_adapter
+            .as_ref()
+            .is_some_and(|adapter| adapter.capture_running(stream_id))
+    }
+
     #[cfg(not(all(feature = "pipewire-capture", target_os = "linux")))]
     fn pipewire_capture_runtime_stopped(&self, _stream_id: &str) -> bool {
+        false
+    }
+
+    #[cfg(all(test, not(all(feature = "pipewire-capture", target_os = "linux"))))]
+    fn pipewire_capture_runtime_active(&self, _stream_id: &str) -> bool {
         false
     }
 
@@ -1738,7 +1782,15 @@ impl InMemoryAudioStreamService {
             .collect::<Vec<_>>();
 
         for stream_id in active_stream_ids {
-            if let Some(native_session) = self.backend.start_pipewire_capture(&stream_id) {
+            if self.backend.pipewire_capture_runtime_stopped(&stream_id) {
+                self.native_runtime.mark_leg_failure(
+                    stream_id,
+                    AudioBackendLeg::Capture,
+                    AudioBackendService::pipewire_capture_runtime_stopped_failure(),
+                );
+            } else if self.backend.pipewire_capture_runtime_active(&stream_id) {
+                continue;
+            } else if let Some(native_session) = self.backend.start_pipewire_capture(&stream_id) {
                 self.native_runtime.start_session(native_session);
             } else if self.backend.pipewire_capture_runtime_configured() {
                 self.native_runtime.mark_leg_failure(
@@ -2952,6 +3004,27 @@ mod tests {
             ..AudioBackendNativeReadiness::default()
         });
         assert_eq!(capture_adapter.command_capture_session_count(), 0);
+        let reconciled_stream = stream_service
+            .streams
+            .iter()
+            .find(|candidate| candidate.id == stream.id)
+            .expect("stored stream after readiness reconciliation");
+        let reconciled_capture = reconciled_stream
+            .backend
+            .as_ref()
+            .expect("backend contract")
+            .statuses
+            .iter()
+            .find(|status| status.leg == AudioBackendLeg::Capture)
+            .expect("capture status");
+        assert!(!reconciled_capture.available);
+        assert_eq!(reconciled_capture.media, AudioBackendMediaStats::default());
+        assert!(reconciled_capture
+            .failure
+            .as_ref()
+            .expect("capture failure")
+            .message
+            .contains("stopped"));
 
         let updated = stream_service
             .update_stream(UpdateAudioStreamRequest {
