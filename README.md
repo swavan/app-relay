@@ -14,6 +14,8 @@ desktop applications from a mobile or desktop client.
 - `docs/threat-model.md`: Phase 8 beta security threat model
 - `docs/dependency-audit-policy.md`: Phase 8 beta dependency audit policy
 - `docs/signed-release-artifact-policy.md`: Phase 8 beta signed artifact policy
+- `docs/beta-feedback-process.md`: Phase 8 beta feedback, crash reporting, and
+  release-notes gate
 - `docs/roadmap.md`: phase-by-phase production release plan
 
 ## Current Phase
