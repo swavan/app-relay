@@ -136,6 +136,21 @@ Linux disables and stops the user unit, removes the systemd unit file, and
 reloads systemd; macOS boots out the launchd agent and removes the plist;
 Windows stops and deletes the `AppRelay` service registration.
 
+## Upgrade And Rollback Boundary
+
+Upgrade and rollback are release-runner/manual operations until signed native
+installers own binary replacement. The deterministic server boundary is the
+same as install and uninstall: generate `service-plan`,
+`install-service`, `uninstall-service-plan`, and `uninstall-service` artifacts,
+then run the printed service-manager commands on the target host. Release
+runners stop the service, replace or restore the server binary/package,
+regenerate service artifacts when service metadata changes, reload the service
+manager where required, and verify status, logs, and control-plane health.
+Runtime config and logs are not deleted during upgrade or rollback.
+
+The release-runner checklist for those steps lives in
+[`install-upgrade-rollback-runbook.md`](install-upgrade-rollback-runbook.md).
+
 ## Phase 7 Boundary
 
 The current implementation validates the daemon/service lifecycle contract,

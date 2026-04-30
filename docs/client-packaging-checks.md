@@ -34,6 +34,12 @@ check. When native packaging files are introduced, update this contract and the
 check in the same change so the platform-specific permission intent remains
 deterministic.
 
+Install, upgrade, uninstall, and rollback of signed client packages remain
+release-runner/manual checks until native package builds run in CI. The
+deterministic boundary here is `npm run package:check`; the native boundary is
+documented in
+[`install-upgrade-rollback-runbook.md`](install-upgrade-rollback-runbook.md).
+
 When the source icon changes, regenerate the package icon set with:
 
 ```sh
