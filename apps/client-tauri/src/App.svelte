@@ -425,7 +425,19 @@
 
   <section class="status" aria-label="Capabilities">
     <span>Capabilities</span>
-    <strong>{appView.capabilitiesText}</strong>
+    <div class="capability-summary">
+      <strong>{appView.capabilitiesText}</strong>
+      {#if appView.unsupportedCapabilities.length > 0}
+        <ul class="unsupported-capabilities" aria-label="Unsupported capabilities">
+          {#each appView.unsupportedCapabilities as capability}
+            <li>
+              <span>{capability.feature}</span>
+              <small>{capability.platform}: {capability.reason}</small>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
   </section>
 
   <section class="viewport-controls" aria-label="Requested viewport">
