@@ -169,6 +169,13 @@ does not write browser storage; it reads profiles through
 `list_connection_profiles` and uses the selected profile token for health,
 capability, and application discovery commands.
 
+For the Phase 7 mobile-client test-server contract, Android and iOS use the
+same profile/token service boundary as the desktop client. The deterministic
+client path creates a remote service from the selected profile token and calls
+health, capabilities, applications, and active sessions. Native package launch,
+device setup, signing, and simulator/emulator coverage are release-runner or
+manual checks documented in `docs/mobile-client-test-server.md`.
+
 ## Application Discovery
 
 Linux currently uses `.desktop` entries from:
