@@ -28,6 +28,7 @@ Implemented:
 - Linux desktop-entry application discovery
 - macOS `.app` bundle application discovery
 - explicit unsupported application discovery errors for other platforms
+- documented platform support matrix
 
 ## Authentication
 
@@ -55,6 +56,13 @@ child cleanly.
 Production runners should use `SystemSshTunnelSpawner`. Tests use an injectable
 fake child so lifecycle behavior is covered without opening a real SSH
 connection.
+
+## Platform Capabilities
+
+The current server support matrix is documented in
+[platform-support-matrix.md](platform-support-matrix.md). It mirrors the
+`DefaultCapabilityService` contract: each target platform returns one capability
+entry per feature, and unsupported entries include a user-facing reason.
 
 ## Runtime Config
 

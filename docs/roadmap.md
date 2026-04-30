@@ -350,6 +350,13 @@ Acceptance criteria:
 - mobile clients can connect to a test server
 - packaging scripts are reproducible in CI or documented release runners
 
+Completed:
+
+- server capability support matrix is documented for Linux, macOS, Windows,
+  Android, iOS, and unknown platforms; core tests verify every platform reports
+  every feature exactly once and every unsupported capability has a non-empty
+  user-facing reason
+
 ## Phase 8: Security Review And Beta
 
 Goal: prepare a limited beta with a reviewed security model.
