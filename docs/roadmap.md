@@ -45,7 +45,9 @@ Scope:
 - completed client/backend slice: frontend profile contract with Rust service
   layer validation and file-backed profile persistence
 - completed runtime slice: file-backed server config, structured event model,
-  SSH tunnel command planning, and foreground line-based control listener
+  SSH tunnel command planning, and foreground line-based control listener with
+  authenticated health, version, heartbeat, capability, application, session
+  listing, and create-session commands
 - completed client runtime slice: Tauri commands for Rust-owned profiles,
   health, capabilities, and application discovery
 - completed SSH tunnel lifecycle slice: validated command planning, injectable
@@ -54,7 +56,8 @@ Scope:
 - completed daemon install and lifecycle strategy for Linux, macOS, and Windows
 - completed daemon install slice: service plan and manifest generation for
   Linux user systemd, macOS launchd, and Windows service scripts
-- control API for health, capabilities, version, and application discovery
+- control API for health, capabilities, version, application discovery, and
+  foreground session creation
 - SSH tunnel connection contract
 - structured logs
 - server configuration file

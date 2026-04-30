@@ -3,6 +3,7 @@
 mod audio_stream;
 mod video_stream;
 
+use std::cell::RefCell;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -17,12 +18,12 @@ use apprelay_core::{
     StaticHealthService, UnsupportedApplicationDiscovery,
 };
 use apprelay_protocol::{
-    AppRelayError, ApplicationSession, ApplicationSummary, AudioStreamSession, ControlAuth,
-    ControlError, ControlResult, CreateSessionRequest, ForwardInputRequest, HealthStatus,
-    HeartbeatStatus, InputDelivery, NegotiateVideoStreamRequest, Platform, PlatformCapability,
-    ReconnectVideoStreamRequest, ResizeSessionRequest, ServerVersion, StartAudioStreamRequest,
-    StartVideoStreamRequest, StopAudioStreamRequest, StopVideoStreamRequest,
-    UpdateAudioStreamRequest, VideoStreamSession,
+    AppRelayError, ApplicationLaunch, ApplicationSession, ApplicationSummary, AudioStreamSession,
+    ControlAuth, ControlError, ControlResult, CreateSessionRequest, Feature, ForwardInputRequest,
+    HealthStatus, HeartbeatStatus, InputDelivery, LaunchIntentStatus, NegotiateVideoStreamRequest,
+    Platform, PlatformCapability, ReconnectVideoStreamRequest, ResizeSessionRequest, ServerVersion,
+    StartAudioStreamRequest, StartVideoStreamRequest, StopAudioStreamRequest,
+    StopVideoStreamRequest, UpdateAudioStreamRequest, VideoStreamSession, ViewportSize,
 };
 
 use crate::audio_stream::AudioStreamControl;
@@ -448,19 +449,22 @@ impl ServerControlPlane {
 }
 
 pub struct ForegroundControlServer {
-    control_plane: ServerControlPlane,
+    control_plane: RefCell<ServerControlPlane>,
 }
 
 impl ForegroundControlServer {
     pub fn new(control_plane: ServerControlPlane) -> Self {
-        Self { control_plane }
+        Self {
+            control_plane: RefCell::new(control_plane),
+        }
     }
 
     pub fn bind_address(&self) -> String {
+        let control_plane = self.control_plane.borrow();
         format!(
             "{}:{}",
-            self.control_plane.config().bind_address,
-            self.control_plane.config().control_port
+            control_plane.config().bind_address,
+            control_plane.config().control_port
         )
     }
 
@@ -470,8 +474,8 @@ impl ForegroundControlServer {
         events: &mut impl EventSink,
     ) -> std::io::Result<()> {
         events.record(ServerEvent::ControlPlaneStarted {
-            bind_address: self.control_plane.config().bind_address.clone(),
-            port: self.control_plane.config().control_port,
+            bind_address: self.control_plane.borrow().config().bind_address.clone(),
+            port: self.control_plane.borrow().config().control_port,
         });
 
         let (mut stream, _) = listener.accept()?;
@@ -499,26 +503,106 @@ impl ForegroundControlServer {
             return "ERROR bad-request".to_string();
         };
 
+        let mut args = token.split_whitespace();
+        let Some(token) = args.next() else {
+            return "ERROR bad-request".to_string();
+        };
         let auth = ControlAuth::new(token);
         let result = match operation {
-            "health" => self.control_plane.health(&auth).map(|health| {
-                format!(
-                    "OK health service={} version={} healthy={}",
-                    health.service, health.version, health.healthy
-                )
-            }),
-            "version" => self.control_plane.version(&auth).map(|version| {
-                format!(
-                    "OK version service={} version={} platform={:?}",
-                    version.service, version.version, version.platform
-                )
-            }),
-            "heartbeat" => self.control_plane.heartbeat(&auth).map(|heartbeat| {
-                format!(
-                    "OK heartbeat healthy={} sequence={}",
-                    heartbeat.healthy, heartbeat.sequence
-                )
-            }),
+            "health" => {
+                if args.next().is_some() {
+                    return "ERROR bad-request".to_string();
+                }
+
+                self.control_plane.borrow().health(&auth).map(|health| {
+                    format!(
+                        "OK health service={} version={} healthy={}",
+                        health.service, health.version, health.healthy
+                    )
+                })
+            }
+            "version" => {
+                if args.next().is_some() {
+                    return "ERROR bad-request".to_string();
+                }
+
+                self.control_plane.borrow().version(&auth).map(|version| {
+                    format!(
+                        "OK version service={} version={} platform={:?}",
+                        version.service, version.version, version.platform
+                    )
+                })
+            }
+            "heartbeat" => {
+                if args.next().is_some() {
+                    return "ERROR bad-request".to_string();
+                }
+
+                self.control_plane
+                    .borrow()
+                    .heartbeat(&auth)
+                    .map(|heartbeat| {
+                        format!(
+                            "OK heartbeat healthy={} sequence={}",
+                            heartbeat.healthy, heartbeat.sequence
+                        )
+                    })
+            }
+            "capabilities" => {
+                if args.next().is_some() {
+                    return "ERROR bad-request".to_string();
+                }
+
+                self.control_plane
+                    .borrow()
+                    .capabilities(&auth)
+                    .map(format_capabilities_response)
+            }
+            "applications" => {
+                if args.next().is_some() {
+                    return "ERROR bad-request".to_string();
+                }
+
+                self.control_plane
+                    .borrow()
+                    .available_applications(&auth)
+                    .map(format_applications_response)
+            }
+            "create-session" => {
+                let Some(application_id) = args.next() else {
+                    return "ERROR bad-request".to_string();
+                };
+                let Some(width) = args.next().and_then(|value| value.parse::<u32>().ok()) else {
+                    return "ERROR bad-request".to_string();
+                };
+                let Some(height) = args.next().and_then(|value| value.parse::<u32>().ok()) else {
+                    return "ERROR bad-request".to_string();
+                };
+                if args.next().is_some() {
+                    return "ERROR bad-request".to_string();
+                }
+
+                self.control_plane
+                    .borrow_mut()
+                    .create_session(
+                        &auth,
+                        CreateSessionRequest {
+                            application_id: application_id.to_string(),
+                            viewport: ViewportSize::new(width, height),
+                        },
+                    )
+                    .map(format_create_session_response)
+            }
+            "sessions" => {
+                if args.next().is_some() {
+                    return "ERROR bad-request".to_string();
+                }
+
+                self.control_plane
+                    .borrow()
+                    .active_sessions(&auth)
+                    .map(format_sessions_response)
+            }
             _ => return "ERROR unknown-operation".to_string(),
         };
 
@@ -538,6 +622,131 @@ impl ForegroundControlServer {
             Err(ControlError::Service(error)) => format!("ERROR service {}", error.user_message()),
         }
     }
+}
+
+fn format_capabilities_response(mut capabilities: Vec<PlatformCapability>) -> String {
+    capabilities.sort_by_key(|capability| feature_key(&capability.feature));
+    let supported = capabilities
+        .iter()
+        .filter(|capability| capability.supported)
+        .count();
+    let mut response = format!(
+        "OK capabilities supported={supported} total={}",
+        capabilities.len()
+    );
+
+    for capability in capabilities {
+        response.push(' ');
+        response.push_str(feature_key(&capability.feature));
+        response.push(':');
+        response.push_str(if capability.supported {
+            "supported"
+        } else {
+            "unsupported"
+        });
+    }
+
+    response
+}
+
+fn format_applications_response(mut applications: Vec<ApplicationSummary>) -> String {
+    applications.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut response = format!("OK applications count={}", applications.len());
+
+    for (index, application) in applications.into_iter().enumerate() {
+        response.push_str(&format!(
+            " app{index}.id={} app{index}.name={} app{index}.launch={}",
+            line_token(&application.id),
+            line_token(&application.name),
+            launch_kind(application.launch.as_ref())
+        ));
+    }
+
+    response
+}
+
+fn format_create_session_response(session: ApplicationSession) -> String {
+    format!(
+        "OK create-session id={} app={} window_id={} window_title={} selection={} launch={} viewport={}x{}",
+        line_token(&session.id),
+        line_token(&session.application_id),
+        line_token(&session.selected_window.id),
+        line_token(&session.selected_window.title),
+        selection_method(&session.selected_window.selection_method),
+        launch_status(session.launch_intent.as_ref().map(|intent| &intent.status)),
+        session.viewport.width,
+        session.viewport.height
+    )
+}
+
+fn format_sessions_response(mut sessions: Vec<ApplicationSession>) -> String {
+    sessions.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut response = format!("OK sessions count={}", sessions.len());
+
+    for (index, session) in sessions.into_iter().enumerate() {
+        response.push_str(&format!(
+            " session{index}.id={} session{index}.app={} session{index}.state={:?} session{index}.viewport={}x{}",
+            line_token(&session.id),
+            line_token(&session.application_id),
+            session.state,
+            session.viewport.width,
+            session.viewport.height
+        ));
+    }
+
+    response
+}
+
+fn feature_key(feature: &Feature) -> &'static str {
+    match feature {
+        Feature::AppDiscovery => "app-discovery",
+        Feature::ApplicationLaunch => "application-launch",
+        Feature::WindowResize => "window-resize",
+        Feature::WindowVideoStream => "window-video-stream",
+        Feature::SystemAudioStream => "system-audio-stream",
+        Feature::ClientMicrophoneInput => "client-microphone-input",
+        Feature::KeyboardInput => "keyboard-input",
+        Feature::MouseInput => "mouse-input",
+    }
+}
+
+fn launch_kind(launch: Option<&ApplicationLaunch>) -> &'static str {
+    match launch {
+        Some(ApplicationLaunch::DesktopCommand { .. }) => "desktop-command",
+        Some(ApplicationLaunch::MacosBundle { .. }) => "macos-bundle",
+        None => "none",
+    }
+}
+
+fn launch_status(status: Option<&LaunchIntentStatus>) -> &'static str {
+    match status {
+        Some(LaunchIntentStatus::Recorded) => "recorded",
+        Some(LaunchIntentStatus::Attached) => "attached",
+        Some(LaunchIntentStatus::Unsupported) => "unsupported",
+        None => "none",
+    }
+}
+
+fn selection_method(method: &apprelay_protocol::WindowSelectionMethod) -> &'static str {
+    match method {
+        apprelay_protocol::WindowSelectionMethod::LaunchIntent => "launch-intent",
+        apprelay_protocol::WindowSelectionMethod::ExistingWindow => "existing-window",
+        apprelay_protocol::WindowSelectionMethod::Synthetic => "synthetic",
+    }
+}
+
+fn line_token(value: &str) -> String {
+    let mut encoded = String::new();
+
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+
+    encoded
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -759,6 +968,40 @@ fn xml_escape(value: &str) -> String {
 mod tests {
     use super::*;
     use apprelay_core::InMemoryEventSink;
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after unix epoch")
+            .as_nanos();
+
+        std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()))
+    }
+
+    #[cfg(unix)]
+    fn write_executable_script(path: &Path, contents: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::write(path, contents).expect("write executable script");
+        let mut permissions = std::fs::metadata(path)
+            .expect("read executable script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("mark executable script");
+    }
+
+    #[cfg(unix)]
+    fn wait_for_path(path: &Path) {
+        for _ in 0..100 {
+            if path.exists() {
+                return;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        panic!("timed out waiting for {}", path.display());
+    }
 
     #[test]
     fn server_services_report_health() {
@@ -982,6 +1225,148 @@ mod tests {
             "ERROR unknown-operation"
         );
         assert_eq!(events.events(), &[]);
+    }
+
+    #[test]
+    fn foreground_server_reports_linux_application_launch_capability() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        let response = server.handle_request("capabilities correct-token", &mut events);
+
+        assert!(response.starts_with("OK capabilities supported="));
+        assert!(response.contains(" total=8 "));
+        assert!(response.contains("application-launch:supported"));
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::RequestAuthorized {
+                operation: "capabilities".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn foreground_server_lists_applications_as_parseable_tokens() {
+        let root = unique_test_dir("foreground-applications");
+        let applications = root.join("applications");
+        std::fs::create_dir_all(&applications).expect("create desktop entry root");
+        std::fs::write(
+            applications.join("fake.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Fake App\nExec=/bin/true %U\n",
+        )
+        .expect("write desktop entry");
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::with_linux_desktop_entry_roots("test", vec![applications]),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        let response = server.handle_request("applications correct-token", &mut events);
+
+        assert_eq!(
+            response,
+            "OK applications count=1 app0.id=fake app0.name=Fake%20App app0.launch=desktop-command"
+        );
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::RequestAuthorized {
+                operation: "applications".to_string(),
+            }]
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn foreground_server_create_session_launches_linux_desktop_entry() {
+        let root = unique_test_dir("foreground-create-session");
+        let applications = root.join("applications");
+        std::fs::create_dir_all(&applications).expect("create desktop entry root");
+        let marker = root.join("launch-marker");
+        let executable = root.join("fake-app");
+        write_executable_script(
+            &executable,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$1\" \"$2\" > {}\n",
+                marker.display()
+            ),
+        );
+        std::fs::write(
+            applications.join("fake.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Fake App\nExec={} --label \"Fake App\" %U\n",
+                executable.display()
+            ),
+        )
+        .expect("write desktop entry");
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::with_linux_desktop_entry_roots("test", vec![applications]),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        let response =
+            server.handle_request("create-session correct-token fake 1280 720", &mut events);
+
+        wait_for_path(&marker);
+        assert_eq!(
+            std::fs::read_to_string(&marker).expect("read launch marker"),
+            "--label\nFake App\n"
+        );
+        assert_eq!(
+            response,
+            "OK create-session id=session-1 app=fake window_id=window-session-1 window_title=Fake%20App selection=launch-intent launch=recorded viewport=1280x720"
+        );
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::RequestAuthorized {
+                operation: "create-session".to_string(),
+            }]
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn foreground_server_rejects_bad_create_session_args() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request(
+                "create-session correct-token terminal wide 720",
+                &mut events
+            ),
+            "ERROR bad-request"
+        );
+        assert_eq!(events.events(), &[]);
+    }
+
+    #[test]
+    fn foreground_server_rejects_unauthorized_create_session() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request("create-session wrong-token terminal 1280 720", &mut events),
+            "ERROR unauthorized"
+        );
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::RequestRejected {
+                operation: "create-session".to_string(),
+            }]
+        );
     }
 
     #[test]
