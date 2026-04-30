@@ -1024,6 +1024,18 @@ impl AudioBackendService {
     #[cfg(test)]
     fn stop_server_microphone_injection(&self, _stream_id: &str) {}
 
+    #[cfg(not(test))]
+    fn start_server_microphone_injection(
+        &self,
+        _stream_id: &str,
+        _microphone: &MicrophoneMode,
+    ) -> Option<NativeAudioMediaSession> {
+        None
+    }
+
+    #[cfg(not(test))]
+    fn stop_server_microphone_injection(&self, _stream_id: &str) {}
+
     #[cfg(test)]
     fn start_client_playback(&self, stream_id: &str) -> Option<NativeAudioMediaSession> {
         let Self::DesktopControl {
@@ -1049,6 +1061,14 @@ impl AudioBackendService {
     }
 
     #[cfg(test)]
+    fn stop_client_playback(&self, _stream_id: &str) {}
+
+    #[cfg(not(test))]
+    fn start_client_playback(&self, _stream_id: &str) -> Option<NativeAudioMediaSession> {
+        None
+    }
+
+    #[cfg(not(test))]
     fn stop_client_playback(&self, _stream_id: &str) {}
 
     #[cfg(test)]
@@ -1084,6 +1104,18 @@ impl AudioBackendService {
     }
 
     #[cfg(test)]
+    fn stop_client_microphone_capture(&self, _stream_id: &str) {}
+
+    #[cfg(not(test))]
+    fn start_client_microphone_capture(
+        &self,
+        _stream_id: &str,
+        _microphone: &MicrophoneMode,
+    ) -> Option<NativeAudioMediaSession> {
+        None
+    }
+
+    #[cfg(not(test))]
     fn stop_client_microphone_capture(&self, _stream_id: &str) {}
 }
 
@@ -1388,18 +1420,15 @@ impl AudioStreamService for InMemoryAudioStreamService {
         if let Some(native_session) = self.backend.start_pipewire_capture(&stream_id) {
             self.native_runtime.start_session(native_session);
         }
-        #[cfg(test)]
         if let Some(native_session) = self.backend.start_client_playback(&stream_id) {
             self.native_runtime.start_session(native_session);
         }
-        #[cfg(test)]
         if let Some(native_session) = self
             .backend
             .start_client_microphone_capture(&stream_id, &request.microphone)
         {
             self.native_runtime.start_session(native_session);
         }
-        #[cfg(test)]
         if let Some(native_session) = self
             .backend
             .start_server_microphone_injection(&stream_id, &request.microphone)
@@ -1468,11 +1497,8 @@ impl AudioStreamService for InMemoryAudioStreamService {
 
         stream.state = AudioStreamState::Stopped;
         self.backend.stop_pipewire_capture(&stream.id);
-        #[cfg(test)]
         self.backend.stop_client_playback(&stream.id);
-        #[cfg(test)]
         self.backend.stop_client_microphone_capture(&stream.id);
-        #[cfg(test)]
         self.backend.stop_server_microphone_injection(&stream.id);
         self.native_runtime.clear_stream(&stream.id);
         stream.backend = Some(self.backend.backend_contract_for_media_session(
@@ -1553,11 +1579,8 @@ impl AudioStreamService for InMemoryAudioStreamService {
         }) {
             stream.state = AudioStreamState::Stopped;
             self.backend.stop_pipewire_capture(&stream.id);
-            #[cfg(test)]
             self.backend.stop_client_playback(&stream.id);
-            #[cfg(test)]
             self.backend.stop_client_microphone_capture(&stream.id);
-            #[cfg(test)]
             self.backend.stop_server_microphone_injection(&stream.id);
             self.native_runtime.clear_stream(&stream.id);
             stream.backend = Some(self.backend.backend_contract_for_media_session(

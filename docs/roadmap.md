@@ -233,7 +233,7 @@ Completed:
 - explicit unsupported keyboard and pointer backend errors
 - client service methods and lightweight input mode controls
 
-## Phase 6: Audio And Microphone (In Progress)
+## Phase 6: Audio And Microphone (Complete)
 
 Goal: support desktop audio control-plane behavior now and bidirectional audio where the platform allows it.
 
@@ -317,15 +317,21 @@ Completed:
   health while keeping the stream alive
 - active audio stream stats aggregate visible runtime media counters and latency
   from backend leg status so muted or unavailable-device media is excluded
+- production audio stream lifecycle now calls native runtime start and stop hooks
+  for capture, playback, client microphone capture, and server-side microphone
+  injection; unavailable OS media backends still report explicit planned-native
+  failures instead of fake packets
 - server composition has an optional `pipewire-capture` feature that forwards
   to the core boundary and reports the Linux PipeWire capture adapter boundary
   as unavailable without changing default server behavior or affecting macOS
   and Windows
 
-Remaining:
+Deferred:
 
-- real native platform capture, playback, and client microphone implementations
-- server-side microphone injection backend
+- no Phase 6 control-plane or native-runtime contract work remains; real
+  PipeWire, CoreAudio, WASAPI, and microphone injection media integrations are
+  deferred to cross-platform hardening and production release work so Phase 6
+  does not claim unsupported OS audio packets
 
 ## Phase 7: Cross-Platform Hardening
 
