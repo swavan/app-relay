@@ -10,6 +10,7 @@ pipewire-capture = []
 
 [dependencies]
 apprelay-protocol = { path = "../protocol" }
+plist = { version = "1", default-features = false }
 
 [lib]
 path = "src/lib.rs"
