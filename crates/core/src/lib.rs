@@ -2183,6 +2183,18 @@ fn parse_macos_app_bundle(path: &Path) -> Option<ApplicationSummary> {
     let info = plist::Value::from_file(info_plist).ok()?;
     let info = info.as_dictionary()?;
 
+    if plist_dictionary_string_value(info, "CFBundlePackageType")
+        .is_some_and(|package_type| package_type != "APPL")
+    {
+        return None;
+    }
+    if plist_dictionary_bool_value(info, "LSBackgroundOnly").unwrap_or(false) {
+        return None;
+    }
+    if plist_dictionary_bool_value(info, "LSUIElement").unwrap_or(false) {
+        return None;
+    }
+
     let id = plist_dictionary_string_value(info, "CFBundleIdentifier").or_else(|| {
         path.file_stem()
             .map(|value| value.to_string_lossy().into_owned())
@@ -2308,6 +2320,19 @@ fn plist_dictionary_string_value(info: &plist::Dictionary, key: &str) -> Option<
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn plist_dictionary_bool_value(info: &plist::Dictionary, key: &str) -> Option<bool> {
+    match info.get(key)? {
+        plist::Value::Boolean(value) => Some(*value),
+        plist::Value::Integer(value) => value.as_signed().map(|number| number != 0),
+        plist::Value::String(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" => Some(true),
+            "0" | "false" | "no" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -3742,6 +3767,208 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
                 icon: None,
                 launch: Some(ApplicationLaunch::MacosBundle {
                     bundle_path: root.join("Fallback.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_rejects_background_only_app_bundles() {
+        let root = unique_test_dir("macos-app-background-only");
+        let app_contents = root.join("BackgroundOnly.app/Contents");
+        fs::create_dir_all(&app_contents).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.background-only</string>
+  <key>CFBundleName</key>
+  <string>Background Only App</string>
+  <key>LSBackgroundOnly</key>
+  <true/>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(applications, Vec::<ApplicationSummary>::new());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_rejects_string_truthy_background_only_bundles() {
+        let root = unique_test_dir("macos-app-background-only-string");
+        let app_contents = root.join("BackgroundOnlyString.app/Contents");
+        fs::create_dir_all(&app_contents).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.background-only-string</string>
+  <key>CFBundleName</key>
+  <string>Background Only String App</string>
+  <key>LSBackgroundOnly</key>
+  <string>YES</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(applications, Vec::<ApplicationSummary>::new());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_rejects_ui_element_app_bundles() {
+        let root = unique_test_dir("macos-app-ui-element");
+        let app_contents = root.join("UiElement.app/Contents");
+        fs::create_dir_all(&app_contents).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.ui-element</string>
+  <key>CFBundleName</key>
+  <string>UI Element App</string>
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(applications, Vec::<ApplicationSummary>::new());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_rejects_integer_truthy_ui_element_bundles() {
+        let root = unique_test_dir("macos-app-ui-element-integer");
+        let app_contents = root.join("UiElementInteger.app/Contents");
+        fs::create_dir_all(&app_contents).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.ui-element-integer</string>
+  <key>CFBundleName</key>
+  <string>UI Element Integer App</string>
+  <key>LSUIElement</key>
+  <integer>1</integer>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(applications, Vec::<ApplicationSummary>::new());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_rejects_non_appl_package_type() {
+        let root = unique_test_dir("macos-app-non-appl-package");
+        let app_contents = root.join("Plugin.app/Contents");
+        fs::create_dir_all(&app_contents).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.plugin</string>
+  <key>CFBundleName</key>
+  <string>Plugin Bundle</string>
+  <key>CFBundlePackageType</key>
+  <string>BNDL</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(applications, Vec::<ApplicationSummary>::new());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_keeps_appl_package_type() {
+        let root = unique_test_dir("macos-app-appl-package");
+        let app_contents = root.join("PackageType.app/Contents");
+        fs::create_dir_all(&app_contents).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.package-type</string>
+  <key>CFBundleName</key>
+  <string>Package Type App</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.package-type".to_string(),
+                name: "Package Type App".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("PackageType.app").display().to_string(),
                 }),
             }]
         );
