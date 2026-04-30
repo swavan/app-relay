@@ -97,7 +97,11 @@ fn pipewire_capture_command_config_from_env() -> PipeWireCaptureCommandConfig {
     let mut config = PipeWireCaptureCommandConfig::new(
         std::env::var("APPRELAY_PIPEWIRE_CAPTURE_COMMAND")
             .unwrap_or_else(|_| "pw-record".to_string()),
-        std::env::var("APPRELAY_PIPEWIRE_CAPTURE_TARGET").ok(),
+        pipewire_capture_target_from_env_value(
+            std::env::var("APPRELAY_PIPEWIRE_CAPTURE_TARGET")
+                .ok()
+                .as_deref(),
+        ),
     );
     config.rate = pipewire_capture_rate_from_env_value(
         std::env::var("APPRELAY_PIPEWIRE_CAPTURE_RATE")
@@ -149,12 +153,17 @@ fn pipewire_capture_format_from_env_value(value: Option<&str>) -> String {
         .to_string()
 }
 
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+fn pipewire_capture_target_from_env_value(value: Option<&str>) -> Option<String> {
+    value.filter(|value| !value.is_empty()).map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
     use super::{
         pipewire_capture_channels_from_env_value, pipewire_capture_format_from_env_value,
-        pipewire_capture_rate_from_env_value,
+        pipewire_capture_rate_from_env_value, pipewire_capture_target_from_env_value,
     };
 
     #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
@@ -173,5 +182,12 @@ mod tests {
         assert_eq!(pipewire_capture_format_from_env_value(Some("f32")), "f32");
         assert_eq!(pipewire_capture_format_from_env_value(Some("")), "s16");
         assert_eq!(pipewire_capture_format_from_env_value(None), "s16");
+
+        assert_eq!(
+            pipewire_capture_target_from_env_value(Some("bluez_output.test.monitor")),
+            Some("bluez_output.test.monitor".to_string())
+        );
+        assert_eq!(pipewire_capture_target_from_env_value(Some("")), None);
+        assert_eq!(pipewire_capture_target_from_env_value(None), None);
     }
 }
