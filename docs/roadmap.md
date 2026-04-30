@@ -315,6 +315,8 @@ Completed:
 - active runtime media status models selected output and input device loss in
   tests by masking affected media counters and reporting actionable stream
   health while keeping the stream alive
+- active audio stream stats aggregate visible runtime media counters and latency
+  from backend leg status so muted or unavailable-device media is excluded
 - server composition has an optional `pipewire-capture` feature that forwards
   to the core boundary and reports the Linux PipeWire capture adapter boundary
   as unavailable without changing default server behavior or affecting macOS

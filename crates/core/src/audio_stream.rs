@@ -1256,14 +1256,16 @@ impl InMemoryAudioStreamService {
             .iter_mut()
             .filter(|stream| stream.state != AudioStreamState::Stopped)
         {
-            stream.backend = Some(self.backend.backend_contract_for_media_session(
+            let backend_contract = self.backend.backend_contract_for_media_session(
                 self.native_runtime.session_for_stream(&stream.id),
                 Some(&stream.mute),
                 AudioDeviceAvailability {
                     devices: Some(&stream.devices),
                     unavailable_device_ids: &unavailable_device_ids,
                 },
-            ));
+            );
+            stream.stats = Self::stream_stats_from_backend(&backend_contract);
+            stream.backend = Some(backend_contract);
             stream.capabilities = capabilities.clone();
             stream.microphone_injection =
                 backend.microphone_injection_state(&stream.microphone, &capabilities);
@@ -1322,6 +1324,26 @@ impl InMemoryAudioStreamService {
             healthy: true,
             message: Some(healthy_message.to_string()),
         }
+    }
+
+    fn stream_stats_from_backend(backend: &AudioBackendContract) -> AudioStreamStats {
+        backend
+            .statuses
+            .iter()
+            .filter(|status| status.media.available)
+            .fold(
+                AudioStreamStats {
+                    packets_sent: 0,
+                    packets_received: 0,
+                    latency_ms: 0,
+                },
+                |mut stats, status| {
+                    stats.packets_sent += status.media.packets_sent;
+                    stats.packets_received += status.media.packets_received;
+                    stats.latency_ms = stats.latency_ms.max(status.media.latency_ms);
+                    stats
+                },
+            )
     }
 }
 
@@ -1396,16 +1418,19 @@ impl AudioStreamService for InMemoryAudioStreamService {
         #[cfg(test)]
         let unavailable_device_ids = self.unavailable_device_ids.clone();
 
+        let backend_contract = self.backend.backend_contract_for_media_session(
+            self.native_runtime.session_for_stream(&stream_id),
+            Some(&mute),
+            AudioDeviceAvailability {
+                devices: Some(&devices),
+                #[cfg(test)]
+                unavailable_device_ids: &unavailable_device_ids,
+            },
+        );
+        let stats = Self::stream_stats_from_backend(&backend_contract);
+
         let stream = AudioStreamSession {
-            backend: Some(self.backend.backend_contract_for_media_session(
-                self.native_runtime.session_for_stream(&stream_id),
-                Some(&mute),
-                AudioDeviceAvailability {
-                    devices: Some(&devices),
-                    #[cfg(test)]
-                    unavailable_device_ids: &unavailable_device_ids,
-                },
-            )),
+            backend: Some(backend_contract),
             id: stream_id,
             session_id: session.id.clone(),
             selected_window_id: session.selected_window.id.clone(),
@@ -1415,11 +1440,7 @@ impl AudioStreamService for InMemoryAudioStreamService {
             microphone_injection,
             mute,
             capabilities,
-            stats: AudioStreamStats {
-                packets_sent: 0,
-                packets_received: 0,
-                latency_ms: 0,
-            },
+            stats,
             health: AudioStreamHealth {
                 healthy: true,
                 message: Some("audio stream started".to_string()),
@@ -1497,7 +1518,7 @@ impl AudioStreamService for InMemoryAudioStreamService {
             output_device_id: request.output_device_id,
             input_device_id: request.input_device_id,
         };
-        stream.backend = Some(self.backend.backend_contract_for_media_session(
+        let backend_contract = self.backend.backend_contract_for_media_session(
             self.native_runtime.session_for_stream(&stream.id),
             Some(&stream.mute),
             AudioDeviceAvailability {
@@ -1505,7 +1526,9 @@ impl AudioStreamService for InMemoryAudioStreamService {
                 #[cfg(test)]
                 unavailable_device_ids: &unavailable_device_ids,
             },
-        ));
+        );
+        stream.stats = Self::stream_stats_from_backend(&backend_contract);
+        stream.backend = Some(backend_contract);
         stream.health = Self::stream_health_for_devices(
             &stream.devices,
             &unavailable_device_ids,
@@ -2173,6 +2196,14 @@ mod tests {
                 && status.media.bytes_received > 0
                 && status.media.latency_ms > 0
         }));
+        assert_eq!(
+            refreshed.stats,
+            AudioStreamStats {
+                packets_sent: 100,
+                packets_received: 200,
+                latency_ms: 15,
+            }
+        );
         assert!(refreshed.microphone_injection.active);
     }
 
@@ -2227,6 +2258,14 @@ mod tests {
                 && status.failure.is_none()
                 && status.media == AudioBackendMediaStats::default()
         }));
+        assert_eq!(
+            muted.stats,
+            AudioStreamStats {
+                packets_sent: 0,
+                packets_received: 0,
+                latency_ms: 0,
+            }
+        );
 
         let unmuted = stream_service
             .update_stream(UpdateAudioStreamRequest {
@@ -2249,6 +2288,14 @@ mod tests {
                 && status.media.bytes_received > 0
                 && status.media.latency_ms > 0
         }));
+        assert_eq!(
+            unmuted.stats,
+            AudioStreamStats {
+                packets_sent: 100,
+                packets_received: 200,
+                latency_ms: 15,
+            }
+        );
     }
 
     #[test]
@@ -2299,6 +2346,14 @@ mod tests {
             AudioBackendLeg::ServerMicrophoneInjection,
             true,
         );
+        assert_eq!(
+            output_lost.stats,
+            AudioStreamStats {
+                packets_sent: 80,
+                packets_received: 160,
+                latency_ms: 15,
+            }
+        );
 
         stream_service.reconnect_audio_device_for_test("speakers");
         stream_service.disconnect_audio_device_for_test("mic");
@@ -2317,6 +2372,14 @@ mod tests {
             &input_lost,
             AudioBackendLeg::ServerMicrophoneInjection,
             false,
+        );
+        assert_eq!(
+            input_lost.stats,
+            AudioStreamStats {
+                packets_sent: 30,
+                packets_received: 60,
+                latency_ms: 13,
+            }
         );
     }
 
