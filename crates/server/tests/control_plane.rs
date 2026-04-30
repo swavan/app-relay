@@ -22,6 +22,87 @@ fn pipewire_capture_env_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+struct PipeWireCaptureEnvGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    vars: Vec<(&'static str, Option<String>)>,
+}
+
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+impl PipeWireCaptureEnvGuard {
+    fn set(vars: &[(&'static str, String)]) -> Self {
+        Self::set_and_clear(vars, &[])
+    }
+
+    fn set_and_clear(vars: &[(&'static str, String)], clear: &[&'static str]) -> Self {
+        let lock = pipewire_capture_env_lock();
+        let mut keys = vars.iter().map(|(key, _)| *key).collect::<Vec<_>>();
+        keys.extend(clear.iter().copied());
+        keys.sort_unstable();
+        keys.dedup();
+        let guard = Self {
+            _lock: lock,
+            vars: keys
+                .into_iter()
+                .map(|key| (key, std::env::var(key).ok()))
+                .collect(),
+        };
+        for key in clear {
+            std::env::remove_var(key);
+        }
+        for (key, value) in vars {
+            std::env::set_var(key, value);
+        }
+        guard
+    }
+}
+
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+impl Drop for PipeWireCaptureEnvGuard {
+    fn drop(&mut self) {
+        for (key, value) in &self.vars {
+            if let Some(value) = value {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+struct PipeWireTempFiles {
+    paths: Vec<std::path::PathBuf>,
+}
+
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+impl Drop for PipeWireTempFiles {
+    fn drop(&mut self) {
+        for path in &self.paths {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+struct AudioStreamCleanup<'a> {
+    control_plane: &'a mut ServerControlPlane,
+    auth: ControlAuth,
+    stream_id: String,
+}
+
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+impl Drop for AudioStreamCleanup<'_> {
+    fn drop(&mut self) {
+        let _ = self.control_plane.stop_audio_stream(
+            &self.auth,
+            StopAudioStreamRequest {
+                stream_id: self.stream_id.clone(),
+            },
+        );
+    }
+}
+
 fn server_services_for_platform(platform: Platform, version: impl Into<String>) -> ServerServices {
     #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
     let _env_guard = pipewire_capture_env_lock();
@@ -854,71 +935,7 @@ fn control_plane_pipewire_capture_feature_reports_linux_adapter_boundary_only() 
 fn control_plane_pipewire_capture_env_overrides_pw_record_arguments() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
-    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    struct EnvGuard {
-        _lock: std::sync::MutexGuard<'static, ()>,
-        vars: Vec<(&'static str, Option<String>)>,
-    }
-
-    impl EnvGuard {
-        fn set(vars: &[(&'static str, String)]) -> Self {
-            let lock = pipewire_capture_env_lock();
-            let guard = Self {
-                _lock: lock,
-                vars: vars
-                    .iter()
-                    .map(|(key, _)| (*key, std::env::var(key).ok()))
-                    .collect(),
-            };
-            for (key, value) in vars {
-                std::env::set_var(key, value);
-            }
-            guard
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (key, value) in &self.vars {
-                if let Some(value) = value {
-                    std::env::set_var(key, value);
-                } else {
-                    std::env::remove_var(key);
-                }
-            }
-        }
-    }
-
-    struct TempFiles {
-        paths: Vec<PathBuf>,
-    }
-
-    impl Drop for TempFiles {
-        fn drop(&mut self) {
-            for path in &self.paths {
-                let _ = fs::remove_file(path);
-            }
-        }
-    }
-
-    struct AudioStreamCleanup<'a> {
-        control_plane: &'a mut ServerControlPlane,
-        auth: ControlAuth,
-        stream_id: String,
-    }
-
-    impl Drop for AudioStreamCleanup<'_> {
-        fn drop(&mut self) {
-            let _ = self.control_plane.stop_audio_stream(
-                &self.auth,
-                StopAudioStreamRequest {
-                    stream_id: self.stream_id.clone(),
-                },
-            );
-        }
-    }
 
     let test_id = format!(
         "{}-{}",
@@ -930,7 +947,7 @@ fn control_plane_pipewire_capture_env_overrides_pw_record_arguments() {
     );
     let script_path = std::env::temp_dir().join(format!("apprelay-server-pipewire-{test_id}"));
     let args_path = std::env::temp_dir().join(format!("apprelay-server-pipewire-{test_id}.txt"));
-    let _temp_files = TempFiles {
+    let _temp_files = PipeWireTempFiles {
         paths: vec![script_path.clone(), args_path.clone()],
     };
     fs::write(
@@ -948,7 +965,7 @@ fn control_plane_pipewire_capture_env_overrides_pw_record_arguments() {
     fs::set_permissions(&script_path, permissions).expect("script permissions");
 
     let mut control_plane = {
-        let _env = EnvGuard::set(&[
+        let _env = PipeWireCaptureEnvGuard::set(&[
             ("APPRELAY_PIPEWIRE_CAPTURE", "1".to_string()),
             (
                 "APPRELAY_PIPEWIRE_CAPTURE_COMMAND",
@@ -1009,6 +1026,103 @@ fn control_plane_pipewire_capture_env_overrides_pw_record_arguments() {
             "f32",
             "--target",
             "bluez_output.test.monitor",
+            "-"
+        ]
+    );
+}
+
+#[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
+#[test]
+fn control_plane_pipewire_capture_uses_output_device_as_pw_record_target_fallback() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let test_id = format!(
+        "{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos()
+    );
+    let script_path = std::env::temp_dir().join(format!("apprelay-server-pipewire-{test_id}"));
+    let args_path = std::env::temp_dir().join(format!("apprelay-server-pipewire-{test_id}.txt"));
+    let _temp_files = PipeWireTempFiles {
+        paths: vec![script_path.clone(), args_path.clone()],
+    };
+    fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > '{}'\nwhile :; do printf audio-data; sleep 1; done\n",
+            args_path.display()
+        ),
+    )
+    .expect("write script");
+    let mut permissions = fs::metadata(&script_path)
+        .expect("script metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).expect("script permissions");
+
+    let mut control_plane = {
+        let _env = PipeWireCaptureEnvGuard::set_and_clear(
+            &[
+                ("APPRELAY_PIPEWIRE_CAPTURE", "1".to_string()),
+                (
+                    "APPRELAY_PIPEWIRE_CAPTURE_COMMAND",
+                    script_path.to_string_lossy().to_string(),
+                ),
+            ],
+            &["APPRELAY_PIPEWIRE_CAPTURE_TARGET"],
+        );
+        ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "integration-test"),
+            ServerConfig::local("correct-token"),
+        )
+    };
+    let auth = ControlAuth::new("correct-token");
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let audio = control_plane
+        .start_audio_stream(
+            &auth,
+            StartAudioStreamRequest {
+                session_id: session.id,
+                microphone: MicrophoneMode::Disabled,
+                system_audio_muted: false,
+                microphone_muted: true,
+                output_device_id: Some("alsa_output.fallback.monitor".to_string()),
+                input_device_id: None,
+            },
+        )
+        .expect("start audio stream");
+    let _audio_cleanup = AudioStreamCleanup {
+        control_plane: &mut control_plane,
+        auth: auth.clone(),
+        stream_id: audio.id.clone(),
+    };
+    assert_eq!(audio.state, AudioStreamState::Streaming);
+
+    let args = fs::read_to_string(&args_path).expect("captured command arguments");
+    assert_eq!(
+        args.lines().collect::<Vec<_>>(),
+        vec![
+            "--rate",
+            "48000",
+            "--channels",
+            "2",
+            "--format",
+            "s16",
+            "--target",
+            "alsa_output.fallback.monitor",
             "-"
         ]
     );
