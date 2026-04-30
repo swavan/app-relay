@@ -80,7 +80,7 @@ function buildLaunchLabel(app: AppSummary): string {
 function buildAppIconView(app: AppSummary): AppIconView {
   const title = app.icon?.source ?? app.name;
 
-  if (app.icon?.dataUrl) {
+  if (app.icon?.dataUrl && isWebRenderableImageMime(app.icon.mimeType)) {
     return {
       kind: "image",
       url: app.icon.dataUrl,
@@ -94,6 +94,12 @@ function buildAppIconView(app: AppSummary): AppIconView {
     label: appInitials(app.name),
     title,
   };
+}
+
+function isWebRenderableImageMime(mimeType: string): boolean {
+  return ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"].includes(
+    mimeType.toLowerCase()
+  );
 }
 
 function appInitials(name: string): string {

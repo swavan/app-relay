@@ -20,7 +20,9 @@ pub use video_stream::{
 };
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
@@ -64,6 +66,8 @@ pub trait ApplicationLaunchBackend {
         session_id: &str,
     ) -> Result<ApplicationLaunchIntent, AppRelayError>;
 }
+
+const MAX_APP_ICON_BYTES: u64 = 1_048_576;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApplicationLaunchBackendService {
@@ -2167,7 +2171,8 @@ fn parse_macos_app_bundle(path: &Path) -> Option<ApplicationSummary> {
             path.file_stem()
                 .map(|value| value.to_string_lossy().into_owned())
         })?;
-    let icon = plist_dictionary_string_value(info, "CFBundleIconFile");
+    let icon = plist_dictionary_string_value(info, "CFBundleIconFile")
+        .and_then(|value| macos_bundle_icon(path, &value));
 
     if id.trim().is_empty() || name.trim().is_empty() {
         return None;
@@ -2176,17 +2181,73 @@ fn parse_macos_app_bundle(path: &Path) -> Option<ApplicationSummary> {
     Some(ApplicationSummary {
         id,
         name,
-        icon: icon
-            .filter(|value| !value.is_empty())
-            .map(|source| AppIcon {
-                mime_type: "application/x-macos-icon-name".to_string(),
-                bytes: Vec::new(),
-                source: Some(source),
-            }),
+        icon,
         launch: Some(ApplicationLaunch::MacosBundle {
             bundle_path: path.display().to_string(),
         }),
     })
+}
+
+fn macos_bundle_icon(path: &Path, icon_file: &str) -> Option<AppIcon> {
+    let file_name = Path::new(icon_file).file_name()?;
+    if file_name.is_empty() {
+        return None;
+    }
+
+    let mut resource_name = PathBuf::from(file_name);
+    match resource_name
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
+        Some(extension) if extension.eq_ignore_ascii_case("icns") => {}
+        Some(_) => return None,
+        None => {
+            resource_name.set_extension("icns");
+        }
+    }
+
+    let resource_path = Path::new("Contents").join("Resources").join(&resource_name);
+    let full_path = path.join(&resource_path);
+    let bytes = read_regular_file_bytes(&full_path)?;
+
+    Some(AppIcon {
+        mime_type: "image/icns".to_string(),
+        bytes,
+        source: Some(format!(
+            "Contents/Resources/{}",
+            resource_name.to_string_lossy()
+        )),
+    })
+}
+
+fn read_regular_file_bytes(path: &Path) -> Option<Vec<u8>> {
+    let path_metadata = fs::symlink_metadata(path).ok()?;
+    if !path_metadata.file_type().is_file() {
+        return None;
+    }
+
+    let mut file = fs::File::open(path).ok()?;
+    let file_metadata = file.metadata().ok()?;
+    if !same_file_metadata(&path_metadata, &file_metadata) {
+        return None;
+    }
+    if file_metadata.len() > MAX_APP_ICON_BYTES {
+        return None;
+    }
+
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+#[cfg(unix)]
+fn same_file_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.file_type().is_file() && right.file_type().is_file() && left.len() == right.len()
 }
 
 fn plist_dictionary_string_value(info: &plist::Dictionary, key: &str) -> Option<String> {
@@ -3226,6 +3287,12 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
 "#,
         )
         .expect("write info plist");
+        fs::create_dir_all(app_contents.join("Resources")).expect("create app resources");
+        fs::write(
+            app_contents.join("Resources/VisibleIcon.icns"),
+            b"visible icon bytes",
+        )
+        .expect("write app icon");
         let broken_contents = root.join("Broken.app/Contents");
         fs::create_dir_all(&broken_contents).expect("create broken app bundle");
         fs::write(broken_contents.join("Info.plist"), b"not a plist")
@@ -3243,9 +3310,9 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
                 id: "dev.apprelay.visible".to_string(),
                 name: "Visible Mac App".to_string(),
                 icon: Some(AppIcon {
-                    mime_type: "application/x-macos-icon-name".to_string(),
-                    bytes: Vec::new(),
-                    source: Some("VisibleIcon".to_string()),
+                    mime_type: "image/icns".to_string(),
+                    bytes: b"visible icon bytes".to_vec(),
+                    source: Some("Contents/Resources/VisibleIcon.icns".to_string()),
                 }),
                 launch: Some(ApplicationLaunch::MacosBundle {
                     bundle_path: root.join("Visible.app").display().to_string(),
@@ -3316,6 +3383,12 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
         plist::Value::Dictionary(info)
             .to_file_binary(app_contents.join("Info.plist"))
             .expect("write binary info plist");
+        fs::create_dir_all(app_contents.join("Resources")).expect("create app resources");
+        fs::write(
+            app_contents.join("Resources/BinaryIcon.icns"),
+            b"binary icon bytes",
+        )
+        .expect("write binary icon");
 
         let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
         let applications = discovery
@@ -3328,12 +3401,299 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
                 id: "dev.apprelay.binary".to_string(),
                 name: "Binary Mac App".to_string(),
                 icon: Some(AppIcon {
-                    mime_type: "application/x-macos-icon-name".to_string(),
-                    bytes: Vec::new(),
-                    source: Some("BinaryIcon".to_string()),
+                    mime_type: "image/icns".to_string(),
+                    bytes: b"binary icon bytes".to_vec(),
+                    source: Some("Contents/Resources/BinaryIcon.icns".to_string()),
                 }),
                 launch: Some(ApplicationLaunch::MacosBundle {
                     bundle_path: root.join("Binary.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_reads_icon_with_extension() {
+        let root = unique_test_dir("macos-app-icon-extension");
+        let app_contents = root.join("IconExtension.app/Contents");
+        fs::create_dir_all(app_contents.join("Resources")).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.icon-extension</string>
+  <key>CFBundleName</key>
+  <string>Icon Extension App</string>
+  <key>CFBundleIconFile</key>
+  <string>Provided.icns</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+        fs::write(
+            app_contents.join("Resources/Provided.icns"),
+            b"provided icon bytes",
+        )
+        .expect("write provided icon");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.icon-extension".to_string(),
+                name: "Icon Extension App".to_string(),
+                icon: Some(AppIcon {
+                    mime_type: "image/icns".to_string(),
+                    bytes: b"provided icon bytes".to_vec(),
+                    source: Some("Contents/Resources/Provided.icns".to_string()),
+                }),
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("IconExtension.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_rejects_non_icns_icon_extension() {
+        let root = unique_test_dir("macos-app-icon-non-icns");
+        let app_contents = root.join("NonIcns.app/Contents");
+        fs::create_dir_all(app_contents.join("Resources")).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.non-icns</string>
+  <key>CFBundleName</key>
+  <string>Non ICNS App</string>
+  <key>CFBundleIconFile</key>
+  <string>Icon.png</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+        fs::write(app_contents.join("Resources/Icon.png"), b"png icon bytes")
+            .expect("write non-icns icon");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.non-icns".to_string(),
+                name: "Non ICNS App".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("NonIcns.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_ignores_missing_icon_resource() {
+        let root = unique_test_dir("macos-app-missing-icon");
+        let app_contents = root.join("MissingIcon.app/Contents");
+        fs::create_dir_all(&app_contents).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.missing-icon</string>
+  <key>CFBundleName</key>
+  <string>Missing Icon App</string>
+  <key>CFBundleIconFile</key>
+  <string>MissingIcon</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.missing-icon".to_string(),
+                name: "Missing Icon App".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("MissingIcon.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn macos_application_discovery_rejects_symlink_icon_resource() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_test_dir("macos-app-icon-symlink");
+        let app_contents = root.join("Symlink.app/Contents");
+        fs::create_dir_all(app_contents.join("Resources")).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.symlink</string>
+  <key>CFBundleName</key>
+  <string>Symlink App</string>
+  <key>CFBundleIconFile</key>
+  <string>SymlinkIcon</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+        fs::write(root.join("secret.icns"), b"external icon bytes").expect("write external icon");
+        symlink(
+            root.join("secret.icns"),
+            app_contents.join("Resources/SymlinkIcon.icns"),
+        )
+        .expect("create icon symlink");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.symlink".to_string(),
+                name: "Symlink App".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("Symlink.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_rejects_oversized_icon_resource() {
+        let root = unique_test_dir("macos-app-icon-oversized");
+        let app_contents = root.join("Oversized.app/Contents");
+        fs::create_dir_all(app_contents.join("Resources")).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.oversized</string>
+  <key>CFBundleName</key>
+  <string>Oversized Icon App</string>
+  <key>CFBundleIconFile</key>
+  <string>OversizedIcon</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+        let icon = fs::File::create(app_contents.join("Resources/OversizedIcon.icns"))
+            .expect("create oversized icon");
+        icon.set_len(MAX_APP_ICON_BYTES + 1)
+            .expect("size oversized icon");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.oversized".to_string(),
+                name: "Oversized Icon App".to_string(),
+                icon: None,
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("Oversized.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_keeps_icon_lookup_inside_resources() {
+        let root = unique_test_dir("macos-app-icon-traversal");
+        let app_contents = root.join("Traversal.app/Contents");
+        fs::create_dir_all(app_contents.join("Resources")).expect("create app bundle");
+        fs::write(
+            app_contents.join("Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.traversal</string>
+  <key>CFBundleName</key>
+  <string>Traversal App</string>
+  <key>CFBundleIconFile</key>
+  <string>../Escape.icns</string>
+</dict>
+</plist>
+"#,
+        )
+        .expect("write info plist");
+        fs::write(app_contents.join("Escape.icns"), b"escaped icon bytes")
+            .expect("write escaped icon");
+        fs::write(
+            app_contents.join("Resources/Escape.icns"),
+            b"resource icon bytes",
+        )
+        .expect("write resource icon");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.traversal".to_string(),
+                name: "Traversal App".to_string(),
+                icon: Some(AppIcon {
+                    mime_type: "image/icns".to_string(),
+                    bytes: b"resource icon bytes".to_vec(),
+                    source: Some("Contents/Resources/Escape.icns".to_string()),
+                }),
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("Traversal.app").display().to_string(),
                 }),
             }]
         );

@@ -255,7 +255,9 @@ The macOS parser reads `Contents/Info.plist`, preferring
 `CFBundleDisplayName`, then `CFBundleName`, and falling back to the bundle
 directory name. When a session is created for a discovered macOS application,
 the server launches the bundle through the native `open -n <bundle>` command.
-Icons are not extracted yet.
+When `CFBundleIconFile` names a readable `.icns` file in
+`Contents/Resources`, discovery includes those resource bytes with the
+application summary.
 
 Windows is an expected desktop server target, but its native application
 discovery backend is not implemented in this slice. It returns a typed
