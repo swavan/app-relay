@@ -25,9 +25,11 @@ The Linux service target is a user-level systemd unit by default:
 ```ini
 [Unit]
 Description=AppRelay server
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
-ExecStart=/usr/bin/apprelay-server --config %h/.config/apprelay/server.conf
+ExecStart=/usr/bin/apprelay-server --config %h/.config/apprelay/server.conf --log %h/.local/state/apprelay/server.log
 Restart=on-failure
 RestartSec=3
 
@@ -50,6 +52,11 @@ Expected lifecycle commands:
 System-level installation can be added later for shared machines, but the first
 release should prefer user-level service scope.
 
+Crash recovery policy: systemd restarts the user service after non-clean exits,
+waits 3 seconds before restart, and limits crash loops to 5 starts in 60
+seconds. CI validates the generated unit fields rather than crashing a live
+service.
+
 ## macOS
 
 The macOS service target is a per-user launchd agent:
@@ -64,9 +71,16 @@ The macOS service target is a per-user launchd agent:
       <string>/Applications/AppRelay.app/Contents/MacOS/apprelay-server</string>
       <string>--config</string>
       <string>~/Library/Application Support/AppRelay/server.conf</string>
+      <string>--log</string>
+      <string>~/Library/Logs/AppRelay/server.log</string>
     </array>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+      <key>SuccessfulExit</key>
+      <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>3</integer>
     <key>RunAtLoad</key>
     <true/>
   </dict>
@@ -83,6 +97,10 @@ Expected lifecycle commands:
 - uninstall script: `apprelay-server uninstall-service macos`, then run the
   printed `run:` command, for example
   `sh '<absolute path from output>/uninstall-service.sh'`
+
+Crash recovery policy: launchd restarts the agent after non-successful exits
+with a 3 second throttle interval. The launchd contract is covered by manifest
+generation tests instead of by crashing an installed agent in CI.
 
 ## Windows
 
@@ -102,6 +120,13 @@ through a generated PowerShell installer script:
 Windows application discovery remains unsupported in the current code and
 returns a typed unsupported error.
 
+Crash recovery policy: the generated PowerShell installer configures the
+Windows Service Control Manager with `sc.exe failure` to restart the service
+after 3 seconds for three service failures and resets the failure count after 60
+seconds. It also enables non-crash failure handling with `sc.exe failureflag`.
+CI validates the generated script text rather than stopping or crashing a real
+Windows service.
+
 ## Deterministic Uninstall Boundary
 
 The uninstall CLI path mirrors install behavior: it writes a platform-native
@@ -116,5 +141,8 @@ Windows stops and deletes the `AppRelay` service registration.
 The current implementation validates the daemon/service lifecycle contract,
 runtime file ownership, config persistence, structured event output, SSH tunnel
 process supervision, service manifest generation, and uninstall script
-generation. Release packaging can wrap these commands later for signed
-installers, upgrade handling, rollback, and OS-specific permission prompts.
+generation. Crash recovery is deterministic service-manager configuration for
+Linux systemd, macOS launchd, and Windows Service Control Manager scripts; it is
+tested through generated plan contents, not by crashing live services. Release
+packaging can wrap these commands later for signed installers, upgrade
+handling, rollback, and OS-specific permission prompts.

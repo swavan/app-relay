@@ -830,11 +830,22 @@ pub struct ServiceInstallPlan {
     pub manifest_path: PathBuf,
     pub config_path: PathBuf,
     pub log_path: PathBuf,
+    pub crash_recovery: ServiceCrashRecoveryPolicy,
     pub manifest_contents: String,
     pub start_command: String,
     pub stop_command: String,
     pub status_command: String,
     pub uninstall_command: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceCrashRecoveryPolicy {
+    pub service_manager: &'static str,
+    pub restart_condition: &'static str,
+    pub restart_delay_seconds: u64,
+    pub crash_loop_window_seconds: Option<u64>,
+    pub crash_loop_max_restarts: Option<u64>,
+    pub manifest_contract: &'static str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -963,6 +974,8 @@ impl DaemonServiceInstaller {
         let manifest_contents = format!(
             "[Unit]\n\
 Description=AppRelay server\n\
+StartLimitIntervalSec=60\n\
+StartLimitBurst=5\n\
 \n\
 [Service]\n\
 ExecStart={executable_path} --config {config_arg} --log {log_arg}\n\
@@ -978,6 +991,7 @@ WantedBy=default.target\n"
             manifest_path,
             config_path,
             log_path,
+            crash_recovery: LINUX_SYSTEMD_CRASH_RECOVERY,
             manifest_contents,
             start_command: "systemctl --user start apprelay.service".to_string(),
             stop_command: "systemctl --user stop apprelay.service".to_string(),
@@ -1055,7 +1069,12 @@ systemctl --user daemon-reload\n"
     <string>{log_arg}</string>\n\
   </array>\n\
   <key>KeepAlive</key>\n\
-  <true/>\n\
+  <dict>\n\
+    <key>SuccessfulExit</key>\n\
+    <false/>\n\
+  </dict>\n\
+  <key>ThrottleInterval</key>\n\
+  <integer>3</integer>\n\
   <key>RunAtLoad</key>\n\
   <true/>\n\
 </dict>\n\
@@ -1067,6 +1086,7 @@ systemctl --user daemon-reload\n"
             manifest_path,
             config_path,
             log_path,
+            crash_recovery: MACOS_LAUNCHD_CRASH_RECOVERY,
             manifest_contents,
             start_command: format!("launchctl bootstrap gui/$UID {manifest_arg}"),
             stop_command: "launchctl bootout gui/$UID/dev.apprelay.server".to_string(),
@@ -1131,6 +1151,8 @@ if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {{\n\
   sc.exe delete $serviceName | Out-Null\n\
 }}\n\
 sc.exe create $serviceName binPath= $binaryPath start= auto DisplayName= 'AppRelay Server'\n\
+sc.exe failure $serviceName reset= 60 actions= restart/3000/restart/3000/restart/3000\n\
+sc.exe failureflag $serviceName 1\n\
 sc.exe start $serviceName\n"
         );
 
@@ -1139,6 +1161,7 @@ sc.exe start $serviceName\n"
             manifest_path,
             config_path,
             log_path,
+            crash_recovery: WINDOWS_SERVICE_CRASH_RECOVERY,
             manifest_contents,
             start_command: "sc.exe start AppRelay".to_string(),
             stop_command: "sc.exe stop AppRelay".to_string(),
@@ -1188,6 +1211,35 @@ if ($service) {\n\
         }
     }
 }
+
+const LINUX_SYSTEMD_CRASH_RECOVERY: ServiceCrashRecoveryPolicy = ServiceCrashRecoveryPolicy {
+    service_manager: "systemd-user",
+    restart_condition: "on-failure",
+    restart_delay_seconds: 3,
+    crash_loop_window_seconds: Some(60),
+    crash_loop_max_restarts: Some(5),
+    manifest_contract:
+        "Restart=on-failure, RestartSec=3, StartLimitIntervalSec=60, StartLimitBurst=5",
+};
+
+const MACOS_LAUNCHD_CRASH_RECOVERY: ServiceCrashRecoveryPolicy = ServiceCrashRecoveryPolicy {
+    service_manager: "launchd-agent",
+    restart_condition: "non-zero exit",
+    restart_delay_seconds: 3,
+    crash_loop_window_seconds: None,
+    crash_loop_max_restarts: None,
+    manifest_contract: "KeepAlive SuccessfulExit=false, ThrottleInterval=3",
+};
+
+const WINDOWS_SERVICE_CRASH_RECOVERY: ServiceCrashRecoveryPolicy = ServiceCrashRecoveryPolicy {
+    service_manager: "windows-service-control-manager",
+    restart_condition: "service failure",
+    restart_delay_seconds: 3,
+    crash_loop_window_seconds: Some(60),
+    crash_loop_max_restarts: Some(3),
+    manifest_contract:
+        "sc.exe failure reset=60 actions=restart/3000 repeated three times, failureflag=1",
+};
 
 fn home_dir() -> Result<PathBuf, ServiceInstallError> {
     std::env::var_os("HOME")
@@ -1758,6 +1810,10 @@ mod tests {
         assert!(plan
             .manifest_contents
             .contains("Restart=on-failure\nRestartSec=3"));
+        assert!(plan
+            .manifest_contents
+            .contains("StartLimitIntervalSec=60\nStartLimitBurst=5"));
+        assert_eq!(plan.crash_recovery, LINUX_SYSTEMD_CRASH_RECOVERY);
         assert_eq!(
             plan.start_command,
             "systemctl --user start apprelay.service"
@@ -1786,7 +1842,16 @@ mod tests {
         assert!(plan
             .manifest_contents
             .contains("<string>dev.apprelay.server</string>"));
-        assert!(plan.manifest_contents.contains("<key>KeepAlive</key>"));
+        assert!(plan.manifest_contents.contains(
+            r#"<key>KeepAlive</key>
+<dict>
+<key>SuccessfulExit</key>
+<false/>
+</dict>
+<key>ThrottleInterval</key>
+<integer>3</integer>"#
+        ));
+        assert_eq!(plan.crash_recovery, MACOS_LAUNCHD_CRASH_RECOVERY);
         assert!(plan.start_command.starts_with("launchctl bootstrap"));
     }
 
@@ -1813,6 +1878,13 @@ mod tests {
         assert!(plan
             .manifest_contents
             .contains("sc.exe create $serviceName"));
+        assert!(plan.manifest_contents.contains(
+            "sc.exe failure $serviceName reset= 60 actions= restart/3000/restart/3000/restart/3000"
+        ));
+        assert!(plan
+            .manifest_contents
+            .contains("sc.exe failureflag $serviceName 1"));
+        assert_eq!(plan.crash_recovery, WINDOWS_SERVICE_CRASH_RECOVERY);
         assert_eq!(plan.status_command, "sc.exe query AppRelay");
     }
 

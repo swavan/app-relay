@@ -397,6 +397,12 @@ Completed:
 - client platform permission and entitlement intent is source controlled and
   checked deterministically for Linux, macOS, Windows, Android, and iOS without
   generated native project directories
+- server crash recovery policy is explicit in deterministic service plans:
+  Linux user systemd restarts on failure with a 3 second delay and 5-in-60
+  start limit, macOS launchd restarts after unsuccessful exits with a 3 second
+  throttle interval, and Windows SCM scripts configure three 3 second restart
+  actions with a 60 second failure reset; CI checks generated artifacts instead
+  of crashing live services
 
 ## Phase 8: Security Review And Beta
 
