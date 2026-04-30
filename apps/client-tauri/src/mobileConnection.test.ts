@@ -18,7 +18,10 @@ const mobileTestProfile: ConnectionProfile = {
 class MobileTestRemoteService implements RemoteService {
   readonly calls: string[] = [];
 
-  constructor(private readonly expectedToken: string) {}
+  constructor(
+    private readonly expectedToken: string,
+    private readonly expectedClientId: string
+  ) {}
 
   async health() {
     this.calls.push(`health:${this.expectedToken}`);
@@ -51,7 +54,7 @@ class MobileTestRemoteService implements RemoteService {
   }
 
   async activeSessions() {
-    this.calls.push(`activeSessions:${this.expectedToken}`);
+    this.calls.push(`activeSessions:${this.expectedToken}:${this.expectedClientId}`);
     return [
       {
         id: "session-1",
@@ -139,7 +142,10 @@ describe("connectMobileClientToTestServer", () => {
   it.each<MobileClientTarget>(["android", "ios"])(
     "uses the configured profile token for the %s control-plane path",
     async (target) => {
-      const service = new MobileTestRemoteService(mobileTestProfile.authToken);
+      const service = new MobileTestRemoteService(
+        mobileTestProfile.authToken,
+        mobileTestProfile.id
+      );
 
       await expect(
         connectMobileClientToTestServer(target, mobileTestProfile, (profile) => {
@@ -191,7 +197,7 @@ describe("connectMobileClientToTestServer", () => {
         "health:mobile-test-token",
         "capabilities:mobile-test-token",
         "applications:mobile-test-token",
-        "activeSessions:mobile-test-token"
+        "activeSessions:mobile-test-token:mobile-test-server"
       ]);
     }
   );
@@ -203,5 +209,14 @@ describe("connectMobileClientToTestServer", () => {
         authToken: " "
       })
     ).rejects.toThrow("mobile test server profile must include a control-plane auth token");
+  });
+
+  it("fails before contacting the server when the profile has no stable client id", async () => {
+    await expect(
+      connectMobileClientToTestServer("android", {
+        ...mobileTestProfile,
+        id: " "
+      })
+    ).rejects.toThrow("mobile test server profile must include a stable client id");
   });
 });

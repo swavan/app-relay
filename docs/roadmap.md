@@ -440,6 +440,12 @@ Completed:
   [`threat-model.md`](threat-model.md), covering assets, trust boundaries,
   actors, entry points, major threats, existing mitigations, explicit gaps and
   assumptions, and the beta security review checklist
+- completed pairing and server authorization policy contract slice: shared
+  token authentication is now separate from paired client identity, unknown
+  clients are denied by default for sensitive session, stream, and input
+  controls, pending pairing and explicit local/admin approval are modeled in
+  protocol/core/server services, and foreground commands exercise the policy
+  without treating caller-supplied client ids as authenticated device proof
 
 ## Phase 9: Production Release
 

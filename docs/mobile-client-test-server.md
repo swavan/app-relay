@@ -4,7 +4,8 @@ Phase 7 treats Android and iOS as client targets. The deterministic client-side
 contract is intentionally limited to the Tauri service boundary:
 
 1. Load or provide a connection profile owned by the Rust profile service.
-2. Create the remote service with that profile's control-plane auth token.
+2. Create the remote service with that profile's control-plane auth token and
+   stable profile id.
 3. Call `server_health`, `server_capabilities`, `server_applications`, and
    `active_application_sessions`.
 4. Require a healthy test server before returning data from this standalone
@@ -14,8 +15,10 @@ The TypeScript contract test in
 `apps/client-tauri/src/mobileConnection.test.ts` runs this path for both
 `android` and `ios`. The Tauri invoke test in
 `apps/client-tauri/src/tauriRemoteService.test.ts` proves the selected profile
-token is forwarded to each control-plane command. These tests do not launch an
-emulator, simulator, device, or native package.
+token is forwarded to discovery commands and the selected profile id is
+forwarded as the paired-client policy id for sensitive commands. The profile id
+is not cryptographic device proof. These tests do not launch an emulator,
+simulator, device, or native package.
 
 ## Release-Runner Boundary
 
@@ -33,7 +36,8 @@ this slice. A release runner should:
 
 1. Build or install the platform package with the current Tauri mobile toolchain.
 2. Configure a profile that points at the test server tunnel or local network
-   endpoint and uses the known test control-plane token.
+   endpoint and uses the known test control-plane token. The profile id should
+   match the server-side paired-client policy entry for this test device.
 3. Launch the mobile client on the device, emulator, or simulator.
 4. Confirm the profile reaches the same control-plane path covered by the unit
    contract: health, capabilities, applications, and active sessions.

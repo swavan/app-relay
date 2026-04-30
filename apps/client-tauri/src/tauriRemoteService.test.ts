@@ -14,7 +14,7 @@ describe("TauriRemoteService", () => {
     tauri.invoke.mockReset();
   });
 
-  it("sends the configured profile token through the test server control-plane path", async () => {
+  it("sends the configured profile token and client id through the control-plane path", async () => {
     tauri.invoke
       .mockResolvedValueOnce({
         service: "apprelay-server",
@@ -36,7 +36,7 @@ describe("TauriRemoteService", () => {
       ])
       .mockResolvedValueOnce([]);
 
-    const service = new TauriRemoteService("mobile-test-token");
+    const service = new TauriRemoteService("mobile-test-token", "mobile-test-server");
 
     await expect(service.health()).resolves.toMatchObject({
       service: "apprelay-server",
@@ -50,7 +50,152 @@ describe("TauriRemoteService", () => {
       ["server_health", { authToken: "mobile-test-token" }],
       ["server_capabilities", { authToken: "mobile-test-token" }],
       ["server_applications", { authToken: "mobile-test-token" }],
-      ["active_application_sessions", { authToken: "mobile-test-token" }]
+      [
+        "active_application_sessions",
+        { authToken: "mobile-test-token", clientId: "mobile-test-server" }
+      ]
+    ]);
+  });
+
+  it("passes client id on sensitive session, input, and stream commands", async () => {
+    tauri.invoke
+      .mockResolvedValueOnce({
+        id: "session-1",
+        applicationId: "terminal",
+        selectedWindow: {
+          id: "window-session-1",
+          applicationId: "terminal",
+          title: "Terminal",
+          selectionMethod: "synthetic"
+        },
+        viewport: { width: 1280, height: 720 },
+        state: "ready"
+      })
+      .mockResolvedValueOnce({
+        id: "session-1",
+        applicationId: "terminal",
+        selectedWindow: {
+          id: "window-session-1",
+          applicationId: "terminal",
+          title: "Terminal",
+          selectionMethod: "synthetic"
+        },
+        viewport: { width: 1440, height: 900 },
+        state: "ready"
+      })
+      .mockResolvedValueOnce({
+        sessionId: "session-1",
+        selectedWindowId: "window-session-1",
+        mappedEvent: { kind: "focus" },
+        status: "focused"
+      })
+      .mockResolvedValueOnce({
+        id: "stream-1",
+        sessionId: "session-1",
+        selectedWindowId: "window-session-1",
+        viewport: { width: 1280, height: 720 },
+        state: "starting"
+      })
+      .mockResolvedValueOnce({
+        id: "audio-stream-1",
+        sessionId: "session-1",
+        selectedWindowId: "window-session-1",
+        state: "starting"
+      })
+      .mockResolvedValueOnce({
+        id: "session-1",
+        applicationId: "terminal",
+        selectedWindow: {
+          id: "window-session-1",
+          applicationId: "terminal",
+          title: "Terminal",
+          selectionMethod: "synthetic"
+        },
+        viewport: { width: 1440, height: 900 },
+        state: "closed"
+      });
+
+    const service = new TauriRemoteService("mobile-test-token", "mobile-test-server");
+
+    await service.createSession("terminal", { width: 1280, height: 720 });
+    await service.resizeSession("session-1", { width: 1440, height: 900 });
+    await service.forwardInput("session-1", { width: 1440, height: 900 }, { kind: "focus" });
+    await service.startVideoStream("session-1");
+    await service.startAudioStream("session-1", {
+      outputDeviceId: "default",
+      inputDeviceId: "microphone",
+      microphone: "enabled",
+      systemAudioMuted: false,
+      microphoneMuted: true
+    });
+    await service.closeSession("session-1");
+
+    expect(tauri.invoke.mock.calls).toEqual([
+      [
+        "create_application_session",
+        {
+          authToken: "mobile-test-token",
+          clientId: "mobile-test-server",
+          request: {
+            applicationId: "terminal",
+            viewport: { width: 1280, height: 720 }
+          }
+        }
+      ],
+      [
+        "resize_application_session",
+        {
+          authToken: "mobile-test-token",
+          clientId: "mobile-test-server",
+          request: {
+            sessionId: "session-1",
+            viewport: { width: 1440, height: 900 }
+          }
+        }
+      ],
+      [
+        "forward_input",
+        {
+          authToken: "mobile-test-token",
+          clientId: "mobile-test-server",
+          request: {
+            sessionId: "session-1",
+            clientViewport: { width: 1440, height: 900 },
+            event: { kind: "focus" }
+          }
+        }
+      ],
+      [
+        "start_video_stream",
+        {
+          authToken: "mobile-test-token",
+          clientId: "mobile-test-server",
+          request: { sessionId: "session-1" }
+        }
+      ],
+      [
+        "start_audio_stream",
+        {
+          authToken: "mobile-test-token",
+          clientId: "mobile-test-server",
+          request: {
+            sessionId: "session-1",
+            outputDeviceId: "default",
+            inputDeviceId: "microphone",
+            microphone: "enabled",
+            systemAudioMuted: false,
+            microphoneMuted: true
+          }
+        }
+      ],
+      [
+        "close_application_session",
+        {
+          authToken: "mobile-test-token",
+          clientId: "mobile-test-server",
+          sessionId: "session-1"
+        }
+      ]
     ]);
   });
 });

@@ -83,7 +83,7 @@
       permissions = await permissionService.list();
       selectedProfile = profiles[0] ?? null;
 
-      remote = new TauriRemoteService(selectedProfile?.authToken);
+      remote = new TauriRemoteService(selectedProfile?.authToken, selectedProfile?.id);
       health = await remote.health();
       capabilities = await remote.capabilities();
       apps = await remote.applications();

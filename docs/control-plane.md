@@ -36,8 +36,23 @@ Implemented:
 The control plane requires a shared token for every request. The token type
 redacts its debug output so accidental logs do not expose credentials.
 
-This is a Phase 2 baseline, not the final pairing model. Later security work
-must replace or extend it with explicit pairing and authorization policy.
+The shared token is the baseline authentication secret. Sensitive session,
+stream, and input service methods also require a paired client identity. A token
+holder without a known client id, or with a client id that is not in the server
+authorization policy, is denied before those controls run.
+
+Pairing is modeled as an explicit service-layer contract:
+
+- `pairing-request` records a pending client identity.
+- local/admin approval is the explicit user-action boundary that authorizes that
+  pending identity.
+- pending clients are not authorized until approved.
+
+This slice does not implement the final UI, QR-code, nearby-device, or native
+device-verification flow. The foreground command parser carries a caller-supplied
+client id only to exercise this policy in local integration tests; it is not an
+authenticated device proof and must not be treated as secure remote client
+identity.
 
 ## SSH Tunnel Contract
 
@@ -75,9 +90,12 @@ Server runtime config is persisted by the Rust service layer with
 - auth token
 - heartbeat interval
 - SSH tunnel settings
+- authorized paired client ids and labels
 
 The repository validates config before writing and reports corrupted files with
-a typed error.
+a typed error. Runtime pairing approvals are held by the in-memory control plane;
+persisting newly approved clients back through the config repository is future
+work.
 
 ## Foreground Listener
 
@@ -90,8 +108,9 @@ foreground integration testing. It currently supports:
 - `capabilities <token>`
 - `diagnostics <token>`
 - `applications <token>`
-- `create-session <token> <application_id> <width> <height>`
-- `sessions <token>`
+- `pairing-request <token> <client_id> <client_label>`
+- `create-session <token> <client_id> <application_id> <width> <height>`
+- `sessions <token> <client_id>`
 
 This is a foreground development listener, not the final daemon transport. It
 keeps the control-plane service boundary executable while the service manifest
@@ -114,11 +133,18 @@ Manual foreground smoke test:
 4. Send `applications <token>` and choose an `appN.id=...` value from the
    response. Application names are percent-escaped so each response remains one
    parseable line.
-5. Send `create-session <token> <application_id> 1280 720`. On Linux, when the
-   selected application was discovered from a `.desktop` entry with `Exec=`
-   metadata, this command triggers the native launch path and spawns that
-   command without a shell.
-6. Send `sessions <token>` to confirm the created session is active.
+5. Use a client id that is already authorized in the server config before
+   creating a session. To exercise the pending path, send
+   `pairing-request <token> <client_id> <client_label>` and confirm session
+   creation is still denied until an in-process local/admin service action
+   approves it. Approval is intentionally not exposed through the foreground
+   token channel until the final pairing UI/device-verification flow exists.
+6. With an authorized client id, send
+   `create-session <token> <client_id> <application_id> 1280 720`. On Linux,
+   when the selected application was discovered from a `.desktop` entry with
+   `Exec=` metadata, this command triggers the native launch path and spawns
+   that command without a shell.
+7. Send `sessions <token> <client_id>` to confirm the created session is active.
 
 ## Daemon Installation
 
@@ -167,21 +193,27 @@ persists profiles with:
 - remote port
 - control-plane auth token
 
+The Tauri client derives the local control-plane client id from the selected
+profile id for session, stream, and input commands. That profile id is a stable
+local policy identifier for the embedded service path, not cryptographic device
+proof.
+
 The current implementation uses a file-backed repository. A later Tauri service
 can move secret material to a platform keychain or encrypted store without
 changing the UI contract.
 
 The Tauri client exposes profile and server runtime commands from Rust. The UI
 does not write browser storage; it reads profiles through
-`list_connection_profiles` and uses the selected profile token for health,
-capability, and application discovery commands.
+`list_connection_profiles`, uses the selected profile token for health,
+capability, and application discovery commands, and sends the selected profile id
+as the paired-client policy id for sensitive controls.
 
 For the Phase 7 mobile-client test-server contract, Android and iOS use the
 same profile/token service boundary as the desktop client. The deterministic
-client path creates a remote service from the selected profile token and calls
-health, capabilities, applications, and active sessions. Native package launch,
-device setup, signing, and simulator/emulator coverage are release-runner or
-manual checks documented in `docs/mobile-client-test-server.md`.
+client path creates a remote service from the selected profile token and profile
+id, then calls health, capabilities, applications, and active sessions. Native
+package launch, device setup, signing, and simulator/emulator coverage are
+release-runner or manual checks documented in `docs/mobile-client-test-server.md`.
 
 ## Application Discovery
 

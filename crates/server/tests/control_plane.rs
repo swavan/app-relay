@@ -111,6 +111,19 @@ fn server_services_for_platform(platform: Platform, version: impl Into<String>) 
     ServerServices::new(platform, version)
 }
 
+fn paired_server_config() -> ServerConfig {
+    let mut config = ServerConfig::local("correct-token");
+    config.authorized_clients = vec![apprelay_core::AuthorizedClient::new(
+        "test-client",
+        "Test Client",
+    )];
+    config
+}
+
+fn paired_auth() -> ControlAuth {
+    ControlAuth::with_client_id("correct-token", "test-client")
+}
+
 #[cfg(unix)]
 fn unique_test_dir(name: &str) -> std::path::PathBuf {
     let nanos = std::time::SystemTime::now()
@@ -149,9 +162,9 @@ fn wait_for_path(path: &std::path::Path) {
 fn start_audio_stream_for_platform(platform: Platform) -> AudioStreamSession {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(platform, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,
@@ -181,7 +194,7 @@ fn start_audio_stream_for_platform(platform: Platform) -> AudioStreamSession {
 fn control_plane_rejects_unauthorized_requests() {
     let control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
 
     assert_eq!(
@@ -194,7 +207,7 @@ fn control_plane_rejects_unauthorized_requests() {
 fn control_plane_exposes_version_for_authorized_requests() {
     let control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Macos, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
 
     assert_eq!(
@@ -211,7 +224,7 @@ fn control_plane_exposes_version_for_authorized_requests() {
 fn control_plane_reports_linux_app_discovery_capability() {
     let control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
     let capabilities = control_plane
         .capabilities(&ControlAuth::new("correct-token"))
@@ -227,7 +240,7 @@ fn control_plane_reports_desktop_audio_capabilities() {
     for platform in [Platform::Linux, Platform::Macos, Platform::Windows] {
         let control_plane = ServerControlPlane::new(
             server_services_for_platform(platform, "integration-test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         );
         let capabilities = control_plane
             .capabilities(&ControlAuth::new("correct-token"))
@@ -246,7 +259,7 @@ fn control_plane_reports_desktop_audio_capabilities() {
 fn control_plane_reports_macos_app_discovery_capability() {
     let control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Macos, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
     let capabilities = control_plane
         .capabilities(&ControlAuth::new("correct-token"))
@@ -261,7 +274,7 @@ fn control_plane_reports_macos_app_discovery_capability() {
 fn control_plane_reports_telemetry_free_diagnostics() {
     let control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Macos, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
 
     let diagnostics = control_plane
@@ -280,7 +293,7 @@ fn control_plane_reports_telemetry_free_diagnostics() {
 fn control_plane_maps_unsupported_application_discovery_errors() {
     let control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Windows, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
 
     assert_eq!(
@@ -296,9 +309,9 @@ fn control_plane_maps_unsupported_application_discovery_errors() {
 fn control_plane_heartbeat_supports_reconnect_checks() {
     let control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
 
     let first = control_plane
         .heartbeat(&auth)
@@ -316,9 +329,9 @@ fn control_plane_heartbeat_supports_reconnect_checks() {
 fn control_plane_manages_application_session_lifecycle() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
 
     let session = control_plane
         .create_session(
@@ -373,9 +386,9 @@ fn control_plane_launches_linux_desktop_entry_session() {
 
     let mut control_plane = ServerControlPlane::new(
         ServerServices::with_linux_desktop_entry_roots("integration-test", vec![applications]),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,
@@ -440,9 +453,9 @@ fn control_plane_launches_macos_app_bundle_session() {
             vec![applications],
             open_command,
         ),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,
@@ -474,9 +487,9 @@ fn control_plane_launches_macos_app_bundle_session() {
 fn control_plane_authorizes_and_forwards_input_to_session() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,
@@ -528,7 +541,7 @@ fn control_plane_authorizes_and_forwards_input_to_session() {
 fn control_plane_rejects_unauthorized_input_requests() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
 
     assert_eq!(
@@ -548,12 +561,12 @@ fn control_plane_rejects_unauthorized_input_requests() {
 fn control_plane_rejects_input_for_unknown_session() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
 
     assert_eq!(
         control_plane.forward_input(
-            &ControlAuth::new("correct-token"),
+            &paired_auth(),
             ForwardInputRequest {
                 session_id: "session-unknown".to_string(),
                 client_viewport: ViewportSize::new(1280, 720),
@@ -570,9 +583,9 @@ fn control_plane_rejects_input_for_unknown_session() {
 fn control_plane_manages_video_stream_lifecycle() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,
@@ -633,9 +646,9 @@ fn control_plane_manages_video_stream_lifecycle() {
 fn control_plane_negotiates_video_stream() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,
@@ -699,9 +712,9 @@ fn control_plane_negotiates_video_stream() {
 fn control_plane_reconnects_and_resizes_video_stream() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,
@@ -767,9 +780,9 @@ fn control_plane_reconnects_and_resizes_video_stream() {
 fn control_plane_keeps_negotiated_video_encoding_coherent_after_resize() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,
@@ -833,9 +846,9 @@ fn control_plane_keeps_negotiated_video_encoding_coherent_after_resize() {
 fn control_plane_marks_stream_failed_when_session_closes() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,
@@ -896,9 +909,9 @@ fn control_plane_marks_stream_failed_when_session_closes() {
 fn control_plane_manages_audio_stream_independently_from_video() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,
@@ -967,9 +980,9 @@ fn control_plane_starts_audio_stream_on_desktop_platforms() {
     for platform in [Platform::Linux, Platform::Macos, Platform::Windows] {
         let mut control_plane = ServerControlPlane::new(
             server_services_for_platform(platform, "integration-test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         );
-        let auth = ControlAuth::new("correct-token");
+        let auth = paired_auth();
         let session = control_plane
             .create_session(
                 &auth,
@@ -1159,10 +1172,10 @@ fn control_plane_pipewire_capture_env_overrides_pw_record_arguments() {
         ]);
         ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "integration-test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         )
     };
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,
@@ -1254,10 +1267,10 @@ fn control_plane_pipewire_capture_uses_output_device_as_pw_record_target_fallbac
         ]);
         ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "integration-test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         )
     };
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,
@@ -1329,9 +1342,9 @@ fn control_plane_pipewire_capture_feature_does_not_affect_macos_or_windows() {
 fn control_plane_updates_audio_mute_and_devices() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,
@@ -1384,9 +1397,9 @@ fn control_plane_updates_audio_mute_and_devices() {
 fn control_plane_stops_audio_stream_when_session_closes() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
-        ServerConfig::local("correct-token"),
+        paired_server_config(),
     );
-    let auth = ControlAuth::new("correct-token");
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
             &auth,

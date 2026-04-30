@@ -30,6 +30,9 @@ export async function connectMobileClientToTestServer(
   if (profile.authToken.trim() === "") {
     throw new Error("mobile test server profile must include a control-plane auth token");
   }
+  if (profile.id.trim() === "") {
+    throw new Error("mobile test server profile must include a stable client id");
+  }
 
   const remote = createRemoteService(profile);
   const health = await remote.health();
@@ -54,5 +57,5 @@ export async function connectMobileClientToTestServer(
 }
 
 function createTauriProfileRemoteService(profile: ConnectionProfile): RemoteService {
-  return new TauriRemoteService(profile.authToken);
+  return new TauriRemoteService(profile.authToken, profile.id);
 }
