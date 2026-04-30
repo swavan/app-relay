@@ -475,6 +475,11 @@ Completed:
   redaction/no-secrets rules, and a beta release-notes known-limitations
   checklist without claiming production support, automatic telemetry, or
   automated crash upload
+- completed limited beta readiness checklist slice in
+  [`beta-readiness-checklist.md`](beta-readiness-checklist.md), mapping Phase 8
+  acceptance criteria to current evidence, release-runner/manual boundaries,
+  public beta blockers, and Phase 9 carry-forward work without marking Phase 8
+  or production/public beta readiness complete
 
 ## Phase 9: Production Release
 
