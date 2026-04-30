@@ -403,6 +403,12 @@ Completed:
   throttle interval, and Windows SCM scripts configure three 3 second restart
   actions with a 60 second failure reset; CI checks generated artifacts instead
   of crashing live services
+- install, upgrade, uninstall, and rollback behavior is documented as a
+  deterministic preflight plus release-runner/manual boundary for server
+  services and client packages; it ties native execution to generated service
+  plans, uninstall scripts, package configuration checks, and source-controlled
+  permission intent without claiming native package builds or supported-platform
+  install/uninstall execution in CI
 
 ## Phase 8: Security Review And Beta
 
