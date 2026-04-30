@@ -129,15 +129,22 @@ The server binary supports:
 - `apprelay-server uninstall-service-plan [linux|macos|windows]`
 - `apprelay-server uninstall-service [linux|macos|windows]`
 
-`service-plan` prints the platform manifest, config path, log path, and lifecycle
-commands. `install-service` writes the manifest or installer script to the
-platform service location and prints the start/status commands.
+`service-plan` prints the platform manifest, config path, log path, and
+lifecycle commands; the emitted manifest or script includes the service-manager
+crash recovery directives. `install-service` writes the manifest or installer
+script to the platform service location and prints the start/status commands.
 `uninstall-service-plan` prints the deterministic uninstall script path, target
 service manifest path, run command, and script contents. `uninstall-service`
 writes that uninstall script and prints the command to run it; it does not stop
 or delete services directly. Linux uses a user-level systemd unit, macOS uses a
 launchd agent, and Windows uses PowerShell scripts that register and unregister
 the native service with `sc.exe`.
+
+Crash recovery is policy-only in CI: Linux emits `Restart=on-failure`,
+`RestartSec=3`, and a 5-in-60-second start limit; macOS emits launchd
+`KeepAlive` with `SuccessfulExit=false` and `ThrottleInterval=3`; Windows emits
+SCM failure actions that restart after 3 seconds and reset after 60 seconds.
+Tests assert these generated artifacts without crashing installed services.
 
 ## Events
 
