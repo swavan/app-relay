@@ -932,12 +932,30 @@ impl DaemonServiceInstaller {
 
     fn linux_user_systemd_plan(&self) -> Result<ServiceInstallPlan, ServiceInstallError> {
         let home = home_dir()?;
-        Ok(self.linux_user_systemd_plan_for_home(&home))
+        Ok(self.linux_user_systemd_plan_for_paths(
+            &home,
+            &xdg_config_home(&home),
+            &xdg_state_home(&home),
+        ))
     }
 
+    #[cfg(test)]
     fn linux_user_systemd_plan_for_home(&self, home: &Path) -> ServiceInstallPlan {
-        let config_path = xdg_config_home(home).join("apprelay/server.conf");
-        let log_path = xdg_state_home(home).join("apprelay/server.log");
+        self.linux_user_systemd_plan_for_paths(
+            home,
+            &home.join(".config"),
+            &home.join(".local/state"),
+        )
+    }
+
+    fn linux_user_systemd_plan_for_paths(
+        &self,
+        home: &Path,
+        config_home: &Path,
+        state_home: &Path,
+    ) -> ServiceInstallPlan {
+        let config_path = config_home.join("apprelay/server.conf");
+        let log_path = state_home.join("apprelay/server.log");
         let manifest_path = home.join(".config/systemd/user/apprelay.service");
         let executable_path = display_path(&self.executable_path);
         let config_arg = display_path(&config_path);
@@ -974,11 +992,20 @@ WantedBy=default.target\n"
         &self,
     ) -> Result<ServiceUninstallPlan, ServiceInstallError> {
         let home = home_dir()?;
-        Ok(self.linux_user_systemd_uninstall_plan_for_home(&home))
+        Ok(self.linux_user_systemd_uninstall_plan_for_paths(&home, &xdg_config_home(&home)))
     }
 
+    #[cfg(test)]
     fn linux_user_systemd_uninstall_plan_for_home(&self, home: &Path) -> ServiceUninstallPlan {
-        let manifest_path = xdg_config_home(home).join("apprelay/uninstall-service.sh");
+        self.linux_user_systemd_uninstall_plan_for_paths(home, &home.join(".config"))
+    }
+
+    fn linux_user_systemd_uninstall_plan_for_paths(
+        &self,
+        home: &Path,
+        config_home: &Path,
+    ) -> ServiceUninstallPlan {
+        let manifest_path = config_home.join("apprelay/uninstall-service.sh");
         let service_manifest_path = home.join(".config/systemd/user/apprelay.service");
         let service_manifest_arg = shell_quote(&display_path(&service_manifest_path));
         let manifest_arg = shell_quote(&display_path(&manifest_path));
