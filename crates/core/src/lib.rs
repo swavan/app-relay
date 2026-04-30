@@ -2154,18 +2154,20 @@ impl ApplicationDiscovery for MacosApplicationDiscovery {
 
 fn parse_macos_app_bundle(path: &Path) -> Option<ApplicationSummary> {
     let info_plist = path.join("Contents/Info.plist");
-    let contents = fs::read_to_string(info_plist).ok()?;
-    let id = plist_string_value(&contents, "CFBundleIdentifier").or_else(|| {
+    let info = plist::Value::from_file(info_plist).ok()?;
+    let info = info.as_dictionary()?;
+
+    let id = plist_dictionary_string_value(info, "CFBundleIdentifier").or_else(|| {
         path.file_stem()
             .map(|value| value.to_string_lossy().into_owned())
     })?;
-    let name = plist_string_value(&contents, "CFBundleDisplayName")
-        .or_else(|| plist_string_value(&contents, "CFBundleName"))
+    let name = plist_dictionary_string_value(info, "CFBundleDisplayName")
+        .or_else(|| plist_dictionary_string_value(info, "CFBundleName"))
         .or_else(|| {
             path.file_stem()
                 .map(|value| value.to_string_lossy().into_owned())
         })?;
-    let icon = plist_string_value(&contents, "CFBundleIconFile");
+    let icon = plist_dictionary_string_value(info, "CFBundleIconFile");
 
     if id.trim().is_empty() || name.trim().is_empty() {
         return None;
@@ -2187,20 +2189,12 @@ fn parse_macos_app_bundle(path: &Path) -> Option<ApplicationSummary> {
     })
 }
 
-fn plist_string_value(contents: &str, key: &str) -> Option<String> {
-    let key_tag = format!("<key>{key}</key>");
-    let key_start = contents.find(&key_tag)?;
-    let after_key = &contents[key_start + key_tag.len()..];
-    let string_start = after_key.find("<string>")? + "<string>".len();
-    let after_string_start = &after_key[string_start..];
-    let string_end = after_string_start.find("</string>")?;
-    let value = after_string_start[..string_end].trim();
-
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
-    }
+fn plist_dictionary_string_value(info: &plist::Dictionary, key: &str) -> Option<String> {
+    info.get(key)
+        .and_then(|value| value.as_string())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -3232,6 +3226,10 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
 "#,
         )
         .expect("write info plist");
+        let broken_contents = root.join("Broken.app/Contents");
+        fs::create_dir_all(&broken_contents).expect("create broken app bundle");
+        fs::write(broken_contents.join("Info.plist"), b"not a plist")
+            .expect("write malformed info plist");
         fs::create_dir_all(root.join("Ignored.txt")).expect("create ignored non-app directory");
 
         let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
@@ -3289,6 +3287,53 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
                 icon: None,
                 launch: Some(ApplicationLaunch::MacosBundle {
                     bundle_path: root.join("Fallback.app").display().to_string(),
+                }),
+            }]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_application_discovery_reads_binary_info_plist() {
+        let root = unique_test_dir("macos-app-binary-plist");
+        let app_contents = root.join("Binary.app/Contents");
+        fs::create_dir_all(&app_contents).expect("create app bundle");
+
+        let mut info = plist::Dictionary::new();
+        info.insert(
+            "CFBundleIdentifier".to_string(),
+            plist::Value::String("dev.apprelay.binary".to_string()),
+        );
+        info.insert(
+            "CFBundleName".to_string(),
+            plist::Value::String("Binary Mac App".to_string()),
+        );
+        info.insert(
+            "CFBundleIconFile".to_string(),
+            plist::Value::String("BinaryIcon".to_string()),
+        );
+        plist::Value::Dictionary(info)
+            .to_file_binary(app_contents.join("Info.plist"))
+            .expect("write binary info plist");
+
+        let discovery = MacosApplicationDiscovery::new(vec![root.clone()]);
+        let applications = discovery
+            .available_applications()
+            .expect("discover macOS applications");
+
+        assert_eq!(
+            applications,
+            vec![ApplicationSummary {
+                id: "dev.apprelay.binary".to_string(),
+                name: "Binary Mac App".to_string(),
+                icon: Some(AppIcon {
+                    mime_type: "application/x-macos-icon-name".to_string(),
+                    bytes: Vec::new(),
+                    source: Some("BinaryIcon".to_string()),
+                }),
+                launch: Some(ApplicationLaunch::MacosBundle {
+                    bundle_path: root.join("Binary.app").display().to_string(),
                 }),
             }]
         );
