@@ -161,9 +161,11 @@ export interface RemoteService {
 
 export class TauriRemoteService implements RemoteService {
   private readonly authToken: string;
+  private readonly clientId: string;
 
-  constructor(authToken?: string) {
+  constructor(authToken?: string, clientId?: string) {
     this.authToken = authToken ?? "local-dev-token";
+    this.clientId = clientId ?? "local-dev-client";
   }
 
   async health(): Promise<HealthStatus> {
@@ -180,7 +182,8 @@ export class TauriRemoteService implements RemoteService {
 
   async activeSessions(): Promise<ApplicationSession[]> {
     return invoke<ApplicationSession[]>("active_application_sessions", {
-      authToken: this.authToken
+      authToken: this.authToken,
+      clientId: this.clientId
     });
   }
 
@@ -190,6 +193,7 @@ export class TauriRemoteService implements RemoteService {
   ): Promise<ApplicationSession> {
     return invoke<ApplicationSession>("create_application_session", {
       authToken: this.authToken,
+      clientId: this.clientId,
       request: { applicationId, viewport }
     });
   }
@@ -197,6 +201,7 @@ export class TauriRemoteService implements RemoteService {
   async resizeSession(sessionId: string, viewport: ViewportSize): Promise<ApplicationSession> {
     return invoke<ApplicationSession>("resize_application_session", {
       authToken: this.authToken,
+      clientId: this.clientId,
       request: { sessionId, viewport }
     });
   }
@@ -204,6 +209,7 @@ export class TauriRemoteService implements RemoteService {
   async closeSession(sessionId: string): Promise<ApplicationSession> {
     return invoke<ApplicationSession>("close_application_session", {
       authToken: this.authToken,
+      clientId: this.clientId,
       sessionId
     });
   }
@@ -215,6 +221,7 @@ export class TauriRemoteService implements RemoteService {
   ): Promise<InputDelivery> {
     return invoke<InputDelivery>("forward_input", {
       authToken: this.authToken,
+      clientId: this.clientId,
       request: { sessionId, clientViewport, event }
     });
   }
@@ -222,6 +229,7 @@ export class TauriRemoteService implements RemoteService {
   async startVideoStream(sessionId: string): Promise<VideoStreamSession> {
     return invoke<VideoStreamSession>("start_video_stream", {
       authToken: this.authToken,
+      clientId: this.clientId,
       request: { sessionId }
     });
   }
@@ -229,6 +237,7 @@ export class TauriRemoteService implements RemoteService {
   async stopVideoStream(streamId: string): Promise<VideoStreamSession> {
     return invoke<VideoStreamSession>("stop_video_stream", {
       authToken: this.authToken,
+      clientId: this.clientId,
       request: { streamId }
     });
   }
@@ -239,6 +248,7 @@ export class TauriRemoteService implements RemoteService {
   ): Promise<AudioStreamSession> {
     return invoke<AudioStreamSession>("start_audio_stream", {
       authToken: this.authToken,
+      clientId: this.clientId,
       request: { sessionId, ...options }
     });
   }
@@ -246,6 +256,7 @@ export class TauriRemoteService implements RemoteService {
   async stopAudioStream(streamId: string): Promise<AudioStreamSession> {
     return invoke<AudioStreamSession>("stop_audio_stream", {
       authToken: this.authToken,
+      clientId: this.clientId,
       request: { streamId }
     });
   }
@@ -256,6 +267,7 @@ export class TauriRemoteService implements RemoteService {
   ): Promise<AudioStreamSession> {
     return invoke<AudioStreamSession>("update_audio_stream", {
       authToken: this.authToken,
+      clientId: this.clientId,
       request: { streamId, ...update }
     });
   }
@@ -263,6 +275,7 @@ export class TauriRemoteService implements RemoteService {
   async audioStreamStatus(streamId: string): Promise<AudioStreamSession> {
     return invoke<AudioStreamSession>("audio_stream_status", {
       authToken: this.authToken,
+      clientId: this.clientId,
       streamId
     });
   }
@@ -270,6 +283,7 @@ export class TauriRemoteService implements RemoteService {
   async reconnectVideoStream(streamId: string): Promise<VideoStreamSession> {
     return invoke<VideoStreamSession>("reconnect_video_stream", {
       authToken: this.authToken,
+      clientId: this.clientId,
       request: { streamId }
     });
   }
@@ -281,6 +295,7 @@ export class TauriRemoteService implements RemoteService {
   ): Promise<VideoStreamSession> {
     return invoke<VideoStreamSession>("negotiate_video_stream", {
       authToken: this.authToken,
+      clientId: this.clientId,
       request: { streamId, clientAnswer, clientIceCandidates }
     });
   }
@@ -288,6 +303,7 @@ export class TauriRemoteService implements RemoteService {
   async videoStreamStatus(streamId: string): Promise<VideoStreamSession> {
     return invoke<VideoStreamSession>("video_stream_status", {
       authToken: this.authToken,
+      clientId: this.clientId,
       streamId
     });
   }

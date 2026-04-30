@@ -12,16 +12,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use apprelay_core::{
     ApplicationDiscovery, ApplicationLaunchBackendService, ApplicationSessionService,
-    CapabilityService, DefaultCapabilityService, DesktopEntryApplicationDiscovery, EventSink,
-    HealthService, InMemoryApplicationSessionService, InMemoryInputForwardingService,
-    InputForwardingService, MacosApplicationDiscovery, ServerConfig, ServerEvent, SessionPolicy,
-    StaticHealthService, UnsupportedApplicationDiscovery,
+    CapabilityService, ClientAuthorizationService, DefaultCapabilityService,
+    DesktopEntryApplicationDiscovery, EventSink, HealthService, InMemoryApplicationSessionService,
+    InMemoryClientAuthorizationService, InMemoryInputForwardingService, InputForwardingService,
+    MacosApplicationDiscovery, ServerConfig, ServerEvent, SessionPolicy, StaticHealthService,
+    UnsupportedApplicationDiscovery,
 };
 use apprelay_protocol::{
-    AppRelayError, ApplicationLaunch, ApplicationSession, ApplicationSummary, AudioStreamSession,
-    ControlAuth, ControlError, ControlResult, CreateSessionRequest, DiagnosticsBundle, Feature,
-    ForwardInputRequest, HealthStatus, HeartbeatStatus, InputDelivery, LaunchIntentStatus,
-    NegotiateVideoStreamRequest, Platform, PlatformCapability, ReconnectVideoStreamRequest,
+    AppRelayError, ApplicationLaunch, ApplicationSession, ApplicationSummary,
+    ApprovePairingRequest, AudioStreamSession, ControlAuth, ControlClientIdentity, ControlError,
+    ControlResult, CreateSessionRequest, DiagnosticsBundle, Feature, ForwardInputRequest,
+    HealthStatus, HeartbeatStatus, InputDelivery, LaunchIntentStatus, NegotiateVideoStreamRequest,
+    PairingRequest, PendingPairing, Platform, PlatformCapability, ReconnectVideoStreamRequest,
     ResizeSessionRequest, ServerVersion, StartAudioStreamRequest, StartVideoStreamRequest,
     StopAudioStreamRequest, StopVideoStreamRequest, UpdateAudioStreamRequest, VideoStreamSession,
     ViewportSize,
@@ -295,14 +297,18 @@ impl ApplicationDiscovery for ApplicationDiscoveryService {
 #[derive(Debug)]
 pub struct ServerControlPlane {
     services: ServerServices,
+    client_authorization: InMemoryClientAuthorizationService,
     config: ServerConfig,
     heartbeat_sequence: AtomicU64,
 }
 
 impl ServerControlPlane {
     pub fn new(services: ServerServices, config: ServerConfig) -> Self {
+        let client_authorization =
+            InMemoryClientAuthorizationService::new(config.authorized_clients.clone());
         Self {
             services,
+            client_authorization,
             config,
             heartbeat_sequence: AtomicU64::new(0),
         }
@@ -345,8 +351,31 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: CreateSessionRequest,
     ) -> ControlResult<ApplicationSession> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         self.services.create_session(request).map_err(Into::into)
+    }
+
+    pub fn request_pairing(
+        &mut self,
+        auth: &ControlAuth,
+        client: ControlClientIdentity,
+    ) -> ControlResult<PendingPairing> {
+        self.authorize(auth)?;
+        self.client_authorization
+            .request_pairing(PairingRequest { client })
+            .map_err(Into::into)
+    }
+
+    pub fn locally_approve_pairing(
+        &mut self,
+        request: ApprovePairingRequest,
+    ) -> ControlResult<apprelay_core::AuthorizedClient> {
+        let client = self
+            .client_authorization
+            .approve_pairing(request)
+            .map_err(ControlError::Service)?;
+        self.config.authorized_clients = self.client_authorization.authorized_clients();
+        Ok(client)
     }
 
     pub fn resize_session(
@@ -354,7 +383,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: ResizeSessionRequest,
     ) -> ControlResult<ApplicationSession> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         self.services.resize_session(request).map_err(Into::into)
     }
 
@@ -363,12 +392,12 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         session_id: &str,
     ) -> ControlResult<ApplicationSession> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         self.services.close_session(session_id).map_err(Into::into)
     }
 
     pub fn active_sessions(&self, auth: &ControlAuth) -> ControlResult<Vec<ApplicationSession>> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         Ok(self.services.active_sessions())
     }
 
@@ -377,7 +406,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: ForwardInputRequest,
     ) -> ControlResult<InputDelivery> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         self.services.forward_input(request).map_err(Into::into)
     }
 
@@ -386,7 +415,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StartVideoStreamRequest,
     ) -> ControlResult<VideoStreamSession> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         self.services
             .start_video_stream(request)
             .map_err(Into::into)
@@ -397,7 +426,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StopVideoStreamRequest,
     ) -> ControlResult<VideoStreamSession> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         self.services.stop_video_stream(request).map_err(Into::into)
     }
 
@@ -406,7 +435,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: ReconnectVideoStreamRequest,
     ) -> ControlResult<VideoStreamSession> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         self.services
             .reconnect_video_stream(request)
             .map_err(Into::into)
@@ -417,7 +446,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: NegotiateVideoStreamRequest,
     ) -> ControlResult<VideoStreamSession> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         self.services
             .negotiate_video_stream(request)
             .map_err(Into::into)
@@ -428,7 +457,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         stream_id: &str,
     ) -> ControlResult<VideoStreamSession> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         self.services
             .video_stream_status(stream_id)
             .map_err(Into::into)
@@ -439,7 +468,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StartAudioStreamRequest,
     ) -> ControlResult<AudioStreamSession> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         self.services
             .start_audio_stream(request)
             .map_err(Into::into)
@@ -450,7 +479,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StopAudioStreamRequest,
     ) -> ControlResult<AudioStreamSession> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         self.services.stop_audio_stream(request).map_err(Into::into)
     }
 
@@ -459,7 +488,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: UpdateAudioStreamRequest,
     ) -> ControlResult<AudioStreamSession> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         self.services
             .update_audio_stream(request)
             .map_err(Into::into)
@@ -470,7 +499,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         stream_id: &str,
     ) -> ControlResult<AudioStreamSession> {
-        self.authorize(auth)?;
+        self.authorize_paired_client(auth)?;
         self.services
             .audio_stream_status(stream_id)
             .map_err(Into::into)
@@ -492,6 +521,14 @@ impl ServerControlPlane {
         } else {
             Err(ControlError::Unauthorized)
         }
+    }
+
+    fn authorize_paired_client(&self, auth: &ControlAuth) -> Result<(), ControlError> {
+        self.authorize(auth)?;
+        self.client_authorization
+            .authorize_client(auth.client_id())
+            .map(|_| ())
+            .map_err(ControlError::Service)
     }
 }
 
@@ -625,7 +662,32 @@ impl ForegroundControlServer {
                     .available_applications(&auth)
                     .map(format_applications_response)
             }
+            "pairing-request" => {
+                let Some(client_id) = args.next() else {
+                    return "ERROR bad-request".to_string();
+                };
+                let Some(label) = args.next() else {
+                    return "ERROR bad-request".to_string();
+                };
+                if args.next().is_some() {
+                    return "ERROR bad-request".to_string();
+                }
+
+                self.control_plane
+                    .borrow_mut()
+                    .request_pairing(
+                        &auth,
+                        ControlClientIdentity {
+                            id: client_id.to_string(),
+                            label: label.replace("%20", " "),
+                        },
+                    )
+                    .map(format_pairing_request_response)
+            }
             "create-session" => {
+                let Some(client_id) = args.next() else {
+                    return "ERROR bad-request".to_string();
+                };
                 let Some(application_id) = args.next() else {
                     return "ERROR bad-request".to_string();
                 };
@@ -642,7 +704,7 @@ impl ForegroundControlServer {
                 self.control_plane
                     .borrow_mut()
                     .create_session(
-                        &auth,
+                        &ControlAuth::with_client_id(auth.token(), client_id),
                         CreateSessionRequest {
                             application_id: application_id.to_string(),
                             viewport: ViewportSize::new(width, height),
@@ -651,13 +713,16 @@ impl ForegroundControlServer {
                     .map(format_create_session_response)
             }
             "sessions" => {
+                let Some(client_id) = args.next() else {
+                    return "ERROR bad-request".to_string();
+                };
                 if args.next().is_some() {
                     return "ERROR bad-request".to_string();
                 }
 
                 self.control_plane
                     .borrow()
-                    .active_sessions(&auth)
+                    .active_sessions(&ControlAuth::with_client_id(auth.token(), client_id))
                     .map(format_sessions_response)
             }
             _ => return "ERROR unknown-operation".to_string(),
@@ -738,6 +803,16 @@ fn format_applications_response(mut applications: Vec<ApplicationSummary>) -> St
     }
 
     response
+}
+
+fn format_pairing_request_response(pending: PendingPairing) -> String {
+    format!(
+        "OK pairing-request id={} client_id={} label={} status={:?}",
+        line_token(&pending.request_id),
+        line_token(&pending.client.id),
+        line_token(&pending.client.label),
+        pending.status
+    )
 }
 
 fn format_create_session_response(session: ApplicationSession) -> String {
@@ -1296,6 +1371,19 @@ mod tests {
     use super::*;
     use apprelay_core::InMemoryEventSink;
 
+    fn paired_server_config() -> ServerConfig {
+        let mut config = ServerConfig::local("correct-token");
+        config.authorized_clients = vec![apprelay_core::AuthorizedClient::new(
+            "test-client",
+            "Test Client",
+        )];
+        config
+    }
+
+    fn paired_auth() -> ControlAuth {
+        ControlAuth::with_client_id("correct-token", "test-client")
+    }
+
     fn unique_test_dir(name: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1403,7 +1491,7 @@ mod tests {
     fn control_plane_rejects_bad_token() {
         let control_plane = ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         );
 
         assert_eq!(
@@ -1416,7 +1504,7 @@ mod tests {
     fn control_plane_returns_health_for_valid_token() {
         let control_plane = ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         );
 
         assert_eq!(
@@ -1429,7 +1517,7 @@ mod tests {
     fn control_plane_returns_authorized_diagnostics_without_token() {
         let control_plane = ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         );
 
         let diagnostics = control_plane
@@ -1446,9 +1534,9 @@ mod tests {
     fn control_plane_heartbeat_increments_sequence() {
         let control_plane = ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         );
-        let auth = ControlAuth::new("correct-token");
+        let auth = paired_auth();
 
         assert_eq!(
             control_plane.heartbeat(&auth),
@@ -1470,9 +1558,9 @@ mod tests {
     fn control_plane_creates_and_tracks_sessions() {
         let mut control_plane = ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         );
-        let auth = ControlAuth::new("correct-token");
+        let auth = paired_auth();
 
         let session = control_plane
             .create_session(
@@ -1492,9 +1580,9 @@ mod tests {
     fn control_plane_resizes_and_closes_sessions() {
         let mut control_plane = ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         );
-        let auth = ControlAuth::new("correct-token");
+        let auth = paired_auth();
         let session = control_plane
             .create_session(
                 &auth,
@@ -1530,7 +1618,7 @@ mod tests {
     fn control_plane_rejects_unauthorized_session_requests() {
         let mut control_plane = ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         );
 
         assert_eq!(
@@ -1546,10 +1634,152 @@ mod tests {
     }
 
     #[test]
+    fn control_plane_rejects_create_session_for_unknown_client_identity() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        );
+
+        assert_eq!(
+            control_plane.create_session(
+                &ControlAuth::new("correct-token"),
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "client identity is required".to_string()
+            )))
+        );
+        assert_eq!(
+            control_plane.create_session(
+                &ControlAuth::with_client_id("correct-token", "unknown-client"),
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "client unknown-client is not paired".to_string()
+            )))
+        );
+    }
+
+    #[test]
+    fn control_plane_requires_explicit_pairing_approval_before_session_creation() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        );
+        let auth = ControlAuth::with_client_id("correct-token", "client-1");
+        let pending = control_plane
+            .request_pairing(
+                &auth,
+                ControlClientIdentity {
+                    id: "client-1".to_string(),
+                    label: "Laptop".to_string(),
+                },
+            )
+            .expect("request pairing");
+
+        assert_eq!(
+            control_plane.create_session(
+                &auth,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "client client-1 is not paired".to_string()
+            )))
+        );
+
+        let approved = control_plane
+            .locally_approve_pairing(ApprovePairingRequest {
+                request_id: pending.request_id,
+            })
+            .expect("approve pairing");
+        assert_eq!(approved.id, "client-1");
+
+        let session = control_plane
+            .create_session(
+                &auth,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create session after approval");
+        assert_eq!(session.application_id, "terminal");
+    }
+
+    #[test]
+    fn control_plane_requires_paired_client_for_sensitive_session_controls() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config(),
+        );
+        let auth = paired_auth();
+        let unpaired_auth = ControlAuth::new("correct-token");
+        let session = control_plane
+            .create_session(
+                &auth,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create session");
+        let expected = Err(ControlError::Service(AppRelayError::PermissionDenied(
+            "client identity is required".to_string(),
+        )));
+
+        assert_eq!(control_plane.active_sessions(&unpaired_auth), expected);
+        assert_eq!(
+            control_plane.resize_session(
+                &unpaired_auth,
+                ResizeSessionRequest {
+                    session_id: session.id.clone(),
+                    viewport: apprelay_protocol::ViewportSize::new(1440, 900),
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "client identity is required".to_string()
+            )))
+        );
+        assert_eq!(
+            control_plane.forward_input(
+                &unpaired_auth,
+                ForwardInputRequest {
+                    session_id: session.id.clone(),
+                    client_viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                    event: apprelay_protocol::InputEvent::Focus,
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "client identity is required".to_string()
+            )))
+        );
+        assert_eq!(
+            control_plane.start_video_stream(
+                &unpaired_auth,
+                StartVideoStreamRequest {
+                    session_id: session.id,
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "client identity is required".to_string()
+            )))
+        );
+    }
+
+    #[test]
     fn foreground_server_handles_health_request() {
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         ));
         let mut events = InMemoryEventSink::default();
 
@@ -1569,7 +1799,7 @@ mod tests {
     fn foreground_server_rejects_bad_token() {
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         ));
         let mut events = InMemoryEventSink::default();
 
@@ -1589,7 +1819,7 @@ mod tests {
     fn foreground_server_rejects_unknown_operation() {
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         ));
         let mut events = InMemoryEventSink::default();
 
@@ -1604,7 +1834,7 @@ mod tests {
     fn foreground_server_reports_linux_application_launch_capability() {
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         ));
         let mut events = InMemoryEventSink::default();
 
@@ -1625,7 +1855,7 @@ mod tests {
     fn foreground_server_returns_diagnostics_bundle() {
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         ));
         let mut events = InMemoryEventSink::default();
 
@@ -1647,7 +1877,7 @@ mod tests {
     fn foreground_server_reports_macos_application_launch_capability() {
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::new(Platform::Macos, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         ));
         let mut events = InMemoryEventSink::default();
 
@@ -1676,7 +1906,7 @@ mod tests {
         .expect("write desktop entry");
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::with_linux_desktop_entry_roots("test", vec![applications]),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         ));
         let mut events = InMemoryEventSink::default();
 
@@ -1694,6 +1924,103 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn foreground_server_records_pairing_request() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request("pairing-request correct-token client-1 Laptop", &mut events),
+            "OK pairing-request id=pairing-1 client_id=client-1 label=Laptop status=PendingUserApproval"
+        );
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::RequestAuthorized {
+                operation: "pairing-request".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn foreground_server_rejects_bad_pairing_request_args() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request("pairing-request correct-token client-1", &mut events),
+            "ERROR bad-request"
+        );
+        assert_eq!(events.events(), &[]);
+    }
+
+    #[test]
+    fn foreground_server_rejects_unauthorized_pairing_request() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request("pairing-request wrong-token client-1 Laptop", &mut events),
+            "ERROR unauthorized"
+        );
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::RequestRejected {
+                operation: "pairing-request".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn foreground_server_does_not_allow_pairing_self_approval() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request("pairing-request correct-token client-1 Laptop", &mut events),
+            "OK pairing-request id=pairing-1 client_id=client-1 label=Laptop status=PendingUserApproval"
+        );
+        assert_eq!(
+            server.handle_request("pairing-approve correct-token pairing-1", &mut events),
+            "ERROR unknown-operation"
+        );
+        assert_eq!(
+            server.handle_request(
+                "create-session correct-token client-1 terminal 1280 720",
+                &mut events,
+            ),
+            "ERROR service client client-1 is not paired"
+        );
+
+        let approved = server
+            .control_plane
+            .borrow_mut()
+            .locally_approve_pairing(ApprovePairingRequest {
+                request_id: "pairing-1".to_string(),
+            })
+            .expect("local approve pairing");
+        assert_eq!(approved.id, "client-1");
+
+        assert_eq!(
+            server.handle_request(
+                "create-session correct-token client-1 terminal 1280 720",
+                &mut events,
+            ),
+            "OK create-session id=session-1 app=terminal window_id=window-session-1 window_title=terminal selection=existing-window launch=attached viewport=1280x720"
+        );
     }
 
     #[test]
@@ -1721,12 +2048,14 @@ mod tests {
         .expect("write desktop entry");
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::with_linux_desktop_entry_roots("test", vec![applications]),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         ));
         let mut events = InMemoryEventSink::default();
 
-        let response =
-            server.handle_request("create-session correct-token fake 1280 720", &mut events);
+        let response = server.handle_request(
+            "create-session correct-token test-client fake 1280 720",
+            &mut events,
+        );
 
         wait_for_path(&marker);
         assert_eq!(
@@ -1751,13 +2080,13 @@ mod tests {
     fn foreground_server_rejects_bad_create_session_args() {
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         ));
         let mut events = InMemoryEventSink::default();
 
         assert_eq!(
             server.handle_request(
-                "create-session correct-token terminal wide 720",
+                "create-session correct-token test-client terminal wide 720",
                 &mut events
             ),
             "ERROR bad-request"
@@ -1769,12 +2098,15 @@ mod tests {
     fn foreground_server_rejects_unauthorized_create_session() {
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            ServerConfig::local("correct-token"),
+            paired_server_config(),
         ));
         let mut events = InMemoryEventSink::default();
 
         assert_eq!(
-            server.handle_request("create-session wrong-token terminal 1280 720", &mut events),
+            server.handle_request(
+                "create-session wrong-token test-client terminal 1280 720",
+                &mut events,
+            ),
             "ERROR unauthorized"
         );
         assert_eq!(

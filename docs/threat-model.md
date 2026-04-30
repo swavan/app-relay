@@ -42,8 +42,9 @@ Out of scope for this document:
 
 ## Trust Boundaries
 
-- Client UI to Tauri Rust commands: frontend code passes profile tokens and
-  session requests into Rust-owned service boundaries.
+- Client UI to Tauri Rust commands: frontend code passes profile tokens, stable
+  profile ids, and session requests into Rust-owned service boundaries. Profile
+  ids are local policy identifiers, not cryptographic device proof.
 - Client host to server host: control calls cross the network or SSH tunnel and
   must be authenticated before reaching server behavior.
 - Foreground TCP listener to control-plane service: line-oriented commands are
@@ -91,8 +92,10 @@ Out of scope for this document:
 
 ## Major Threats And Current Mitigations
 
-- Unknown client controls the server: every control-plane service method
-  requires `ControlAuth`; bad tokens return `Unauthorized`.
+- Unknown client controls sessions, streams, or input: every control-plane
+  service method requires `ControlAuth`; bad tokens return `Unauthorized`.
+  Sensitive session, stream, and input methods additionally require a paired
+  client id, and unknown or missing client identities are denied by default.
 - Token leaks through debug logs or diagnostics: `ControlAuth` redacts debug
   output, and diagnostics report `secrets=redacted` without exposing the
   configured token.
@@ -128,15 +131,22 @@ Out of scope for this document:
 
 ## Explicit Gaps And Assumptions
 
-- Pairing is not implemented. The current shared token is a Phase 2 baseline;
-  beta must require explicit user action before a client is trusted.
-- Authorization policy is still coarse. The server authenticates a token but
-  does not yet model per-client identity, revocation, device naming, or
-  least-privilege capabilities.
-- Server-side application authorization is incomplete. The Tauri command path
-  checks client-side application grants before session creation, but the server
-  default policy and foreground `create-session` path still allow any valid
-  token holder to request any discovered application.
+- Pairing UI/device verification is not implemented. The service layer now
+  models pending pairing requests and explicit local/admin approval, but there
+  is no final user interface, QR-code, nearby-device, or native
+  device-verification flow.
+- Authorization policy is still coarse. The server now models paired client
+  identity separately from the shared token for sensitive session, stream, and
+  input methods, but revocation, richer device naming, and least-privilege
+  client capabilities remain future work.
+- Server-side application authorization remains incomplete. The foreground
+  `create-session` path now requires a client id that appears in the local
+  policy, but the foreground parser's caller-supplied id is not authenticated
+  device proof. It still uses the existing session application policy and does
+  not persist per-client application grants on the server.
+- Runtime pairing approvals are in-memory. Admin-authored authorized clients can
+  be stored in server config, but persisting newly approved runtime pairings
+  through the config repository remains future work.
 - Token storage is file-backed. Moving client secrets to a platform keychain or
   encrypted store remains future work.
 - Local network exposure guidance is not complete. Beta docs must state when

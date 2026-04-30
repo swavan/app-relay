@@ -26,9 +26,10 @@ use std::process::{Child, Command, Stdio};
 
 use apprelay_protocol::{
     AppIcon, AppRelayError, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession,
-    ApplicationSummary, CreateSessionRequest, Feature, HealthStatus, LaunchIntentStatus, Platform,
-    PlatformCapability, ResizeIntentStatus, ResizeSessionRequest, SelectedWindow, SessionState,
-    ViewportSize, WindowResizeIntent, WindowSelectionMethod,
+    ApplicationSummary, ApprovePairingRequest, ControlClientIdentity, CreateSessionRequest,
+    Feature, HealthStatus, LaunchIntentStatus, PairingRequest, PairingRequestStatus,
+    PendingPairing, Platform, PlatformCapability, ResizeIntentStatus, ResizeSessionRequest,
+    SelectedWindow, SessionState, ViewportSize, WindowResizeIntent, WindowSelectionMethod,
 };
 
 pub trait HealthService {
@@ -280,6 +281,54 @@ pub trait ServerConfigRepository {
 
 pub trait EventSink {
     fn record(&mut self, event: ServerEvent);
+}
+
+pub trait ClientAuthorizationService {
+    fn request_pairing(&mut self, request: PairingRequest)
+        -> Result<PendingPairing, AppRelayError>;
+    fn approve_pairing(
+        &mut self,
+        request: ApprovePairingRequest,
+    ) -> Result<AuthorizedClient, AppRelayError>;
+    fn authorize_client(&self, client_id: Option<&str>) -> Result<AuthorizedClient, AppRelayError>;
+    fn authorized_clients(&self) -> Vec<AuthorizedClient>;
+    fn pending_pairings(&self) -> Vec<PendingPairing>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizedClient {
+    pub id: String,
+    pub label: String,
+}
+
+impl AuthorizedClient {
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.id.trim().is_empty() {
+            return Err(ConfigError::MissingAuthorizedClientId);
+        }
+
+        if self.label.trim().is_empty() {
+            return Err(ConfigError::MissingAuthorizedClientLabel);
+        }
+
+        Ok(())
+    }
+}
+
+impl From<ControlClientIdentity> for AuthorizedClient {
+    fn from(identity: ControlClientIdentity) -> Self {
+        Self {
+            id: identity.id,
+            label: identity.label,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -759,6 +808,7 @@ pub struct ServerConfig {
     pub auth_token: String,
     pub heartbeat_interval_millis: u64,
     pub ssh_tunnel: SshTunnelConfig,
+    pub authorized_clients: Vec<AuthorizedClient>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1128,6 +1178,135 @@ impl Default for InMemoryApplicationSessionService {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InMemoryClientAuthorizationService {
+    authorized_clients: Vec<AuthorizedClient>,
+    pending_pairings: Vec<PendingPairing>,
+    next_pairing_sequence: u64,
+}
+
+impl InMemoryClientAuthorizationService {
+    pub fn new(authorized_clients: Vec<AuthorizedClient>) -> Self {
+        Self {
+            authorized_clients,
+            pending_pairings: Vec::new(),
+            next_pairing_sequence: 1,
+        }
+    }
+
+    fn validate_identity(identity: &ControlClientIdentity) -> Result<(), AppRelayError> {
+        if identity.id.trim().is_empty() {
+            return Err(AppRelayError::InvalidRequest(
+                "client id is required".to_string(),
+            ));
+        }
+
+        if identity.label.trim().is_empty() {
+            return Err(AppRelayError::InvalidRequest(
+                "client label is required".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn next_request_id(&mut self) -> String {
+        let id = format!("pairing-{}", self.next_pairing_sequence);
+        self.next_pairing_sequence += 1;
+        id
+    }
+}
+
+impl Default for InMemoryClientAuthorizationService {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+impl ClientAuthorizationService for InMemoryClientAuthorizationService {
+    fn request_pairing(
+        &mut self,
+        request: PairingRequest,
+    ) -> Result<PendingPairing, AppRelayError> {
+        Self::validate_identity(&request.client)?;
+
+        if self
+            .authorized_clients
+            .iter()
+            .any(|client| client.id == request.client.id)
+        {
+            return Ok(PendingPairing {
+                request_id: "already-authorized".to_string(),
+                client: request.client,
+                status: PairingRequestStatus::Approved,
+            });
+        }
+
+        if let Some(existing) = self
+            .pending_pairings
+            .iter()
+            .find(|pending| pending.client.id == request.client.id)
+        {
+            return Ok(existing.clone());
+        }
+
+        let pending = PendingPairing {
+            request_id: self.next_request_id(),
+            client: request.client,
+            status: PairingRequestStatus::PendingUserApproval,
+        };
+        self.pending_pairings.push(pending.clone());
+        Ok(pending)
+    }
+
+    fn approve_pairing(
+        &mut self,
+        request: ApprovePairingRequest,
+    ) -> Result<AuthorizedClient, AppRelayError> {
+        let Some(index) = self
+            .pending_pairings
+            .iter()
+            .position(|pending| pending.request_id == request.request_id)
+        else {
+            return Err(AppRelayError::NotFound(format!(
+                "pairing request {} was not found",
+                request.request_id
+            )));
+        };
+
+        let pending = self.pending_pairings.remove(index);
+        let authorized = AuthorizedClient::from(pending.client);
+        self.authorized_clients
+            .retain(|client| client.id != authorized.id);
+        self.authorized_clients.push(authorized.clone());
+        Ok(authorized)
+    }
+
+    fn authorize_client(&self, client_id: Option<&str>) -> Result<AuthorizedClient, AppRelayError> {
+        let Some(client_id) = client_id else {
+            return Err(AppRelayError::PermissionDenied(
+                "client identity is required".to_string(),
+            ));
+        };
+
+        self.authorized_clients
+            .iter()
+            .find(|client| client.id == client_id)
+            .cloned()
+            .ok_or_else(|| {
+                AppRelayError::PermissionDenied(format!("client {client_id} is not paired"))
+            })
+    }
+
+    fn authorized_clients(&self) -> Vec<AuthorizedClient> {
+        self.authorized_clients.clone()
+    }
+
+    fn pending_pairings(&self) -> Vec<PendingPairing> {
+        self.pending_pairings.clone()
+    }
+}
+
 impl ApplicationSessionService for InMemoryApplicationSessionService {
     fn create_session(
         &mut self,
@@ -1201,6 +1380,7 @@ impl ServerConfig {
             auth_token: auth_token.into(),
             heartbeat_interval_millis: 5_000,
             ssh_tunnel: SshTunnelConfig::localhost(),
+            authorized_clients: Vec::new(),
         }
     }
 
@@ -1215,6 +1395,10 @@ impl ServerConfig {
 
         if self.heartbeat_interval_millis == 0 {
             return Err(ConfigError::InvalidHeartbeatInterval);
+        }
+
+        for client in &self.authorized_clients {
+            client.validate()?;
         }
 
         self.ssh_tunnel.validate()
@@ -1264,6 +1448,8 @@ pub enum ConfigError {
     MissingSshUser,
     MissingSshHost,
     InvalidSshPort,
+    MissingAuthorizedClientId,
+    MissingAuthorizedClientLabel,
 }
 
 #[derive(Debug)]
@@ -1343,6 +1529,10 @@ fn encode_server_config(config: &ServerConfig) -> String {
         format!("ssh_host={}", encode_field(&config.ssh_tunnel.host)),
         format!("ssh_local_port={}", config.ssh_tunnel.local_port),
         format!("ssh_remote_port={}", config.ssh_tunnel.remote_port),
+        format!(
+            "authorized_clients={}",
+            encode_authorized_clients(&config.authorized_clients)
+        ),
     ]
     .join("\n")
         + "\n"
@@ -1357,6 +1547,7 @@ fn decode_server_config(contents: &str) -> Result<ServerConfig, ConfigStoreError
     let mut ssh_host = None;
     let mut ssh_local_port = None;
     let mut ssh_remote_port = None;
+    let mut authorized_clients = Vec::new();
 
     for line in contents
         .lines()
@@ -1378,6 +1569,7 @@ fn decode_server_config(contents: &str) -> Result<ServerConfig, ConfigStoreError
             "ssh_host" => ssh_host = Some(decode_config_field(value)?),
             "ssh_local_port" => ssh_local_port = Some(parse_config_number(value)?),
             "ssh_remote_port" => ssh_remote_port = Some(parse_config_number(value)?),
+            "authorized_clients" => authorized_clients = decode_authorized_clients(value)?,
             _ => return Err(ConfigStoreError::CorruptedStore),
         }
     }
@@ -1394,7 +1586,81 @@ fn decode_server_config(contents: &str) -> Result<ServerConfig, ConfigStoreError
             local_port: ssh_local_port.ok_or(ConfigStoreError::CorruptedStore)?,
             remote_port: ssh_remote_port.ok_or(ConfigStoreError::CorruptedStore)?,
         },
+        authorized_clients,
     })
+}
+
+fn encode_authorized_clients(clients: &[AuthorizedClient]) -> String {
+    clients
+        .iter()
+        .map(|client| {
+            format!(
+                "{}:{}",
+                encode_config_list_field(&client.id),
+                encode_config_list_field(&client.label)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn decode_authorized_clients(value: &str) -> Result<Vec<AuthorizedClient>, ConfigStoreError> {
+    if value.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    value
+        .split(',')
+        .map(|encoded| {
+            let Some((id, label)) = encoded.split_once(':') else {
+                return Err(ConfigStoreError::CorruptedStore);
+            };
+            let client = AuthorizedClient {
+                id: decode_config_list_field(id)?,
+                label: decode_config_list_field(label)?,
+            };
+            client.validate()?;
+            Ok(client)
+        })
+        .collect()
+}
+
+fn encode_config_list_field(value: &str) -> String {
+    encode_field(value)
+        .replace('%', "%25")
+        .replace(',', "%2C")
+        .replace(':', "%3A")
+}
+
+fn decode_config_list_field(value: &str) -> Result<String, ConfigStoreError> {
+    let mut decoded = String::new();
+    let mut chars = value.chars().peekable();
+
+    while let Some(character) = chars.next() {
+        if character != '%' {
+            decoded.push(character);
+            continue;
+        }
+
+        let Some(first) = chars.next() else {
+            return Err(ConfigStoreError::CorruptedStore);
+        };
+        let Some(second) = chars.next() else {
+            return Err(ConfigStoreError::CorruptedStore);
+        };
+        match (first, second) {
+            ('2', '5') => decoded.push('%'),
+            ('2', 'C') => decoded.push(','),
+            ('3', 'A') => decoded.push(':'),
+            _ => {
+                decoded.push('%');
+                decoded.push(first);
+                decoded.push(second);
+            }
+        }
+    }
+
+    decode_config_field(&decoded)
 }
 
 fn parse_config_number<T>(value: &str) -> Result<T, ConfigStoreError>
@@ -2065,12 +2331,24 @@ mod tests {
         config.ssh_tunnel.host = "workstation.local".to_string();
         config.ssh_tunnel.local_port = 8787;
         config.ssh_tunnel.remote_port = 9797;
+        config.authorized_clients = vec![AuthorizedClient::new("client-1", "Test Client")];
 
         repository.save(&config).expect("save server config");
 
         assert_eq!(repository.load().expect("load server config"), config);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn server_config_rejects_invalid_authorized_client() {
+        let mut config = ServerConfig::local("test-token");
+        config.authorized_clients = vec![AuthorizedClient::new(" ", "Test Client")];
+
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::MissingAuthorizedClientId)
+        );
     }
 
     #[test]
@@ -2257,6 +2535,56 @@ event=request_authorized operation=health\n"
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn client_authorization_denies_unknown_clients_by_default() {
+        let service = InMemoryClientAuthorizationService::default();
+
+        assert_eq!(
+            service.authorize_client(Some("client-1")),
+            Err(AppRelayError::PermissionDenied(
+                "client client-1 is not paired".to_string()
+            ))
+        );
+        assert_eq!(
+            service.authorize_client(None),
+            Err(AppRelayError::PermissionDenied(
+                "client identity is required".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn client_pairing_requires_explicit_approval_before_authorization() {
+        let mut service = InMemoryClientAuthorizationService::default();
+        let pending = service
+            .request_pairing(PairingRequest {
+                client: ControlClientIdentity {
+                    id: "client-1".to_string(),
+                    label: "Laptop".to_string(),
+                },
+            })
+            .expect("request pairing");
+
+        assert_eq!(pending.request_id, "pairing-1");
+        assert_eq!(pending.status, PairingRequestStatus::PendingUserApproval);
+        assert_eq!(
+            service.authorize_client(Some("client-1")),
+            Err(AppRelayError::PermissionDenied(
+                "client client-1 is not paired".to_string()
+            ))
+        );
+
+        let approved = service
+            .approve_pairing(ApprovePairingRequest {
+                request_id: pending.request_id,
+            })
+            .expect("approve pairing");
+
+        assert_eq!(approved, AuthorizedClient::new("client-1", "Laptop"));
+        assert_eq!(service.authorize_client(Some("client-1")), Ok(approved));
+        assert!(service.pending_pairings().is_empty());
     }
 
     #[test]

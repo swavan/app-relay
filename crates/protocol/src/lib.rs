@@ -346,6 +346,7 @@ impl std::error::Error for AppRelayError {}
 #[derive(Clone, Eq, PartialEq)]
 pub struct ControlAuth {
     token: String,
+    client_id: Option<String>,
 }
 
 impl std::fmt::Debug for ControlAuth {
@@ -353,6 +354,7 @@ impl std::fmt::Debug for ControlAuth {
         formatter
             .debug_struct("ControlAuth")
             .field("token", &"<redacted>")
+            .field("client_id", &self.client_id)
             .finish()
     }
 }
@@ -361,12 +363,54 @@ impl ControlAuth {
     pub fn new(token: impl Into<String>) -> Self {
         Self {
             token: token.into(),
+            client_id: None,
+        }
+    }
+
+    pub fn with_client_id(token: impl Into<String>, client_id: impl Into<String>) -> Self {
+        Self {
+            token: token.into(),
+            client_id: Some(client_id.into()),
         }
     }
 
     pub fn token(&self) -> &str {
         &self.token
     }
+
+    pub fn client_id(&self) -> Option<&str> {
+        self.client_id.as_deref()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ControlClientIdentity {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PairingRequest {
+    pub client: ControlClientIdentity,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PairingRequestStatus {
+    PendingUserApproval,
+    Approved,
+    Denied,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingPairing {
+    pub request_id: String,
+    pub client: ControlClientIdentity,
+    pub status: PairingRequestStatus,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApprovePairingRequest {
+    pub request_id: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -452,7 +496,19 @@ mod tests {
         let auth = ControlAuth::new("secret");
 
         assert_eq!(auth.token(), "secret");
-        assert_eq!(format!("{auth:?}"), "ControlAuth { token: \"<redacted>\" }");
+        assert_eq!(auth.client_id(), None);
+        assert_eq!(
+            format!("{auth:?}"),
+            "ControlAuth { token: \"<redacted>\", client_id: None }"
+        );
+    }
+
+    #[test]
+    fn control_auth_can_carry_client_identity_separately_from_token() {
+        let auth = ControlAuth::with_client_id("secret", "client-1");
+
+        assert_eq!(auth.token(), "secret");
+        assert_eq!(auth.client_id(), Some("client-1"));
     }
 
     #[test]

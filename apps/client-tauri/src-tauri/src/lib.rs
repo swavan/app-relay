@@ -5,7 +5,7 @@ mod audio_stream;
 mod video_stream;
 
 use apprelay_core::{
-    ApplicationPermission, ApplicationPermissionRepository, ConnectionProfile,
+    ApplicationPermission, ApplicationPermissionRepository, AuthorizedClient, ConnectionProfile,
     ConnectionProfileRepository, FileApplicationPermissionRepository,
     FileConnectionProfileRepository, ServerConfig,
 };
@@ -211,10 +211,13 @@ fn server_applications(auth_token: String) -> Result<Vec<AppSummaryDto>, String>
 }
 
 #[tauri::command]
-fn active_application_sessions(auth_token: String) -> Result<Vec<ApplicationSessionDto>, String> {
+fn active_application_sessions(
+    auth_token: String,
+    client_id: String,
+) -> Result<Vec<ApplicationSessionDto>, String> {
     with_control_plane(|control_plane| {
         control_plane
-            .active_sessions(&ControlAuth::new(auth_token))
+            .active_sessions(&paired_auth(auth_token, client_id))
             .map(|sessions| sessions.into_iter().map(Into::into).collect())
     })
 }
@@ -222,13 +225,14 @@ fn active_application_sessions(auth_token: String) -> Result<Vec<ApplicationSess
 #[tauri::command]
 fn create_application_session(
     auth_token: String,
+    client_id: String,
     request: CreateSessionRequestDto,
 ) -> Result<ApplicationSessionDto, String> {
     ensure_application_allowed(&request.application_id)?;
 
     with_control_plane(|control_plane| {
         control_plane
-            .create_session(&ControlAuth::new(auth_token), request.into())
+            .create_session(&paired_auth(auth_token, client_id), request.into())
             .map(Into::into)
     })
 }
@@ -236,11 +240,12 @@ fn create_application_session(
 #[tauri::command]
 fn resize_application_session(
     auth_token: String,
+    client_id: String,
     request: ResizeSessionRequestDto,
 ) -> Result<ApplicationSessionDto, String> {
     with_control_plane(|control_plane| {
         control_plane
-            .resize_session(&ControlAuth::new(auth_token), request.into())
+            .resize_session(&paired_auth(auth_token, client_id), request.into())
             .map(Into::into)
     })
 }
@@ -248,11 +253,12 @@ fn resize_application_session(
 #[tauri::command]
 fn close_application_session(
     auth_token: String,
+    client_id: String,
     session_id: String,
 ) -> Result<ApplicationSessionDto, String> {
     with_control_plane(|control_plane| {
         control_plane
-            .close_session(&ControlAuth::new(auth_token), &session_id)
+            .close_session(&paired_auth(auth_token, client_id), &session_id)
             .map(Into::into)
     })
 }
@@ -260,10 +266,11 @@ fn close_application_session(
 #[tauri::command]
 fn forward_input(
     auth_token: String,
+    client_id: String,
     request: ForwardInputRequest,
 ) -> Result<InputDelivery, String> {
     with_control_plane(|control_plane| {
-        control_plane.forward_input(&ControlAuth::new(auth_token), request)
+        control_plane.forward_input(&paired_auth(auth_token, client_id), request)
     })
 }
 
@@ -310,11 +317,32 @@ fn control_plane() -> &'static Mutex<ServerControlPlane> {
 fn new_control_plane() -> ServerControlPlane {
     let auth_token =
         std::env::var("APPRELAY_TOKEN").unwrap_or_else(|_| "local-dev-token".to_string());
+    let mut config = ServerConfig::local(auth_token);
+    config.authorized_clients = local_authorized_clients();
 
-    ServerControlPlane::new(
-        ServerServices::for_current_platform(),
-        ServerConfig::local(auth_token),
-    )
+    ServerControlPlane::new(ServerServices::for_current_platform(), config)
+}
+
+fn paired_auth(auth_token: String, client_id: String) -> ControlAuth {
+    ControlAuth::with_client_id(auth_token, client_id)
+}
+
+fn local_authorized_clients() -> Vec<AuthorizedClient> {
+    let mut clients = profile_repository()
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|profile| AuthorizedClient::new(profile.id, profile.label))
+        .collect::<Vec<_>>();
+
+    if clients.iter().all(|client| client.id != "local-dev-client") {
+        clients.push(AuthorizedClient::new(
+            "local-dev-client",
+            "Local Dev Client",
+        ));
+    }
+
+    clients
 }
 
 fn data_dir() -> PathBuf {
@@ -663,5 +691,13 @@ mod tests {
         };
 
         assert_eq!(icon_data_url(&icon), None);
+    }
+
+    #[test]
+    fn paired_auth_carries_client_id_separately_from_token() {
+        let auth = paired_auth("token".to_string(), "profile-1".to_string());
+
+        assert_eq!(auth.token(), "token");
+        assert_eq!(auth.client_id(), Some("profile-1"));
     }
 }
