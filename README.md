@@ -16,6 +16,8 @@ desktop applications from a mobile or desktop client.
 - `docs/signed-release-artifact-policy.md`: Phase 8 beta signed artifact policy
 - `docs/beta-feedback-process.md`: Phase 8 beta feedback, crash reporting, and
   release-notes gate
+- `docs/beta-readiness-checklist.md`: Phase 8 limited beta readiness review
+  record
 - `docs/roadmap.md`: phase-by-phase production release plan
 
 ## Current Phase
