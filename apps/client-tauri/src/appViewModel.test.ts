@@ -135,6 +135,29 @@ describe("buildAppViewModel", () => {
     });
   });
 
+  it("uses fallback labels for non-web image icon data", () => {
+    const viewModel = buildAppViewModel({
+      ...baseInput,
+      apps: [
+        {
+          id: "terminal",
+          name: "Terminal",
+          icon: {
+            mimeType: "image/icns",
+            dataUrl: "data:image/icns;base64,aWNucw==",
+            source: "Contents/Resources/Terminal.icns",
+          },
+        },
+      ],
+    });
+
+    expect(viewModel.apps[0].iconView).toEqual({
+      kind: "label",
+      label: "TE",
+      title: "Contents/Resources/Terminal.icns",
+    });
+  });
+
   it("labels apps without launch metadata as attach targets", () => {
     const viewModel = buildAppViewModel({
       ...baseInput,
