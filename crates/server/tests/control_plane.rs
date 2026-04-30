@@ -1066,16 +1066,14 @@ fn control_plane_pipewire_capture_uses_output_device_as_pw_record_target_fallbac
     fs::set_permissions(&script_path, permissions).expect("script permissions");
 
     let mut control_plane = {
-        let _env = PipeWireCaptureEnvGuard::set_and_clear(
-            &[
-                ("APPRELAY_PIPEWIRE_CAPTURE", "1".to_string()),
-                (
-                    "APPRELAY_PIPEWIRE_CAPTURE_COMMAND",
-                    script_path.to_string_lossy().to_string(),
-                ),
-            ],
-            &["APPRELAY_PIPEWIRE_CAPTURE_TARGET"],
-        );
+        let _env = PipeWireCaptureEnvGuard::set(&[
+            ("APPRELAY_PIPEWIRE_CAPTURE", "1".to_string()),
+            (
+                "APPRELAY_PIPEWIRE_CAPTURE_COMMAND",
+                script_path.to_string_lossy().to_string(),
+            ),
+            ("APPRELAY_PIPEWIRE_CAPTURE_TARGET", String::new()),
+        ]);
         ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "integration-test"),
             ServerConfig::local("correct-token"),
