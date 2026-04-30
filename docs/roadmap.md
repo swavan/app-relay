@@ -389,6 +389,11 @@ Completed:
 - server daemon install/uninstall lifecycle planning is explicit for Linux,
   macOS, and Windows; the CLI can print and write deterministic uninstall
   scripts without executing service-manager commands directly
+- mobile client test-server contract proves the Android/iOS-targeted client
+  path uses a configured profile token for health, capability, application, and
+  active-session control-plane calls; native device, emulator, simulator,
+  signing, and package launch checks remain documented release-runner/manual
+  boundaries
 
 ## Phase 8: Security Review And Beta
 
