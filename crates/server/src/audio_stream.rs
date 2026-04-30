@@ -71,6 +71,18 @@ impl Default for AudioStreamControl {
 fn audio_backend_for_platform(platform: Platform) -> AudioBackendService {
     #[cfg(feature = "pipewire-capture")]
     if platform == Platform::Linux {
+        #[cfg(all(not(test), target_os = "linux"))]
+        if pipewire_capture_enabled_from_env() {
+            return AudioBackendService::for_platform_with_native_readiness(
+                platform,
+                AudioBackendNativeReadiness::with_linux_pipewire_command_capture(
+                    std::env::var("APPRELAY_PIPEWIRE_CAPTURE_COMMAND")
+                        .unwrap_or_else(|_| "pw-record".to_string()),
+                    std::env::var("APPRELAY_PIPEWIRE_CAPTURE_TARGET").ok(),
+                ),
+            );
+        }
+
         return AudioBackendService::for_platform_with_native_readiness(
             platform,
             AudioBackendNativeReadiness::with_linux_pipewire_capture_adapter_boundary(),
@@ -78,4 +90,12 @@ fn audio_backend_for_platform(platform: Platform) -> AudioBackendService {
     }
 
     AudioBackendService::for_platform(platform)
+}
+
+#[cfg(all(feature = "pipewire-capture", not(test), target_os = "linux"))]
+fn pipewire_capture_enabled_from_env() -> bool {
+    matches!(
+        std::env::var("APPRELAY_PIPEWIRE_CAPTURE").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    )
 }
