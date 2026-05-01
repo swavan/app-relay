@@ -2325,7 +2325,18 @@ impl CapabilityService for DefaultCapabilityService {
                     unsupported_reason,
                 ),
             },
-            PlatformCapability::unsupported(self.platform, Feature::MouseInput, unsupported_reason),
+            match self.platform {
+                Platform::Macos => PlatformCapability::supported_with_reason(
+                    self.platform,
+                    Feature::MouseInput,
+                    "macOS pointer input targets native selected windows through osascript and requires Accessibility permission",
+                ),
+                _ => PlatformCapability::unsupported(
+                    self.platform,
+                    Feature::MouseInput,
+                    unsupported_reason,
+                ),
+            },
         ]
     }
 }
@@ -3058,7 +3069,7 @@ mod tests {
     }
 
     #[test]
-    fn macos_capabilities_support_keyboard_but_not_mouse_input() {
+    fn macos_capabilities_support_keyboard_and_mouse_input() {
         let service = DefaultCapabilityService::new(Platform::Macos);
         let capabilities = service.platform_capabilities();
         let keyboard = capabilities
@@ -3074,7 +3085,12 @@ mod tests {
         assert!(keyboard.reason.as_deref().is_some_and(
             |reason| reason.contains("System Events") && reason.contains("Accessibility")
         ));
-        assert!(!mouse.supported);
+        assert!(mouse.supported);
+        assert!(mouse
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("native selected windows")
+                && reason.contains("Accessibility")));
     }
 
     #[test]

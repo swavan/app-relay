@@ -125,7 +125,7 @@ impl ServerServices {
             },
         );
         services.input_forwarding =
-            InMemoryInputForwardingService::new(InputBackendService::MacosKeyboard {
+            InMemoryInputForwardingService::new(InputBackendService::MacosNativeInput {
                 osascript_command,
             });
         services
@@ -156,7 +156,7 @@ impl ServerServices {
     ) -> Self {
         let mut services = Self::new(Platform::Macos, version);
         services.input_forwarding =
-            InMemoryInputForwardingService::new(InputBackendService::MacosKeyboard {
+            InMemoryInputForwardingService::new(InputBackendService::MacosNativeInput {
                 osascript_command,
             });
         services
@@ -396,7 +396,7 @@ fn resize_backend_for_platform(platform: Platform) -> WindowResizeBackendService
 
 fn input_backend_for_platform(platform: Platform) -> InputBackendService {
     match platform {
-        Platform::Macos => InputBackendService::MacosKeyboard {
+        Platform::Macos => InputBackendService::MacosNativeInput {
             osascript_command: PathBuf::from("/usr/bin/osascript"),
         },
         Platform::Linux

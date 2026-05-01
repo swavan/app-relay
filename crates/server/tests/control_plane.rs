@@ -272,7 +272,7 @@ fn control_plane_reports_macos_app_discovery_capability() {
 }
 
 #[test]
-fn control_plane_reports_macos_keyboard_but_not_mouse_capabilities() {
+fn control_plane_reports_macos_keyboard_and_mouse_capabilities() {
     let control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Macos, "integration-test"),
         paired_server_config(),
@@ -295,7 +295,10 @@ fn control_plane_reports_macos_keyboard_but_not_mouse_capabilities() {
             |reason| reason.contains("System Events") && reason.contains("Accessibility")
         )
     );
-    assert!(!mouse.supported);
+    assert!(mouse.supported);
+    assert!(mouse.reason.as_deref().is_some_and(|reason| reason
+        .contains("native selected windows")
+        && reason.contains("Accessibility")));
 }
 
 #[test]
@@ -821,9 +824,135 @@ fn control_plane_forwards_macos_keyboard_input_to_native_backend() {
 }
 
 #[test]
-fn control_plane_reports_macos_pointer_input_as_unsupported() {
+#[cfg(unix)]
+fn control_plane_forwards_macos_pointer_input_to_native_backend() {
+    let root = unique_test_dir("control-plane-macos-pointer");
+    let applications = root.join("Applications");
+    let app_contents = applications.join("Fake.app/Contents");
+    std::fs::create_dir_all(&app_contents).expect("create app bundle");
+    std::fs::write(
+        app_contents.join("Info.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.fake</string>
+  <key>CFBundleDisplayName</key>
+  <string>Fake Mac App</string>
+</dict>
+</plist>
+"#,
+    )
+    .expect("write info plist");
+    let open_marker = root.join("open-marker");
+    let open_command = root.join("fake-open");
+    write_executable_script(
+        &open_command,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" \"$2\" > {}\n",
+            open_marker.display()
+        ),
+    );
+    let input_marker = root.join("input-marker");
+    let osascript = root.join("fake-osascript");
+    write_executable_script(
+        &osascript,
+        &format!(
+            "#!/bin/sh\nprintf 'CALL\\n' >> {}\nprintf '%s\\n' \"$@\" >> {}\nprintf '88\\tNative Fake Window\\n'\n",
+            input_marker.display(),
+            input_marker.display()
+        ),
+    );
     let mut control_plane = ServerControlPlane::new(
-        server_services_for_platform(Platform::Macos, "integration-test"),
+        ServerServices::with_macos_application_roots_open_and_osascript_commands(
+            "integration-test",
+            vec![applications],
+            open_command,
+            osascript,
+        ),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "dev.apprelay.fake".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+
+    wait_for_path(&open_marker);
+    assert_eq!(
+        session.selected_window.selection_method,
+        WindowSelectionMethod::NativeWindow
+    );
+    assert_eq!(session.selected_window.id, "macos-window-session-1-88");
+
+    control_plane
+        .forward_input(
+            &auth,
+            ForwardInputRequest {
+                session_id: session.id.clone(),
+                client_viewport: ViewportSize::new(1280, 720),
+                event: InputEvent::Focus,
+            },
+        )
+        .expect("focus input");
+
+    for event in [
+        InputEvent::PointerMove {
+            position: ClientPoint::new(10.0, 20.0),
+        },
+        InputEvent::PointerButton {
+            position: ClientPoint::new(640.0, 360.0),
+            button: PointerButton::Primary,
+            action: ButtonAction::Press,
+        },
+        InputEvent::PointerScroll {
+            position: ClientPoint::new(641.0, 361.0),
+            delta_x: 2,
+            delta_y: -3,
+        },
+        InputEvent::PointerDrag {
+            from: ClientPoint::new(100.0, 120.0),
+            to: ClientPoint::new(200.0, 220.0),
+            button: PointerButton::Primary,
+        },
+    ] {
+        let delivery = control_plane
+            .forward_input(
+                &auth,
+                ForwardInputRequest {
+                    session_id: session.id.clone(),
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event,
+                },
+            )
+            .expect("forward pointer input");
+        assert_eq!(delivery.status, InputDeliveryStatus::Delivered);
+    }
+
+    let script_args = std::fs::read_to_string(&input_marker).expect("read input marker");
+    assert!(script_args.contains("JavaScript"));
+    assert!(script_args.contains("dev.apprelay.fake"));
+    assert!(script_args.contains("88"));
+    assert!(script_args.contains("move"));
+    assert!(script_args.contains("button"));
+    assert!(script_args.contains("scroll"));
+    assert!(script_args.contains("drag"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn control_plane_rejects_macos_pointer_input_without_native_window() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::with_macos_input_osascript_command(
+            "integration-test",
+            std::path::PathBuf::from("unused-osascript"),
+        ),
         paired_server_config(),
     );
     let auth = paired_auth();
@@ -854,16 +983,14 @@ fn control_plane_reports_macos_pointer_input_as_unsupported() {
             ForwardInputRequest {
                 session_id: session.id,
                 client_viewport: ViewportSize::new(1280, 720),
-                event: InputEvent::PointerButton {
-                    position: ClientPoint::new(640.0, 360.0),
-                    button: PointerButton::Primary,
-                    action: ButtonAction::Press,
+                event: InputEvent::PointerMove {
+                    position: ClientPoint::new(10.0, 10.0),
                 },
             },
         ),
-        Err(ControlError::Service(AppRelayError::unsupported(
-            Platform::Macos,
-            Feature::MouseInput
+        Err(ControlError::Service(AppRelayError::InvalidRequest(
+            "macOS pointer input requires a native selected window for session session-1"
+                .to_string()
         )))
     );
 }
