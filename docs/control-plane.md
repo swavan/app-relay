@@ -50,6 +50,11 @@ Pairing is modeled as an explicit service-layer contract:
 - `pairing-revoke` removes an already authorized client from the active
   authorization set through the foreground shared-token channel. This is a
   source/local limited beta convenience path, not a distinct admin credential.
+- sessions created by a paired client are tracked as owned by that client, and
+  session-scoped controls are limited to the owning paired client.
+- revocation closes sessions owned by the revoked client through the same close
+  path used by explicit session shutdown so input focus and stream controls are
+  cleaned up.
 
 This slice does not implement the final UI, QR-code, nearby-device, or native
 device-verification flow. The foreground command parser carries a caller-supplied
@@ -161,9 +166,9 @@ Manual foreground smoke test:
 9. Send `close-session <token> <client_id> <session_id>` to close the session.
 10. Send `pairing-revoke <token> <client_id>` to remove the client from the
     active authorization set and confirm later sensitive calls from that client
-    return `ERROR service client <client_id> is not paired`. Revocation blocks
-    future sensitive commands from that client id; it does not currently tear
-    down already active sessions, streams, or input state.
+    return `ERROR service client <client_id> is not paired`. Revocation also
+    closes active sessions owned by that client and emits session-close audit
+    events for those teardown actions.
 
 ## Daemon Installation
 

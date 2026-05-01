@@ -4,6 +4,7 @@ mod audio_stream;
 mod video_stream;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -444,6 +445,7 @@ pub struct ServerControlPlane {
     client_authorization: InMemoryClientAuthorizationService,
     config: ServerConfig,
     heartbeat_sequence: AtomicU64,
+    session_owners: HashMap<String, String>,
 }
 
 impl ServerControlPlane {
@@ -455,6 +457,7 @@ impl ServerControlPlane {
             client_authorization,
             config,
             heartbeat_sequence: AtomicU64::new(0),
+            session_owners: HashMap::new(),
         }
     }
 
@@ -495,8 +498,14 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: CreateSessionRequest,
     ) -> ControlResult<ApplicationSession> {
-        self.authorize_paired_client(auth)?;
-        self.services.create_session(request).map_err(Into::into)
+        let client = self.authorize_paired_client(auth)?;
+        let session = self
+            .services
+            .create_session(request)
+            .map_err(ControlError::from)?;
+        self.session_owners
+            .insert(session.id.clone(), client.id.clone());
+        Ok(session)
     }
 
     pub fn request_pairing(
@@ -526,12 +535,8 @@ impl ServerControlPlane {
         &mut self,
         request: RevokeClientRequest,
     ) -> ControlResult<apprelay_core::AuthorizedClient> {
-        let client = self
-            .client_authorization
-            .revoke_client(request)
-            .map_err(ControlError::Service)?;
-        self.config.authorized_clients = self.client_authorization.authorized_clients();
-        Ok(client)
+        self.locally_revoke_client_with_teardown(request)
+            .map(|(client, _)| client)
     }
 
     pub fn revoke_client(
@@ -543,12 +548,58 @@ impl ServerControlPlane {
         self.locally_revoke_client(request)
     }
 
+    fn revoke_client_with_teardown(
+        &mut self,
+        auth: &ControlAuth,
+        request: RevokeClientRequest,
+    ) -> ControlResult<(apprelay_core::AuthorizedClient, Vec<ApplicationSession>)> {
+        self.authorize(auth)?;
+        self.locally_revoke_client_with_teardown(request)
+    }
+
+    fn locally_revoke_client_with_teardown(
+        &mut self,
+        request: RevokeClientRequest,
+    ) -> ControlResult<(apprelay_core::AuthorizedClient, Vec<ApplicationSession>)> {
+        let client = self
+            .client_authorization
+            .revoke_client(request)
+            .map_err(ControlError::Service)?;
+        self.config.authorized_clients = self.client_authorization.authorized_clients();
+        let closed_sessions = self.close_sessions_owned_by(&client.id)?;
+        Ok((client, closed_sessions))
+    }
+
+    fn close_sessions_owned_by(
+        &mut self,
+        client_id: &str,
+    ) -> ControlResult<Vec<ApplicationSession>> {
+        let session_ids = self
+            .session_owners
+            .iter()
+            .filter(|(_, owner_client_id)| *owner_client_id == client_id)
+            .map(|(session_id, _)| session_id.clone())
+            .collect::<Vec<_>>();
+        let mut closed_sessions = Vec::new();
+
+        for session_id in session_ids {
+            match self.services.close_session(&session_id) {
+                Ok(session) => closed_sessions.push(session),
+                Err(AppRelayError::NotFound(_)) => {}
+                Err(error) => return Err(ControlError::Service(error)),
+            }
+            self.session_owners.remove(&session_id);
+        }
+
+        Ok(closed_sessions)
+    }
+
     pub fn resize_session(
         &mut self,
         auth: &ControlAuth,
         request: ResizeSessionRequest,
     ) -> ControlResult<ApplicationSession> {
-        self.authorize_paired_client(auth)?;
+        self.authorize_session_owner(auth, &request.session_id)?;
         self.services.resize_session(request).map_err(Into::into)
     }
 
@@ -557,13 +608,22 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         session_id: &str,
     ) -> ControlResult<ApplicationSession> {
-        self.authorize_paired_client(auth)?;
-        self.services.close_session(session_id).map_err(Into::into)
+        self.authorize_session_owner(auth, session_id)?;
+        let session = self
+            .services
+            .close_session(session_id)
+            .map_err(ControlError::from)?;
+        Ok(session)
     }
 
     pub fn active_sessions(&self, auth: &ControlAuth) -> ControlResult<Vec<ApplicationSession>> {
-        self.authorize_paired_client(auth)?;
-        Ok(self.services.active_sessions())
+        let client = self.authorize_paired_client(auth)?;
+        Ok(self
+            .services
+            .active_sessions()
+            .into_iter()
+            .filter(|session| self.client_owns_session(&client.id, &session.id))
+            .collect())
     }
 
     pub fn forward_input(
@@ -571,7 +631,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: ForwardInputRequest,
     ) -> ControlResult<InputDelivery> {
-        self.authorize_paired_client(auth)?;
+        self.authorize_session_owner(auth, &request.session_id)?;
         self.services.forward_input(request).map_err(Into::into)
     }
 
@@ -579,8 +639,11 @@ impl ServerControlPlane {
         &self,
         auth: &ControlAuth,
     ) -> ControlResult<Option<ActiveInputFocus>> {
-        self.authorize_paired_client(auth)?;
-        Ok(self.services.active_input_focus())
+        let client = self.authorize_paired_client(auth)?;
+        Ok(self
+            .services
+            .active_input_focus()
+            .filter(|focus| self.client_owns_session(&client.id, &focus.session_id)))
     }
 
     pub fn start_video_stream(
@@ -588,7 +651,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StartVideoStreamRequest,
     ) -> ControlResult<VideoStreamSession> {
-        self.authorize_paired_client(auth)?;
+        self.authorize_session_owner(auth, &request.session_id)?;
         self.services
             .start_video_stream(request)
             .map_err(Into::into)
@@ -599,7 +662,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StopVideoStreamRequest,
     ) -> ControlResult<VideoStreamSession> {
-        self.authorize_paired_client(auth)?;
+        self.authorize_video_stream_owner(auth, &request.stream_id)?;
         self.services.stop_video_stream(request).map_err(Into::into)
     }
 
@@ -608,7 +671,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: ReconnectVideoStreamRequest,
     ) -> ControlResult<VideoStreamSession> {
-        self.authorize_paired_client(auth)?;
+        self.authorize_video_stream_owner(auth, &request.stream_id)?;
         self.services
             .reconnect_video_stream(request)
             .map_err(Into::into)
@@ -619,7 +682,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: NegotiateVideoStreamRequest,
     ) -> ControlResult<VideoStreamSession> {
-        self.authorize_paired_client(auth)?;
+        self.authorize_video_stream_owner(auth, &request.stream_id)?;
         self.services
             .negotiate_video_stream(request)
             .map_err(Into::into)
@@ -630,7 +693,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         stream_id: &str,
     ) -> ControlResult<VideoStreamSession> {
-        self.authorize_paired_client(auth)?;
+        self.authorize_video_stream_owner(auth, stream_id)?;
         self.services
             .video_stream_status(stream_id)
             .map_err(Into::into)
@@ -640,8 +703,13 @@ impl ServerControlPlane {
         &mut self,
         auth: &ControlAuth,
     ) -> ControlResult<Vec<VideoStreamSession>> {
-        self.authorize_paired_client(auth)?;
-        Ok(self.services.active_video_streams())
+        let client = self.authorize_paired_client(auth)?;
+        Ok(self
+            .services
+            .active_video_streams()
+            .into_iter()
+            .filter(|stream| self.client_owns_session(&client.id, &stream.session_id))
+            .collect())
     }
 
     pub fn start_audio_stream(
@@ -649,7 +717,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StartAudioStreamRequest,
     ) -> ControlResult<AudioStreamSession> {
-        self.authorize_paired_client(auth)?;
+        self.authorize_session_owner(auth, &request.session_id)?;
         self.services
             .start_audio_stream(request)
             .map_err(Into::into)
@@ -660,7 +728,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StopAudioStreamRequest,
     ) -> ControlResult<AudioStreamSession> {
-        self.authorize_paired_client(auth)?;
+        self.authorize_audio_stream_owner(auth, &request.stream_id)?;
         self.services.stop_audio_stream(request).map_err(Into::into)
     }
 
@@ -669,7 +737,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: UpdateAudioStreamRequest,
     ) -> ControlResult<AudioStreamSession> {
-        self.authorize_paired_client(auth)?;
+        self.authorize_audio_stream_owner(auth, &request.stream_id)?;
         self.services
             .update_audio_stream(request)
             .map_err(Into::into)
@@ -680,7 +748,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         stream_id: &str,
     ) -> ControlResult<AudioStreamSession> {
-        self.authorize_paired_client(auth)?;
+        self.authorize_audio_stream_owner(auth, stream_id)?;
         self.services
             .audio_stream_status(stream_id)
             .map_err(Into::into)
@@ -690,8 +758,13 @@ impl ServerControlPlane {
         &self,
         auth: &ControlAuth,
     ) -> ControlResult<Vec<AudioStreamSession>> {
-        self.authorize_paired_client(auth)?;
-        Ok(self.services.active_audio_streams())
+        let client = self.authorize_paired_client(auth)?;
+        Ok(self
+            .services
+            .active_audio_streams()
+            .into_iter()
+            .filter(|stream| self.client_owns_session(&client.id, &stream.session_id))
+            .collect())
     }
 
     pub fn heartbeat(&self, auth: &ControlAuth) -> ControlResult<HeartbeatStatus> {
@@ -712,12 +785,87 @@ impl ServerControlPlane {
         }
     }
 
-    fn authorize_paired_client(&self, auth: &ControlAuth) -> Result<(), ControlError> {
+    fn authorize_paired_client(
+        &self,
+        auth: &ControlAuth,
+    ) -> Result<apprelay_core::AuthorizedClient, ControlError> {
         self.authorize(auth)?;
         self.client_authorization
             .authorize_client(auth.client_id())
-            .map(|_| ())
             .map_err(ControlError::Service)
+    }
+
+    fn authorize_session_owner(
+        &self,
+        auth: &ControlAuth,
+        session_id: &str,
+    ) -> Result<apprelay_core::AuthorizedClient, ControlError> {
+        let client = self.authorize_paired_client(auth)?;
+        if self.client_owns_session(&client.id, session_id) {
+            return Ok(client);
+        }
+
+        if self.session_owners.contains_key(session_id) {
+            return Err(ControlError::Service(AppRelayError::PermissionDenied(
+                format!(
+                    "client {} is not authorized for session {}",
+                    client.id, session_id
+                ),
+            )));
+        }
+
+        Ok(client)
+    }
+
+    fn authorize_video_stream_owner(
+        &mut self,
+        auth: &ControlAuth,
+        stream_id: &str,
+    ) -> Result<apprelay_core::AuthorizedClient, ControlError> {
+        let client = self.authorize_paired_client(auth)?;
+        let stream = self
+            .services
+            .video_stream_status(stream_id)
+            .map_err(ControlError::Service)?;
+        if self.client_owns_session(&client.id, &stream.session_id) {
+            return Ok(client);
+        }
+
+        Err(ControlError::Service(AppRelayError::PermissionDenied(
+            format!(
+                "client {} is not authorized for session {}",
+                client.id, stream.session_id
+            ),
+        )))
+    }
+
+    fn authorize_audio_stream_owner(
+        &self,
+        auth: &ControlAuth,
+        stream_id: &str,
+    ) -> Result<apprelay_core::AuthorizedClient, ControlError> {
+        let client = self.authorize_paired_client(auth)?;
+        let stream = self
+            .services
+            .audio_stream_status(stream_id)
+            .map_err(ControlError::Service)?;
+        if self.client_owns_session(&client.id, &stream.session_id) {
+            return Ok(client);
+        }
+
+        Err(ControlError::Service(AppRelayError::PermissionDenied(
+            format!(
+                "client {} is not authorized for session {}",
+                client.id, stream.session_id
+            ),
+        )))
+    }
+
+    fn client_owns_session(&self, client_id: &str, session_id: &str) -> bool {
+        matches!(
+            self.session_owners.get(session_id),
+            Some(owner_client_id) if owner_client_id == client_id
+        )
     }
 }
 
@@ -895,17 +1043,22 @@ impl ForegroundControlServer {
                 }
 
                 let client_id = client_id.to_string();
-                match self.control_plane.borrow_mut().revoke_client(
+                match self.control_plane.borrow_mut().revoke_client_with_teardown(
                     &auth,
                     RevokeClientRequest {
                         client_id: client_id.clone(),
                     },
                 ) {
-                    Ok(client) => {
-                        let event = ServerEvent::ClientRevoked {
+                    Ok((client, closed_sessions)) => {
+                        let mut audit_events = vec![ServerEvent::ClientRevoked {
                             client_id: client.id.clone(),
-                        };
-                        Ok((format_pairing_revoke_response(client), vec![event]))
+                        }];
+                        audit_events.extend(
+                            closed_sessions
+                                .iter()
+                                .map(|session| session_closed_event(&client.id, session)),
+                        );
+                        Ok((format_pairing_revoke_response(client), audit_events))
                     }
                     Err(ControlError::Service(error)) => {
                         events.record(ServerEvent::ClientRevocationFailed {
@@ -1742,6 +1895,15 @@ mod tests {
         config
     }
 
+    fn two_client_server_config() -> ServerConfig {
+        let mut config = ServerConfig::local("correct-token");
+        config.authorized_clients = vec![
+            apprelay_core::AuthorizedClient::new("client-1", "Client One"),
+            apprelay_core::AuthorizedClient::new("client-2", "Client Two"),
+        ];
+        config
+    }
+
     fn paired_auth() -> ControlAuth {
         ControlAuth::with_client_id("correct-token", "test-client")
     }
@@ -2125,42 +2287,150 @@ mod tests {
     }
 
     #[test]
-    fn control_plane_revoke_blocks_future_commands_but_does_not_close_active_sessions() {
+    fn control_plane_revoke_closes_only_revoked_client_sessions() {
         let mut control_plane = ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
-            paired_server_config(),
+            two_client_server_config(),
         );
-        let auth = paired_auth();
-        let session = control_plane
+        let auth_1 = ControlAuth::with_client_id("correct-token", "client-1");
+        let auth_2 = ControlAuth::with_client_id("correct-token", "client-2");
+        let revoked_session = control_plane
             .create_session(
-                &auth,
+                &auth_1,
                 CreateSessionRequest {
                     application_id: "terminal".to_string(),
                     viewport: apprelay_protocol::ViewportSize::new(1280, 720),
                 },
             )
-            .expect("create session before revocation");
+            .expect("create revoked client session before revocation");
+        let retained_session = control_plane
+            .create_session(
+                &auth_2,
+                CreateSessionRequest {
+                    application_id: "browser".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1024, 768),
+                },
+            )
+            .expect("create retained client session before revocation");
 
         control_plane
             .locally_revoke_client(RevokeClientRequest {
-                client_id: "test-client".to_string(),
+                client_id: "client-1".to_string(),
             })
             .expect("revoke paired client");
 
         assert_eq!(
             control_plane.services.active_sessions(),
-            vec![session.clone()]
+            vec![retained_session]
         );
         assert_eq!(
             control_plane.resize_session(
-                &auth,
+                &auth_1,
                 ResizeSessionRequest {
-                    session_id: session.id,
+                    session_id: revoked_session.id,
                     viewport: apprelay_protocol::ViewportSize::new(800, 600),
                 },
             ),
             Err(ControlError::Service(AppRelayError::PermissionDenied(
-                "client test-client is not paired".to_string()
+                "client client-1 is not paired".to_string()
+            )))
+        );
+        assert!(control_plane
+            .create_session(
+                &auth_2,
+                CreateSessionRequest {
+                    application_id: "editor".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                },
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn control_plane_rejects_cross_client_session_controls() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            two_client_server_config(),
+        );
+        let owner_auth = ControlAuth::with_client_id("correct-token", "client-1");
+        let other_auth = ControlAuth::with_client_id("correct-token", "client-2");
+        let session = control_plane
+            .create_session(
+                &owner_auth,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create owner session");
+        let expected = Err(ControlError::Service(AppRelayError::PermissionDenied(
+            "client client-2 is not authorized for session session-1".to_string(),
+        )));
+
+        assert_eq!(control_plane.active_sessions(&other_auth), Ok(Vec::new()));
+        assert_eq!(
+            control_plane.resize_session(
+                &other_auth,
+                ResizeSessionRequest {
+                    session_id: session.id.clone(),
+                    viewport: apprelay_protocol::ViewportSize::new(800, 600),
+                },
+            ),
+            expected
+        );
+        assert_eq!(
+            control_plane.forward_input(
+                &other_auth,
+                ForwardInputRequest {
+                    session_id: session.id.clone(),
+                    client_viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                    event: apprelay_protocol::InputEvent::Focus,
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "client client-2 is not authorized for session session-1".to_string()
+            )))
+        );
+        assert_eq!(
+            control_plane.start_video_stream(
+                &other_auth,
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "client client-2 is not authorized for session session-1".to_string()
+            )))
+        );
+
+        let stream = control_plane
+            .start_video_stream(
+                &owner_auth,
+                StartVideoStreamRequest {
+                    session_id: session.id,
+                },
+            )
+            .expect("owner starts video stream");
+
+        assert_eq!(
+            control_plane.active_video_streams(&other_auth),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            control_plane.video_stream_status(&other_auth, &stream.id),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "client client-2 is not authorized for session session-1".to_string()
+            )))
+        );
+        assert_eq!(
+            control_plane.stop_video_stream(
+                &other_auth,
+                StopVideoStreamRequest {
+                    stream_id: stream.id,
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "client client-2 is not authorized for session session-1".to_string()
             )))
         );
     }
@@ -2533,6 +2803,13 @@ mod tests {
         let mut events = InMemoryEventSink::default();
 
         assert_eq!(
+            server.handle_request(
+                "create-session correct-token test-client terminal 1280 720",
+                &mut events,
+            ),
+            "OK create-session id=session-1 app=terminal window_id=window-session-1 window_title=terminal selection=existing-window launch=attached viewport=1280x720"
+        );
+        assert_eq!(
             server.handle_request("pairing-revoke correct-token test-client", &mut events),
             "OK pairing-revoke client_id=test-client label=Test%20Client"
         );
@@ -2547,9 +2824,24 @@ mod tests {
             events.events(),
             &[
                 ServerEvent::RequestAuthorized {
+                    operation: "create-session".to_string(),
+                },
+                ServerEvent::SessionCreated {
+                    session_id: "session-1".to_string(),
+                    application_id: "terminal".to_string(),
+                    client_id: "test-client".to_string(),
+                    viewport_width: 1280,
+                    viewport_height: 720,
+                },
+                ServerEvent::RequestAuthorized {
                     operation: "pairing-revoke".to_string(),
                 },
                 ServerEvent::ClientRevoked {
+                    client_id: "test-client".to_string(),
+                },
+                ServerEvent::SessionClosed {
+                    session_id: "session-1".to_string(),
+                    application_id: "terminal".to_string(),
                     client_id: "test-client".to_string(),
                 },
                 ServerEvent::RequestRejected {
