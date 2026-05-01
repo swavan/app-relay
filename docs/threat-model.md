@@ -139,16 +139,21 @@ Out of scope for this document:
   device-verification flow.
 - Authorization policy is still coarse. The server now models paired client
   identity separately from the shared token for sensitive session, stream, and
-  input methods, but revocation, richer device naming, and least-privilege
-  client capabilities remain future work.
+  input methods, and shared-token foreground revocation removes a paired client
+  from the active authorization set. Stronger device verification, a distinct
+  admin credential or local-only revocation channel, richer device naming, and
+  least-privilege client capabilities remain future work.
+- Revocation blocks future sensitive commands for the revoked client id, but it
+  does not currently terminate already active sessions, streams, or input state.
+  Per-client resource ownership and teardown remain future hardening.
 - Server-side application authorization remains incomplete. The foreground
   `create-session` path now requires a client id that appears in the local
   policy, but the foreground parser's caller-supplied id is not authenticated
   device proof. It still uses the existing session application policy and does
   not persist per-client application grants on the server.
-- Runtime pairing approvals are in-memory. Admin-authored authorized clients can
-  be stored in server config, but persisting newly approved runtime pairings
-  through the config repository remains future work.
+- Runtime pairing approvals and revocations are in-memory. Admin-authored
+  authorized clients can be stored in server config, but persisting runtime
+  pairing changes through the config repository remains future work.
 - Token storage is file-backed. Moving client secrets to a platform keychain or
   encrypted store remains future work.
 - Local network exposure guidance is documented in
