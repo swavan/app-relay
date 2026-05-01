@@ -5,12 +5,13 @@ use apprelay_protocol::{
     ControlAuth, ControlError, CreateSessionRequest, Feature, ForwardInputRequest,
     InputDeliveryStatus, InputEvent, LaunchIntentStatus, MappedInputEvent, MicrophoneMode,
     NegotiateVideoStreamRequest, Platform, PointerButton, ReconnectVideoStreamRequest,
-    ResizeSessionRequest, ServerPoint, ServerVersion, SessionState, StartAudioStreamRequest,
-    StartVideoStreamRequest, StopAudioStreamRequest, StopVideoStreamRequest,
-    UpdateAudioStreamRequest, VideoCaptureScope, VideoEncodingPipelineState,
-    VideoResolutionAdaptationReason, VideoStreamFailureKind, VideoStreamNegotiationState,
-    VideoStreamRecoveryAction, VideoStreamSignalingKind, VideoStreamState, ViewportSize,
-    WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription, WindowSelectionMethod,
+    ResizeIntentStatus, ResizeSessionRequest, ServerPoint, ServerVersion, SessionState,
+    StartAudioStreamRequest, StartVideoStreamRequest, StopAudioStreamRequest,
+    StopVideoStreamRequest, UpdateAudioStreamRequest, VideoCaptureScope,
+    VideoEncodingPipelineState, VideoResolutionAdaptationReason, VideoStreamFailureKind,
+    VideoStreamNegotiationState, VideoStreamRecoveryAction, VideoStreamSignalingKind,
+    VideoStreamState, ViewportSize, WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription,
+    WindowSelectionMethod,
 };
 use apprelay_server::{ServerControlPlane, ServerServices};
 
@@ -619,7 +620,7 @@ fn control_plane_launches_macos_app_bundle_session_with_native_window_selection(
         ViewportSize::new(1280, 720)
     );
 
-    control_plane
+    let resized = control_plane
         .resize_session(
             &auth,
             ResizeSessionRequest {
@@ -628,6 +629,10 @@ fn control_plane_launches_macos_app_bundle_session_with_native_window_selection(
             },
         )
         .expect("resize macOS selected-window session");
+    assert_eq!(
+        resized.resize_intent.expect("resize intent").status,
+        ResizeIntentStatus::Applied
+    );
     assert_eq!(capture_runtime.calls().resizes.len(), 1);
     assert_eq!(
         capture_runtime.calls().resizes[0].stream_id,

@@ -439,22 +439,146 @@ pub trait WindowResizeBackend {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WindowResizeBackendService {
     RecordOnly,
+    MacosNative { osascript_command: PathBuf },
     Unsupported { platform: Platform },
 }
 
 impl WindowResizeBackend for WindowResizeBackendService {
     fn resize_window(
         &self,
-        _selected_window: &SelectedWindow,
-        _viewport: &ViewportSize,
+        selected_window: &SelectedWindow,
+        viewport: &ViewportSize,
     ) -> Result<ResizeIntentStatus, AppRelayError> {
         match self {
             Self::RecordOnly => Ok(ResizeIntentStatus::Recorded),
+            Self::MacosNative { osascript_command } => {
+                if selected_window.selection_method != WindowSelectionMethod::NativeWindow {
+                    return Ok(ResizeIntentStatus::Recorded);
+                }
+                resize_macos_native_window(osascript_command, selected_window, viewport)?;
+                Ok(ResizeIntentStatus::Applied)
+            }
             Self::Unsupported { platform } => {
                 Err(AppRelayError::unsupported(*platform, Feature::WindowResize))
             }
         }
     }
+}
+
+const MACOS_WINDOW_RESIZE_TIMEOUT: Duration = MACOS_WINDOW_SELECTION_TIMEOUT;
+
+fn resize_macos_native_window(
+    osascript_command: &Path,
+    selected_window: &SelectedWindow,
+    viewport: &ViewportSize,
+) -> Result<(), AppRelayError> {
+    let bundle_id = selected_window.application_id.trim();
+    if bundle_id.is_empty() {
+        return Err(AppRelayError::InvalidRequest(
+            "macOS window resize requires an application bundle id".to_string(),
+        ));
+    }
+
+    let native_window_id = parse_macos_native_resize_window_id(&selected_window.id)?;
+    let output =
+        run_macos_window_resize_script(osascript_command, bundle_id, native_window_id, viewport)?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let message = stderr.trim();
+        if message.is_empty() {
+            Err(AppRelayError::ServiceUnavailable(
+                "macOS window resize command failed".to_string(),
+            ))
+        } else {
+            Err(AppRelayError::ServiceUnavailable(format!(
+                "macOS window resize command failed: {message}"
+            )))
+        }
+    }
+}
+
+fn parse_macos_native_resize_window_id(window_id: &str) -> Result<&str, AppRelayError> {
+    let Some(encoded_id) = window_id.strip_prefix("macos-window-") else {
+        return Err(AppRelayError::InvalidRequest(format!(
+            "selected window id `{window_id}` is not a macOS native window id"
+        )));
+    };
+    let Some((_, native_id)) = encoded_id.rsplit_once('-') else {
+        return Err(AppRelayError::InvalidRequest(format!(
+            "selected window id `{window_id}` is missing a macOS native window id"
+        )));
+    };
+    let native_id = native_id.trim();
+
+    if native_id.is_empty() || !native_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(AppRelayError::InvalidRequest(format!(
+            "selected window id `{window_id}` has an unusable macOS native window id"
+        )));
+    }
+
+    Ok(native_id)
+}
+
+fn run_macos_window_resize_script(
+    osascript_command: &Path,
+    bundle_id: &str,
+    native_window_id: &str,
+    viewport: &ViewportSize,
+) -> Result<Output, AppRelayError> {
+    let child = Command::new(osascript_command)
+        .arg("-e")
+        .arg("on run argv")
+        .arg("-e")
+        .arg("set targetBundleId to item 1 of argv")
+        .arg("-e")
+        .arg("set targetWindowId to (item 2 of argv) as integer")
+        .arg("-e")
+        .arg("set targetWidth to (item 3 of argv) as integer")
+        .arg("-e")
+        .arg("set targetHeight to (item 4 of argv) as integer")
+        .arg("-e")
+        .arg("tell application \"System Events\"")
+        .arg("-e")
+        .arg("set matchingProcesses to application processes whose bundle identifier is targetBundleId")
+        .arg("-e")
+        .arg("if (count of matchingProcesses) is 0 then error \"application process not found\"")
+        .arg("-e")
+        .arg("set targetProcess to item 1 of matchingProcesses")
+        .arg("-e")
+        .arg("tell targetProcess")
+        .arg("-e")
+        .arg("set matchingWindows to windows whose id is targetWindowId")
+        .arg("-e")
+        .arg("if (count of matchingWindows) is 0 then error \"window not found\"")
+        .arg("-e")
+        .arg("set size of item 1 of matchingWindows to {targetWidth, targetHeight}")
+        .arg("-e")
+        .arg("end tell")
+        .arg("-e")
+        .arg("end tell")
+        .arg("-e")
+        .arg("end run")
+        .arg(bundle_id)
+        .arg(native_window_id)
+        .arg(viewport.width.to_string())
+        .arg(viewport.height.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            AppRelayError::ServiceUnavailable(format!(
+                "failed to run macOS window resize command `{}`: {error}",
+                osascript_command.display()
+            ))
+        })?;
+
+    wait_for_output_with_timeout(child, MACOS_WINDOW_RESIZE_TIMEOUT).ok_or_else(|| {
+        AppRelayError::ServiceUnavailable("macOS window resize command timed out".to_string())
+    })
 }
 
 pub trait ConnectionProfileRepository {
@@ -2132,11 +2256,18 @@ impl CapabilityService for DefaultCapabilityService {
         vec![
             app_discovery,
             application_launch,
-            PlatformCapability::unsupported(
-                self.platform,
-                Feature::WindowResize,
-                unsupported_reason,
-            ),
+            match self.platform {
+                Platform::Macos => PlatformCapability::supported_with_reason(
+                    self.platform,
+                    Feature::WindowResize,
+                    "macOS resizes selected native windows through System Events",
+                ),
+                _ => PlatformCapability::unsupported(
+                    self.platform,
+                    Feature::WindowResize,
+                    unsupported_reason,
+                ),
+            },
             if matches!(self.platform, Platform::Linux | Platform::Macos) {
                 PlatformCapability::supported_with_reason(
                     self.platform,
@@ -2907,6 +3038,26 @@ mod tests {
         assert!(capabilities
             .iter()
             .any(|capability| capability.feature == Feature::AppDiscovery && capability.supported));
+    }
+
+    #[test]
+    fn macos_capabilities_support_window_resize() {
+        let service = DefaultCapabilityService::new(Platform::Macos);
+        let capabilities = service.platform_capabilities();
+
+        assert!(capabilities.iter().any(|capability| {
+            capability.feature == Feature::WindowResize && capability.supported
+        }));
+    }
+
+    #[test]
+    fn linux_capabilities_do_not_support_window_resize() {
+        let service = DefaultCapabilityService::new(Platform::Linux);
+        let capabilities = service.platform_capabilities();
+
+        assert!(capabilities.iter().any(|capability| {
+            capability.feature == Feature::WindowResize && !capability.supported
+        }));
     }
 
     #[test]
@@ -3790,6 +3941,170 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
                 status: ResizeIntentStatus::Recorded,
             })
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn macos_resize_backend_resizes_native_selected_window() {
+        let root = unique_test_dir("macos-resize");
+        fs::create_dir_all(&root).expect("create test resize directory");
+        let marker = root.join("resize-marker");
+        let osascript = root.join("fake-osascript");
+        write_executable_script(
+            &osascript,
+            &format!(
+                "#!/bin/sh\nwhile [ \"$#\" -gt 4 ]; do shift; done\nprintf '%s\\n' \"$1\" \"$2\" \"$3\" \"$4\" > {}\n",
+                marker.display()
+            ),
+        );
+        let mut service = InMemoryApplicationSessionService::with_backends(
+            SessionPolicy::allow_all(),
+            ApplicationLaunchBackendService::RecordOnly,
+            ApplicationWindowSelectionBackendService::StaticNative {
+                selected_window: SelectedWindow {
+                    id: "macos-window-session-1-42".to_string(),
+                    application_id: "dev.apprelay.fake".to_string(),
+                    title: "Native Fake Window".to_string(),
+                    selection_method: WindowSelectionMethod::NativeWindow,
+                },
+            },
+            WindowResizeBackendService::MacosNative {
+                osascript_command: osascript,
+            },
+        );
+        let session = service
+            .create_session_for_application(
+                CreateSessionRequest {
+                    application_id: "dev.apprelay.fake".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+                ApplicationSummary {
+                    id: "dev.apprelay.fake".to_string(),
+                    name: "Fake Mac App".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::MacosBundle {
+                        bundle_path: "/Applications/Fake.app".to_string(),
+                    }),
+                },
+            )
+            .expect("create macOS session");
+
+        let resized = service
+            .resize_session(ResizeSessionRequest {
+                session_id: session.id,
+                viewport: ViewportSize::new(1440, 900),
+            })
+            .expect("resize macOS session");
+
+        assert_eq!(
+            fs::read_to_string(&marker).expect("read resize marker"),
+            "dev.apprelay.fake\n42\n1440\n900\n"
+        );
+        assert_eq!(
+            resized.resize_intent.expect("resize intent").status,
+            ResizeIntentStatus::Applied
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_resize_backend_records_non_native_selected_window() {
+        let backend = WindowResizeBackendService::MacosNative {
+            osascript_command: PathBuf::from("unused-osascript"),
+        };
+        let selected_window = SelectedWindow {
+            id: "window-session-1".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            title: "Fallback Window".to_string(),
+            selection_method: WindowSelectionMethod::Synthetic,
+        };
+
+        assert_eq!(
+            backend
+                .resize_window(&selected_window, &ViewportSize::new(1440, 900))
+                .expect("non-native resize should record intent"),
+            ResizeIntentStatus::Recorded
+        );
+    }
+
+    #[test]
+    fn macos_resize_backend_rejects_unusable_native_window_id() {
+        let backend = WindowResizeBackendService::MacosNative {
+            osascript_command: PathBuf::from("unused-osascript"),
+        };
+        let selected_window = SelectedWindow {
+            id: "macos-window-session-1-not-a-number".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            title: "Native Fake Window".to_string(),
+            selection_method: WindowSelectionMethod::NativeWindow,
+        };
+
+        let error = backend
+            .resize_window(&selected_window, &ViewportSize::new(1440, 900))
+            .expect_err("invalid native id should fail");
+
+        assert!(matches!(error, AppRelayError::InvalidRequest(_)));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn macos_resize_backend_reports_osascript_failure() {
+        let root = unique_test_dir("macos-resize-failure");
+        fs::create_dir_all(&root).expect("create test resize directory");
+        let osascript = root.join("fake-osascript");
+        write_executable_script(
+            &osascript,
+            "#!/bin/sh\nprintf 'permission denied\\n' >&2\nexit 17\n",
+        );
+        let backend = WindowResizeBackendService::MacosNative {
+            osascript_command: osascript,
+        };
+        let selected_window = SelectedWindow {
+            id: "macos-window-session-1-42".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            title: "Native Fake Window".to_string(),
+            selection_method: WindowSelectionMethod::NativeWindow,
+        };
+
+        let error = backend
+            .resize_window(&selected_window, &ViewportSize::new(1440, 900))
+            .expect_err("osascript failure should fail");
+
+        assert!(matches!(
+            error,
+            AppRelayError::ServiceUnavailable(message) if message.contains("permission denied")
+        ));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn macos_resize_backend_times_out_hung_osascript() {
+        let root = unique_test_dir("macos-resize-timeout");
+        fs::create_dir_all(&root).expect("create test resize directory");
+        let osascript = root.join("fake-osascript");
+        write_executable_script(&osascript, "#!/bin/sh\nsleep 1\n");
+        let backend = WindowResizeBackendService::MacosNative {
+            osascript_command: osascript,
+        };
+        let selected_window = SelectedWindow {
+            id: "macos-window-session-1-42".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            title: "Native Fake Window".to_string(),
+            selection_method: WindowSelectionMethod::NativeWindow,
+        };
+        let started = Instant::now();
+
+        let error = backend
+            .resize_window(&selected_window, &ViewportSize::new(1440, 900))
+            .expect_err("hung osascript should time out");
+
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(matches!(error, AppRelayError::ServiceUnavailable(_)));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
