@@ -831,6 +831,86 @@ fn control_plane_manages_video_stream_lifecycle() {
 }
 
 #[test]
+fn control_plane_lists_active_video_streams_for_paired_clients() {
+    let mut control_plane = ServerControlPlane::new(
+        server_services_for_platform(Platform::Linux, "integration-test"),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let stream = control_plane
+        .start_video_stream(
+            &auth,
+            StartVideoStreamRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .expect("start video stream");
+
+    assert_eq!(
+        control_plane.active_video_streams(&ControlAuth::new("wrong-token")),
+        Err(ControlError::Unauthorized)
+    );
+    assert_eq!(
+        control_plane.active_video_streams(&ControlAuth::with_client_id(
+            "correct-token",
+            "unknown-client"
+        )),
+        Err(ControlError::Service(AppRelayError::PermissionDenied(
+            "client unknown-client is not paired".to_string()
+        )))
+    );
+    assert_eq!(control_plane.active_video_streams(&auth), Ok(vec![stream]));
+}
+
+#[test]
+fn control_plane_hides_active_video_streams_for_closed_sessions() {
+    let mut control_plane = ServerControlPlane::new(
+        server_services_for_platform(Platform::Linux, "integration-test"),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let stream = control_plane
+        .start_video_stream(
+            &auth,
+            StartVideoStreamRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .expect("start video stream");
+
+    control_plane
+        .close_session(&auth, &session.id)
+        .expect("close session");
+
+    assert_eq!(
+        control_plane
+            .video_stream_status(&auth, &stream.id)
+            .expect("stream status")
+            .state,
+        VideoStreamState::Failed
+    );
+    assert_eq!(control_plane.active_video_streams(&auth), Ok(Vec::new()));
+}
+
+#[test]
 fn control_plane_reports_unsupported_video_stream_on_non_desktop_capture_platforms() {
     for platform in [
         Platform::Windows,

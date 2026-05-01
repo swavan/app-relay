@@ -12,6 +12,7 @@
   import VideoRenderer from "./VideoRenderer.svelte";
   import {
     TauriRemoteService,
+    hydrateActiveVideoStream,
     type AppSummary,
     type ApplicationSession,
     type Capability,
@@ -87,9 +88,14 @@
       health = await remote.health();
       capabilities = await remote.capabilities();
       apps = await remote.applications();
-      activeSession = (await remote.activeSessions())[0] ?? null;
+      const activeSessions = await remote.activeSessions();
+      activeSession = activeSessions[0] ?? null;
+      activeStream = null;
       if (activeSession) {
         setViewport(activeSession.viewport);
+        activeStream = await hydrateActiveVideoStream(remote, activeSession.id, (message) => {
+          streamMessage = message;
+        });
       }
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);

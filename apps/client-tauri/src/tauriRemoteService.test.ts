@@ -34,6 +34,7 @@ describe("TauriRemoteService", () => {
           name: "Terminal"
         }
       ])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
 
     const service = new TauriRemoteService("mobile-test-token", "mobile-test-server");
@@ -45,6 +46,7 @@ describe("TauriRemoteService", () => {
     await expect(service.capabilities()).resolves.toHaveLength(1);
     await expect(service.applications()).resolves.toEqual([{ id: "terminal", name: "Terminal" }]);
     await expect(service.activeSessions()).resolves.toEqual([]);
+    await expect(service.activeVideoStreams()).resolves.toEqual([]);
 
     expect(tauri.invoke.mock.calls).toEqual([
       ["server_health", { authToken: "mobile-test-token" }],
@@ -52,6 +54,10 @@ describe("TauriRemoteService", () => {
       ["server_applications", { authToken: "mobile-test-token" }],
       [
         "active_application_sessions",
+        { authToken: "mobile-test-token", clientId: "mobile-test-server" }
+      ],
+      [
+        "active_video_streams",
         { authToken: "mobile-test-token", clientId: "mobile-test-server" }
       ]
     ]);
