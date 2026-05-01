@@ -260,13 +260,13 @@ impl ServerServices {
     }
 
     pub fn video_stream_status(
-        &self,
+        &mut self,
         stream_id: &str,
     ) -> Result<VideoStreamSession, AppRelayError> {
         self.video_stream.status(stream_id)
     }
 
-    pub fn active_video_streams(&self) -> Vec<VideoStreamSession> {
+    pub fn active_video_streams(&mut self) -> Vec<VideoStreamSession> {
         let active_session_ids = self
             .session_service
             .active_sessions()
@@ -605,7 +605,7 @@ impl ServerControlPlane {
     }
 
     pub fn video_stream_status(
-        &self,
+        &mut self,
         auth: &ControlAuth,
         stream_id: &str,
     ) -> ControlResult<VideoStreamSession> {
@@ -616,7 +616,7 @@ impl ServerControlPlane {
     }
 
     pub fn active_video_streams(
-        &self,
+        &mut self,
         auth: &ControlAuth,
     ) -> ControlResult<Vec<VideoStreamSession>> {
         self.authorize_paired_client(auth)?;

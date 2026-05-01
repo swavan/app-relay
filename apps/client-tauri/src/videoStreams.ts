@@ -48,6 +48,23 @@ export type VideoEncodingPipeline = {
   };
 };
 
+export type VideoCaptureRuntimeStatus = {
+  state:
+    | "unavailable"
+    | "starting"
+    | "delivering"
+    | "stopped"
+    | "failed"
+    | "permissionDenied";
+  framesDelivered: number;
+  lastFrame: {
+    sequence: number;
+    timestampMs: number;
+    size: ViewportSize;
+  } | null;
+  message?: string;
+};
+
 export type VideoStreamSession = {
   id: string;
   sessionId: string;
@@ -59,6 +76,7 @@ export type VideoStreamSession = {
     applicationId: string;
     title: string;
   };
+  captureRuntime?: VideoCaptureRuntimeStatus;
   encoding: VideoEncodingPipeline;
   signaling: {
     kind: "webRtcOffer";

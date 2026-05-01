@@ -88,11 +88,11 @@ impl VideoStreamControl {
         self.stream_service.record_session_closed(session_id);
     }
 
-    pub fn active_streams(&self) -> Vec<VideoStreamSession> {
+    pub fn active_streams(&mut self) -> Vec<VideoStreamSession> {
         self.stream_service.active_streams()
     }
 
-    pub fn status(&self, stream_id: &str) -> Result<VideoStreamSession, AppRelayError> {
+    pub fn status(&mut self, stream_id: &str) -> Result<VideoStreamSession, AppRelayError> {
         self.stream_service.stream_status(stream_id)
     }
 }

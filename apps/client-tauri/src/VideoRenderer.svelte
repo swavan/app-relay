@@ -72,8 +72,24 @@
         <strong>{renderer.codecLabel}</strong>
       </div>
       <div>
-        <span>Frames</span>
+        <span>Encoded frames</span>
         <strong>{renderer.framesLabel}</strong>
+      </div>
+      <div>
+        <span>Capture</span>
+        <strong>{renderer.captureRuntimeLabel}</strong>
+      </div>
+      <div>
+        <span>Capture frames</span>
+        <strong>{renderer.captureFramesLabel}</strong>
+      </div>
+      <div>
+        <span>Last capture</span>
+        <strong>{renderer.captureLastFrameLabel}</strong>
+      </div>
+      <div>
+        <span>Capture note</span>
+        <strong>{renderer.captureMessageLabel}</strong>
       </div>
       <div>
         <span>Keyframes</span>

@@ -16,6 +16,10 @@ export type VideoRendererView = {
   bitrateLabel: string;
   frameRateLabel: string;
   framesLabel: string;
+  captureRuntimeLabel: string;
+  captureFramesLabel: string;
+  captureLastFrameLabel: string;
+  captureMessageLabel: string;
   keyframesLabel: string;
   bytesLabel: string;
   lastFrameLabel: string;
@@ -59,6 +63,10 @@ export function buildVideoRendererView(
       bitrateLabel: "0 kbps",
       frameRateLabel: "0 fps",
       framesLabel: "0 frames",
+      captureRuntimeLabel: "Capture unavailable",
+      captureFramesLabel: "0 delivered",
+      captureLastFrameLabel: "No captured frames",
+      captureMessageLabel: "No capture runtime message",
       keyframesLabel: "0 keyframes",
       bytesLabel: "0 B",
       lastFrameLabel: "No encoded frames",
@@ -75,6 +83,7 @@ export function buildVideoRendererView(
   const target = stream.encoding.contract.target;
   const adaptation = stream.encoding.contract.adaptation;
   const lastFrame = stream.encoding.output.lastFrame;
+  const captureRuntime = stream.captureRuntime ?? defaultCaptureRuntimeStatus();
   const healthLabel =
     stream.failure?.message ??
     stream.failureReason ??
@@ -99,6 +108,12 @@ export function buildVideoRendererView(
     bitrateLabel: `${target.targetBitrateKbps} kbps target`,
     frameRateLabel: `${target.maxFps} fps max`,
     framesLabel: `${stream.encoding.output.framesEncoded} encoded`,
+    captureRuntimeLabel: captureRuntimeStateLabel(captureRuntime.state),
+    captureFramesLabel: `${captureRuntime.framesDelivered} delivered`,
+    captureLastFrameLabel: captureRuntime.lastFrame
+      ? formatLastCaptureFrame(captureRuntime.lastFrame)
+      : "No captured frames",
+    captureMessageLabel: captureRuntime.message ?? "No capture runtime message",
     keyframesLabel: `${stream.encoding.output.keyframesEncoded} keyframes`,
     bytesLabel: formatBytes(stream.encoding.output.bytesProduced),
     lastFrameLabel: lastFrame ? formatLastFrame(lastFrame) : "No encoded frames",
@@ -114,6 +129,14 @@ export function buildVideoRendererView(
           : "No decoded frame",
     emptyDetail: streamEmptyDetail(stream, recoveryLabel),
     hasEncodedFrame: lastFrame !== null && stream.state !== "stopped" && stream.state !== "failed",
+  };
+}
+
+function defaultCaptureRuntimeStatus(): NonNullable<VideoStreamSession["captureRuntime"]> {
+  return {
+    state: "unavailable",
+    framesDelivered: 0,
+    lastFrame: null,
   };
 }
 
@@ -155,6 +178,25 @@ function pipelineStateLabel(state: VideoStreamSession["encoding"]["state"]): str
   }
 }
 
+function captureRuntimeStateLabel(
+  state: NonNullable<VideoStreamSession["captureRuntime"]>["state"]
+): string {
+  switch (state) {
+    case "unavailable":
+      return "Capture unavailable";
+    case "starting":
+      return "Capture starting";
+    case "delivering":
+      return "Capture delivering";
+    case "stopped":
+      return "Capture stopped";
+    case "failed":
+      return "Capture failed";
+    case "permissionDenied":
+      return "Capture permission needed";
+  }
+}
+
 function adaptationReasonLabel(
   reason: VideoStreamSession["encoding"]["contract"]["adaptation"]["reason"]
 ): string {
@@ -188,4 +230,10 @@ function formatLastFrame(
 ): string {
   const frameKind = frame.keyframe ? "keyframe" : "delta";
   return `#${frame.sequence} ${frameKind}, ${frame.byteLength} B, ${frame.timestampMs} ms`;
+}
+
+function formatLastCaptureFrame(
+  frame: NonNullable<NonNullable<VideoStreamSession["captureRuntime"]>["lastFrame"]>
+): string {
+  return `#${frame.sequence} delivered, ${formatResolution(frame.size)}, ${frame.timestampMs} ms`;
 }
