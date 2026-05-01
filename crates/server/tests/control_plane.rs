@@ -7,11 +7,11 @@ use apprelay_protocol::{
     MicrophoneMode, NegotiateVideoStreamRequest, Platform, PointerButton,
     ReconnectVideoStreamRequest, ResizeIntentStatus, ResizeSessionRequest, ServerPoint,
     ServerVersion, SessionState, StartAudioStreamRequest, StartVideoStreamRequest,
-    StopAudioStreamRequest, StopVideoStreamRequest, UpdateAudioStreamRequest, VideoCaptureScope,
-    VideoEncodingPipelineState, VideoResolutionAdaptationReason, VideoStreamFailureKind,
-    VideoStreamNegotiationState, VideoStreamRecoveryAction, VideoStreamSignalingKind,
-    VideoStreamState, ViewportSize, WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription,
-    WindowSelectionMethod,
+    StopAudioStreamRequest, StopVideoStreamRequest, UpdateAudioStreamRequest,
+    VideoCaptureRuntimeState, VideoCaptureScope, VideoEncodingPipelineState,
+    VideoResolutionAdaptationReason, VideoStreamFailureKind, VideoStreamNegotiationState,
+    VideoStreamRecoveryAction, VideoStreamSignalingKind, VideoStreamState, ViewportSize,
+    WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription, WindowSelectionMethod,
 };
 use apprelay_server::{ServerControlPlane, ServerServices};
 
@@ -649,6 +649,28 @@ fn control_plane_launches_macos_app_bundle_session_with_native_window_selection(
         capture_runtime.calls().starts[0].target_viewport,
         ViewportSize::new(1280, 720)
     );
+    assert_eq!(
+        stream.capture_runtime.state,
+        VideoCaptureRuntimeState::Starting
+    );
+    capture_runtime.deliver_frame(&stream.id, ViewportSize::new(1280, 720), 33);
+    let status = control_plane
+        .video_stream_status(&auth, &stream.id)
+        .expect("macOS selected-window video stream status");
+    assert_eq!(
+        status.capture_runtime.state,
+        VideoCaptureRuntimeState::Delivering
+    );
+    assert_eq!(status.capture_runtime.frames_delivered, 1);
+    let delivered_frame = status
+        .capture_runtime
+        .last_frame
+        .as_ref()
+        .expect("delivered capture frame");
+    assert_eq!(delivered_frame.sequence, 1);
+    assert_eq!(delivered_frame.size, ViewportSize::new(1280, 720));
+    assert_eq!(status.encoding.output.frames_encoded, 0);
+    assert_eq!(status.stats.frames_encoded, 0);
 
     let resized = control_plane
         .resize_session(
@@ -685,6 +707,14 @@ fn control_plane_launches_macos_app_bundle_session_with_native_window_selection(
             },
         )
         .expect("stop macOS selected-window video stream");
+    let stopped = control_plane
+        .video_stream_status(&auth, &stream.id)
+        .expect("stopped macOS selected-window video stream status");
+    assert_eq!(stopped.capture_runtime.frames_delivered, 0);
+    assert_eq!(
+        stopped.capture_runtime.state,
+        VideoCaptureRuntimeState::Unavailable
+    );
     assert_eq!(capture_runtime.calls().stops, vec![stream.id]);
 
     let second_stream = control_plane

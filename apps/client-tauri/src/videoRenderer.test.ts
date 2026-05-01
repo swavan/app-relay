@@ -16,6 +16,19 @@ const baseStream: VideoStreamSession = {
     applicationId: "terminal",
     title: "Terminal",
   },
+  captureRuntime: {
+    state: "delivering",
+    framesDelivered: 2,
+    lastFrame: {
+      sequence: 2,
+      timestampMs: 66,
+      size: {
+        width: 2560,
+        height: 1440,
+      },
+    },
+    message: "macOS capture runtime delivered a raw frame",
+  },
   encoding: {
     contract: {
       codec: "h264",
@@ -104,11 +117,51 @@ describe("buildVideoRendererView", () => {
     expect(view.viewportResolutionLabel).toBe("2560 x 1440");
     expect(view.adaptationLabel).toBe("Target capped to encoder limits");
     expect(view.framesLabel).toBe("3 encoded");
+    expect(view.captureRuntimeLabel).toBe("Capture delivering");
+    expect(view.captureFramesLabel).toBe("2 delivered");
+    expect(view.captureLastFrameLabel).toBe("#2 delivered, 2560 x 1440, 66 ms");
+    expect(view.captureMessageLabel).toBe("macOS capture runtime delivered a raw frame");
     expect(view.keyframesLabel).toBe("1 keyframes");
     expect(view.bytesLabel).toBe("1.5 KiB");
     expect(view.lastFrameLabel).toBe("#3 delta, 512 B, 99 ms");
     expect(view.healthLabel).toBe("stream negotiated");
     expect(view.hasEncodedFrame).toBe(true);
+  });
+
+  it("keeps capture delivery metadata separate from encoded frames", () => {
+    const view = buildVideoRendererView(
+      {
+        ...baseStream,
+        captureRuntime: {
+          state: "delivering",
+          framesDelivered: 9,
+          lastFrame: {
+            sequence: 9,
+            timestampMs: 300,
+            size: {
+              width: 1440,
+              height: 900,
+            },
+          },
+        },
+        encoding: {
+          ...baseStream.encoding,
+          output: {
+            framesSubmitted: 0,
+            framesEncoded: 0,
+            keyframesEncoded: 0,
+            bytesProduced: 0,
+            lastFrame: null,
+          },
+        },
+      },
+      null
+    );
+
+    expect(view.framesLabel).toBe("0 encoded");
+    expect(view.captureFramesLabel).toBe("9 delivered");
+    expect(view.captureLastFrameLabel).toBe("#9 delivered, 1440 x 900, 300 ms");
+    expect(view.hasEncodedFrame).toBe(false);
   });
 
   it("keeps stopped streams visible without claiming active frame preview", () => {

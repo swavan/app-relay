@@ -187,6 +187,10 @@ Scope:
   transport-neutral failure and recovery metadata for application-close and
   capture-failure paths, reject stale app-close reconnects, and preserve
   actionable retry guidance for recoverable capture failures
+- completed macOS capture runtime telemetry slice: selected-window streams
+  expose transport-neutral capture boundary state, raw frame delivery counters,
+  last captured frame size and timestamp, and actionable runtime failure or
+  permission messages without claiming decoded ScreenCaptureKit video playback
 
 Out of scope:
 

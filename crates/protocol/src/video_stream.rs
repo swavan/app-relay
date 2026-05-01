@@ -34,6 +34,8 @@ pub struct VideoStreamSession {
     pub selected_window_id: String,
     pub viewport: ViewportSize,
     pub capture_source: VideoCaptureSource,
+    #[serde(default)]
+    pub capture_runtime: VideoCaptureRuntimeStatus,
     pub encoding: VideoEncodingPipeline,
     pub signaling: VideoStreamSignaling,
     pub stats: VideoStreamStats,
@@ -41,6 +43,45 @@ pub struct VideoStreamSession {
     pub state: VideoStreamState,
     pub failure: Option<VideoStreamFailure>,
     pub failure_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoCaptureRuntimeStatus {
+    pub state: VideoCaptureRuntimeState,
+    pub frames_delivered: u64,
+    pub last_frame: Option<CapturedVideoFrame>,
+    pub message: Option<String>,
+}
+
+impl Default for VideoCaptureRuntimeStatus {
+    fn default() -> Self {
+        Self {
+            state: VideoCaptureRuntimeState::Unavailable,
+            frames_delivered: 0,
+            last_frame: None,
+            message: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapturedVideoFrame {
+    pub sequence: u64,
+    pub timestamp_ms: u64,
+    pub size: ViewportSize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoCaptureRuntimeState {
+    Unavailable,
+    Starting,
+    Delivering,
+    Stopped,
+    Failed,
+    PermissionDenied,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -272,6 +313,7 @@ mod tests {
                 application_id: "terminal".to_string(),
                 title: "Terminal".to_string(),
             },
+            capture_runtime: VideoCaptureRuntimeStatus::default(),
             encoding: VideoEncodingPipeline {
                 contract: VideoEncodingContract {
                     codec: VideoCodec::H264,
@@ -339,5 +381,73 @@ mod tests {
             stream.encoding.contract.target.resolution,
             ViewportSize::new(1280, 720)
         );
+        assert_eq!(
+            stream.capture_runtime.state,
+            VideoCaptureRuntimeState::Unavailable
+        );
+    }
+
+    #[test]
+    fn video_stream_session_defaults_missing_capture_runtime_status() {
+        let payload = r#"{
+            "id":"stream-1",
+            "sessionId":"session-1",
+            "selectedWindowId":"window-session-1",
+            "viewport":{"width":1280,"height":720},
+            "captureSource":{
+                "scope":"selectedWindow",
+                "selectedWindowId":"window-session-1",
+                "applicationId":"terminal",
+                "title":"Terminal"
+            },
+            "encoding":{
+                "contract":{
+                    "codec":"h264",
+                    "pixelFormat":"rgba",
+                    "hardwareAcceleration":"none",
+                    "target":{
+                        "resolution":{"width":1280,"height":720},
+                        "maxFps":30,
+                        "targetBitrateKbps":2764,
+                        "keyframeIntervalFrames":60
+                    },
+                    "adaptation":{
+                        "requestedViewport":{"width":1280,"height":720},
+                        "currentTarget":{"width":1280,"height":720},
+                        "limits":{"maxWidth":1920,"maxHeight":1080,"maxPixels":2073600},
+                        "reason":"matchesViewport"
+                    }
+                },
+                "state":"configured",
+                "output":{
+                    "framesSubmitted":0,
+                    "framesEncoded":0,
+                    "keyframesEncoded":0,
+                    "bytesProduced":0,
+                    "lastFrame":null
+                }
+            },
+            "signaling":{
+                "kind":"webRtcOffer",
+                "negotiationState":"awaitingAnswer",
+                "offer":{"sdpType":"offer","sdp":"offer"},
+                "answer":null,
+                "iceCandidates":[]
+            },
+            "stats":{
+                "framesEncoded":0,
+                "bitrateKbps":0,
+                "latencyMs":0,
+                "reconnectAttempts":0
+            },
+            "health":{"healthy":true,"message":null},
+            "state":"starting",
+            "failure":null,
+            "failureReason":null
+        }"#;
+
+        let stream: VideoStreamSession = serde_json::from_str(payload).expect("deserialize stream");
+
+        assert_eq!(stream.capture_runtime, VideoCaptureRuntimeStatus::default());
     }
 }

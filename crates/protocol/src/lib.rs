@@ -22,8 +22,9 @@ pub use input::{
     PointerButton, ServerPoint,
 };
 pub use video_stream::{
-    EncodedVideoFrame, NegotiateVideoStreamRequest, ReconnectVideoStreamRequest,
-    StartVideoStreamRequest, StopVideoStreamRequest, VideoCaptureScope, VideoCaptureSource,
+    CapturedVideoFrame, EncodedVideoFrame, NegotiateVideoStreamRequest,
+    ReconnectVideoStreamRequest, StartVideoStreamRequest, StopVideoStreamRequest,
+    VideoCaptureRuntimeState, VideoCaptureRuntimeStatus, VideoCaptureScope, VideoCaptureSource,
     VideoCodec, VideoEncodingContract, VideoEncodingOutput, VideoEncodingPipeline,
     VideoEncodingPipelineState, VideoEncodingTarget, VideoHardwareAcceleration, VideoPixelFormat,
     VideoResolutionAdaptation, VideoResolutionAdaptationReason, VideoResolutionLimits,

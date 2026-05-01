@@ -10,7 +10,7 @@ baseline rather than a native media backend.
 | Platform | App discovery | Application launch | Window resize | Window video | System audio | Client microphone | Keyboard input | Mouse input |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Linux | Supported | Supported: `.desktop` Exec command spawn | Unsupported: planned | Supported: selected-window stream startup; native frame capture planned | Supported: PipeWire native backend planned | Supported: PipeWire native backend planned | Unsupported: planned | Unsupported: planned |
-| macOS | Supported | Supported: `.app` bundle launch through `open` | Supported: native selected-window resize through System Events | Supported: selected-window stream startup; ScreenCaptureKit frame capture planned | Supported: CoreAudio native backend planned | Supported: CoreAudio native backend planned | Supported: keyboard text and conservative keys through System Events; requires Accessibility permission | Supported: native selected-window pointer move, button, scroll, and drag through osascript; requires Accessibility permission |
+| macOS | Supported | Supported: `.app` bundle launch through `open` | Supported: native selected-window resize through System Events | Supported: selected-window stream startup and capture runtime telemetry; ScreenCaptureKit video delivery planned | Supported: CoreAudio native backend planned | Supported: CoreAudio native backend planned | Supported: keyboard text and conservative keys through System Events; requires Accessibility permission | Supported: native selected-window pointer move, button, scroll, and drag through osascript; requires Accessibility permission |
 | Windows | Unsupported: discovery backend not implemented | Unsupported: launch intent only | Unsupported: planned | Unsupported: planned | Supported: WASAPI native backend planned | Supported: WASAPI native backend planned | Unsupported: planned | Unsupported: planned |
 | Android | Unsupported: client target | Unsupported: launch intent only | Unsupported: planned | Unsupported: planned | Unsupported: client target | Unsupported: client target | Unsupported: planned | Unsupported: planned |
 | iOS | Unsupported: client target | Unsupported: launch intent only | Unsupported: planned | Unsupported: planned | Unsupported: client target | Unsupported: client target | Unsupported: planned | Unsupported: planned |
@@ -25,9 +25,10 @@ baseline rather than a native media backend.
   CoreAudio, and WASAPI capture/playback backends remain planned.
 - Linux and macOS selected-window video support currently means session-bound
   stream startup, capture-source metadata, signaling state, and encoding
-  contract negotiation. macOS also has a control-plane capture runtime boundary
-  for start/stop lifecycle handling. Native frame capture and delivery remain
-  planned.
+  contract negotiation. macOS also exposes capture runtime status, raw frame
+  delivery counters, last captured frame size, and failure or permission
+  messages from the capture boundary. Decoded/live ScreenCaptureKit video
+  playback remains planned.
 - Linux application launch spawns discovered `.desktop` `Exec=` commands
   directly without a shell after stripping common desktop-entry field codes.
 - macOS application launch opens discovered `.app` bundles with the native
