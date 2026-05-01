@@ -911,6 +911,96 @@ fn control_plane_hides_active_video_streams_for_closed_sessions() {
 }
 
 #[test]
+fn control_plane_lists_active_audio_streams_for_paired_clients() {
+    let mut control_plane = ServerControlPlane::new(
+        server_services_for_platform(Platform::Linux, "integration-test"),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let stream = control_plane
+        .start_audio_stream(
+            &auth,
+            StartAudioStreamRequest {
+                session_id: session.id.clone(),
+                microphone: MicrophoneMode::Enabled,
+                system_audio_muted: false,
+                microphone_muted: true,
+                output_device_id: Some("speakers".to_string()),
+                input_device_id: Some("mic".to_string()),
+            },
+        )
+        .expect("start audio stream");
+
+    assert_eq!(
+        control_plane.active_audio_streams(&ControlAuth::new("wrong-token")),
+        Err(ControlError::Unauthorized)
+    );
+    assert_eq!(
+        control_plane.active_audio_streams(&ControlAuth::with_client_id(
+            "correct-token",
+            "unknown-client"
+        )),
+        Err(ControlError::Service(AppRelayError::PermissionDenied(
+            "client unknown-client is not paired".to_string()
+        )))
+    );
+    assert_eq!(control_plane.active_audio_streams(&auth), Ok(vec![stream]));
+}
+
+#[test]
+fn control_plane_hides_active_audio_streams_for_closed_sessions() {
+    let mut control_plane = ServerControlPlane::new(
+        server_services_for_platform(Platform::Linux, "integration-test"),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let stream = control_plane
+        .start_audio_stream(
+            &auth,
+            StartAudioStreamRequest {
+                session_id: session.id.clone(),
+                microphone: MicrophoneMode::Disabled,
+                system_audio_muted: false,
+                microphone_muted: true,
+                output_device_id: None,
+                input_device_id: None,
+            },
+        )
+        .expect("start audio stream");
+
+    control_plane
+        .close_session(&auth, &session.id)
+        .expect("close session");
+
+    assert_eq!(
+        control_plane
+            .audio_stream_status(&auth, &stream.id)
+            .expect("stream status")
+            .state,
+        AudioStreamState::Stopped
+    );
+    assert_eq!(control_plane.active_audio_streams(&auth), Ok(Vec::new()));
+}
+
+#[test]
 fn control_plane_reports_unsupported_video_stream_on_non_desktop_capture_platforms() {
     for platform in [
         Platform::Windows,

@@ -6,6 +6,16 @@ use apprelay_protocol::{
 use crate::with_control_plane;
 
 #[tauri::command]
+pub fn active_audio_streams(
+    auth_token: String,
+    client_id: String,
+) -> Result<Vec<AudioStreamSession>, String> {
+    with_control_plane(|control_plane| {
+        control_plane.active_audio_streams(&paired_auth(auth_token, client_id))
+    })
+}
+
+#[tauri::command]
 pub fn start_audio_stream(
     auth_token: String,
     client_id: String,

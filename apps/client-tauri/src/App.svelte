@@ -12,6 +12,7 @@
   import VideoRenderer from "./VideoRenderer.svelte";
   import {
     TauriRemoteService,
+    hydrateActiveAudioStream,
     hydrateActiveVideoStream,
     type AppSummary,
     type ApplicationSession,
@@ -95,6 +96,9 @@
         setViewport(activeSession.viewport);
         activeStream = await hydrateActiveVideoStream(remote, activeSession.id, (message) => {
           streamMessage = message;
+        });
+        activeAudioStream = await hydrateActiveAudioStream(remote, activeSession.id, (message) => {
+          audioMessage = message;
         });
       }
     } catch (error) {

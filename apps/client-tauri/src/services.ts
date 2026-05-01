@@ -144,6 +144,7 @@ export interface RemoteService {
   activeVideoStreams(): Promise<VideoStreamSession[]>;
   startVideoStream(sessionId: string): Promise<VideoStreamSession>;
   stopVideoStream(streamId: string): Promise<VideoStreamSession>;
+  activeAudioStreams(): Promise<AudioStreamSession[]>;
   startAudioStream(
     sessionId: string,
     options: AudioStreamStartOptions
@@ -191,6 +192,37 @@ export async function hydrateActiveVideoStream(
 ): Promise<VideoStreamSession | null> {
   try {
     return selectHydratedVideoStream(await remote.activeVideoStreams(), sessionId);
+  } catch (error) {
+    onError(error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
+export function selectHydratedAudioStream(
+  activeStreams: AudioStreamSession[],
+  sessionId: string
+): AudioStreamSession | null {
+  return (
+    activeStreams
+      .map((stream, index) => ({ stream, index }))
+      .filter(({ stream }) => stream.sessionId === sessionId && stream.state !== "stopped")
+      .sort((left, right) => {
+        if (left.stream.state !== right.stream.state) {
+          return left.stream.state === "streaming" ? -1 : 1;
+        }
+
+        return right.index - left.index;
+      })[0]?.stream ?? null
+  );
+}
+
+export async function hydrateActiveAudioStream(
+  remote: Pick<RemoteService, "activeAudioStreams">,
+  sessionId: string,
+  onError: (message: string) => void
+): Promise<AudioStreamSession | null> {
+  try {
+    return selectHydratedAudioStream(await remote.activeAudioStreams(), sessionId);
   } catch (error) {
     onError(error instanceof Error ? error.message : String(error));
     return null;
@@ -284,6 +316,13 @@ export class TauriRemoteService implements RemoteService {
       authToken: this.authToken,
       clientId: this.clientId,
       request: { streamId }
+    });
+  }
+
+  async activeAudioStreams(): Promise<AudioStreamSession[]> {
+    return invoke<AudioStreamSession[]>("active_audio_streams", {
+      authToken: this.authToken,
+      clientId: this.clientId
     });
   }
 

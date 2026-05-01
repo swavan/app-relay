@@ -59,6 +59,10 @@ impl AudioStreamControl {
         self.stream_service.record_session_closed(session_id);
     }
 
+    pub fn active_streams(&self) -> Vec<AudioStreamSession> {
+        self.stream_service.active_streams()
+    }
+
     pub fn status(&self, stream_id: &str) -> Result<AudioStreamSession, AppRelayError> {
         self.stream_service.stream_status(stream_id)
     }

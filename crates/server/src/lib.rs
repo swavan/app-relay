@@ -282,6 +282,21 @@ impl ServerServices {
         self.audio_stream.status(stream_id)
     }
 
+    pub fn active_audio_streams(&self) -> Vec<AudioStreamSession> {
+        let active_session_ids = self
+            .session_service
+            .active_sessions()
+            .into_iter()
+            .map(|session| session.id)
+            .collect::<std::collections::HashSet<_>>();
+
+        self.audio_stream
+            .active_streams()
+            .into_iter()
+            .filter(|stream| active_session_ids.contains(&stream.session_id))
+            .collect()
+    }
+
     pub fn version(&self) -> ServerVersion {
         ServerVersion::new("apprelay-server", self.version.clone(), self.platform)
     }
@@ -586,6 +601,14 @@ impl ServerControlPlane {
         self.services
             .audio_stream_status(stream_id)
             .map_err(Into::into)
+    }
+
+    pub fn active_audio_streams(
+        &self,
+        auth: &ControlAuth,
+    ) -> ControlResult<Vec<AudioStreamSession>> {
+        self.authorize_paired_client(auth)?;
+        Ok(self.services.active_audio_streams())
     }
 
     pub fn heartbeat(&self, auth: &ControlAuth) -> ControlResult<HeartbeatStatus> {
