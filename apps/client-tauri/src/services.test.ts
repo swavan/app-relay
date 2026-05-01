@@ -435,7 +435,7 @@ class FakeRemoteService implements RemoteService {
         statuses: pipeWireAudioBackendStatuses,
         readiness: "controlPlaneOnly" as const,
         notes: [
-          "current stream enforces control-plane state only; native capture, playback, client microphone capture, and server microphone injection are not implemented"
+          "Linux PipeWire native audio backend is planned but unavailable; capture, playback, client microphone capture, and server-side microphone injection remain planned"
         ]
       },
       devices: {
@@ -527,7 +527,7 @@ class FakeRemoteService implements RemoteService {
         statuses: pipeWireAudioBackendStatuses,
         readiness: "controlPlaneOnly" as const,
         notes: [
-          "current stream enforces control-plane state only; native capture, playback, client microphone capture, and server microphone injection are not implemented"
+          "Linux PipeWire native audio backend is planned but unavailable; capture, playback, client microphone capture, and server-side microphone injection remain planned"
         ]
       },
       devices: {},

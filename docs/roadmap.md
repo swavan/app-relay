@@ -348,6 +348,10 @@ Completed:
   rate/channels/format overrides, updates capture byte counters from the
   running process, and retains explicit unavailable adapter-boundary reporting
   unless opted in
+- macOS CoreAudio backend status explicitly reports the planned adapter/runtime
+  boundary as unavailable with per-leg `NativeBackendNotImplemented` failures
+  and zero media counters, so server/client status does not imply live audio
+  packets
 
 Deferred:
 

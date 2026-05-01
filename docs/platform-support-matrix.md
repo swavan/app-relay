@@ -21,8 +21,11 @@ baseline rather than a native media backend.
 - Every platform reports exactly one capability entry for each server feature.
 - Unsupported capabilities include a non-empty reason suitable for user-facing
   unsupported-state messaging.
-- Desktop audio support is currently a control-plane contract. Native PipeWire,
-  CoreAudio, and WASAPI capture/playback backends remain planned.
+- Desktop audio support is currently a control-plane contract. Native backend
+  status names PipeWire on Linux, CoreAudio on macOS, and WASAPI on Windows,
+  with planned-native failures and zero media counters until real OS media is
+  implemented; macOS reports the CoreAudio adapter/runtime boundary as explicit
+  but unavailable and does not claim live packets.
 - Linux and macOS selected-window video support currently means session-bound
   stream startup, capture-source metadata, signaling state, and encoding
   contract negotiation. macOS also exposes capture runtime status, raw frame

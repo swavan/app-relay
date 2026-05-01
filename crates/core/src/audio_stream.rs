@@ -464,15 +464,31 @@ impl NativeAudioMediaBackend {
                 "Linux PipeWire capture has an adapter boundary configured, but it remains unavailable until a real PipeWire capture runtime is wired; playback, client microphone capture, and server-side microphone injection remain planned".to_string(),
             ]
         } else if self.no_legs_available() {
-            vec![
-                "current stream enforces control-plane state only; native capture, playback, client microphone capture, and server microphone injection are not implemented"
-                    .to_string(),
-            ]
+            vec![self.planned_native_backend_note()]
         } else {
             vec![
                 "current stream enforces control-plane state for unavailable native legs; configured native leg availability is reported per backend status"
                     .to_string(),
             ]
+        }
+    }
+
+    fn planned_native_backend_note(&self) -> String {
+        let boundary = match self.platform {
+            Platform::Linux => "Linux PipeWire native audio backend",
+            Platform::Macos => "macOS CoreAudio adapter/runtime boundary",
+            Platform::Windows => "Windows WASAPI native audio backend",
+            Platform::Android | Platform::Ios | Platform::Unknown => "native audio backend",
+        };
+
+        if self.platform == Platform::Macos {
+            format!(
+                "{boundary} is explicit but unavailable; capture, playback, client microphone capture, and server-side microphone injection remain planned"
+            )
+        } else {
+            format!(
+                "{boundary} is planned but unavailable; capture, playback, client microphone capture, and server-side microphone injection remain planned"
+            )
         }
     }
 
@@ -2514,6 +2530,36 @@ mod tests {
                         failure.kind == AudioBackendFailureKind::NativeBackendNotImplemented
                     })
             }));
+        }
+    }
+
+    #[test]
+    fn audio_backend_macos_coreaudio_boundary_stays_planned_and_unavailable() {
+        let contract = AudioBackendService::for_platform(Platform::Macos).backend_contract();
+
+        assert_eq!(contract.control_plane, AudioBackendKind::ControlPlane);
+        assert_eq!(contract.planned_capture, AudioBackendKind::CoreAudio);
+        assert_eq!(contract.planned_playback, AudioBackendKind::CoreAudio);
+        assert_eq!(contract.planned_microphone, AudioBackendKind::CoreAudio);
+        assert_eq!(contract.readiness, AudioBackendReadiness::ControlPlaneOnly);
+        assert!(contract.notes.iter().any(|note| {
+            note.contains("macOS CoreAudio adapter/runtime boundary")
+                && note.contains("explicit but unavailable")
+                && note.contains("remain planned")
+        }));
+
+        for status in &contract.statuses {
+            assert_eq!(status.backend, AudioBackendKind::CoreAudio);
+            assert!(!status.available);
+            assert_eq!(status.readiness, AudioBackendReadiness::PlannedNative);
+            assert_eq!(status.media, AudioBackendMediaStats::default());
+            let failure = status.failure.as_ref().expect("planned failure");
+            assert_eq!(
+                failure.kind,
+                AudioBackendFailureKind::NativeBackendNotImplemented
+            );
+            assert!(failure.message.contains("CoreAudio"));
+            assert!(!failure.message.contains("packets"));
         }
     }
 
