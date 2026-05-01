@@ -1,7 +1,7 @@
 use apprelay_protocol::{
-    AppRelayError, ApplicationSession, ClientPoint, Feature, ForwardInputRequest, InputBackendKind,
-    InputDelivery, InputDeliveryStatus, InputEvent, MappedInputEvent, Platform, ServerPoint,
-    SessionState, ViewportSize,
+    ActiveInputFocus, AppRelayError, ApplicationSession, ClientPoint, Feature, ForwardInputRequest,
+    InputBackendKind, InputDelivery, InputDeliveryStatus, InputEvent, MappedInputEvent, Platform,
+    ServerPoint, SessionState, ViewportSize,
 };
 
 pub trait InputForwardingService {
@@ -10,6 +10,11 @@ pub trait InputForwardingService {
         request: ForwardInputRequest,
         active_sessions: &[ApplicationSession],
     ) -> Result<InputDelivery, AppRelayError>;
+
+    fn active_input_focus(
+        &self,
+        active_sessions: &[ApplicationSession],
+    ) -> Option<ActiveInputFocus>;
 }
 
 pub trait InputBackend {
@@ -68,6 +73,24 @@ impl InMemoryInputForwardingService {
 
     pub fn focused_session_id(&self) -> Option<&str> {
         self.focused_session_id.as_deref()
+    }
+
+    pub fn active_input_focus(
+        &self,
+        active_sessions: &[ApplicationSession],
+    ) -> Option<ActiveInputFocus> {
+        let focused_session_id = self.focused_session_id.as_deref()?;
+        active_sessions
+            .iter()
+            .find(|session| {
+                session.id == focused_session_id
+                    && session.state != SessionState::Closed
+                    && session.selected_window.application_id == session.application_id
+            })
+            .map(|session| ActiveInputFocus {
+                session_id: session.id.clone(),
+                selected_window_id: session.selected_window.id.clone(),
+            })
     }
 
     pub fn close_session(&mut self, session_id: &str) {
@@ -238,6 +261,13 @@ impl InputForwardingService for InMemoryInputForwardingService {
                 Ok(delivered)
             }
         }
+    }
+
+    fn active_input_focus(
+        &self,
+        active_sessions: &[ApplicationSession],
+    ) -> Option<ActiveInputFocus> {
+        InMemoryInputForwardingService::active_input_focus(self, active_sessions)
     }
 }
 
@@ -500,6 +530,71 @@ mod tests {
 
         assert_eq!(input.focused_session_id(), None);
         assert_eq!(input.deliveries(), &[]);
+    }
+
+    #[test]
+    fn input_service_discovers_only_active_input_focus() {
+        let mut sessions = InMemoryApplicationSessionService::default();
+        let session = sessions
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let active_sessions = sessions.active_sessions();
+        let mut input = InMemoryInputForwardingService::default();
+
+        input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: session.id.clone(),
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::Focus,
+                },
+                &active_sessions,
+            )
+            .expect("focus session");
+
+        assert_eq!(
+            input.active_input_focus(&active_sessions),
+            Some(ActiveInputFocus {
+                session_id: session.id.clone(),
+                selected_window_id: session.selected_window.id.clone(),
+            })
+        );
+
+        input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: session.id.clone(),
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::Blur,
+                },
+                &active_sessions,
+            )
+            .expect("blur session");
+
+        assert_eq!(input.active_input_focus(&active_sessions), None);
+
+        input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: session.id.clone(),
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::Focus,
+                },
+                &active_sessions,
+            )
+            .expect("refocus session");
+
+        assert_eq!(input.active_input_focus(&[]), None);
+
+        let mut closed_session = session.clone();
+        closed_session.state = SessionState::Closed;
+        assert_eq!(input.active_input_focus(&[closed_session]), None);
+
+        input.close_session(&session.id);
+        assert_eq!(input.active_input_focus(&active_sessions), None);
     }
 
     #[test]

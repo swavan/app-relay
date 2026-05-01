@@ -90,7 +90,27 @@
       capabilities = await remote.capabilities();
       apps = await remote.applications();
       const activeSessions = await remote.activeSessions();
-      activeSession = activeSessions[0] ?? null;
+      let focusedSessionId: string | null = null;
+      let focusedSelectedWindowId: string | null = null;
+      try {
+        const activeFocus = await remote.activeInputFocus();
+        focusedSessionId = activeFocus?.sessionId ?? null;
+        focusedSelectedWindowId = activeFocus?.selectedWindowId ?? null;
+      } catch (error) {
+        inputMessage = error instanceof Error ? error.message : String(error);
+      }
+      activeSession =
+        activeSessions.find(
+          (session) =>
+            session.id === focusedSessionId &&
+            session.selectedWindow.id === focusedSelectedWindowId
+        ) ??
+        activeSessions[0] ??
+        null;
+      inputMode =
+        activeSession !== null &&
+        activeSession.id === focusedSessionId &&
+        activeSession.selectedWindow.id === focusedSelectedWindowId;
       activeStream = null;
       if (activeSession) {
         setViewport(activeSession.viewport);

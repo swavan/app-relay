@@ -17,9 +17,9 @@ pub use audio_stream::{
     StopAudioStreamRequest, UpdateAudioStreamRequest,
 };
 pub use input::{
-    ButtonAction, ClientPoint, ForwardInputRequest, InputBackendKind, InputDelivery,
-    InputDeliveryStatus, InputEvent, KeyAction, KeyModifiers, MappedInputEvent, PointerButton,
-    ServerPoint,
+    ActiveInputFocus, ButtonAction, ClientPoint, ForwardInputRequest, InputBackendKind,
+    InputDelivery, InputDeliveryStatus, InputEvent, KeyAction, KeyModifiers, MappedInputEvent,
+    PointerButton, ServerPoint,
 };
 pub use video_stream::{
     EncodedVideoFrame, NegotiateVideoStreamRequest, ReconnectVideoStreamRequest,

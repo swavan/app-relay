@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  hydrateActiveInputFocus,
   hydrateActiveAudioStream,
   hydrateActiveVideoStream,
   selectHydratedAudioStream,
@@ -323,6 +324,13 @@ class FakeRemoteService implements RemoteService {
       selectedWindowId: "window-session-1",
       mappedEvent: event,
       status: event.kind === "focus" ? ("focused" as const) : ("delivered" as const)
+    };
+  }
+
+  async activeInputFocus() {
+    return {
+      sessionId: "session-1",
+      selectedWindowId: "window-session-1"
     };
   }
 
@@ -942,6 +950,82 @@ describe("RemoteService contract", () => {
       )
     ).resolves.toBeNull();
     expect(messages).toEqual(["stream discovery unavailable"]);
+  });
+
+  it("hydrates active input focus for the matching active session", async () => {
+    const messages: string[] = [];
+
+    await expect(
+      hydrateActiveInputFocus(
+        {
+          activeInputFocus: async () => ({
+            sessionId: "session-1",
+            selectedWindowId: "window-session-1"
+          })
+        },
+        "session-1",
+        "window-session-1",
+        (message) => messages.push(message)
+      )
+    ).resolves.toBe(true);
+    expect(messages).toEqual([]);
+  });
+
+  it("hydrates inactive input mode when focus is absent or belongs to another session", async () => {
+    await expect(
+      hydrateActiveInputFocus(
+        {
+          activeInputFocus: async () => null
+        },
+        "session-1",
+        "window-session-1",
+        () => undefined
+      )
+    ).resolves.toBe(false);
+    await expect(
+      hydrateActiveInputFocus(
+        {
+          activeInputFocus: async () => ({
+            sessionId: "session-2",
+            selectedWindowId: "window-session-2"
+          })
+        },
+        "session-1",
+        "window-session-1",
+        () => undefined
+      )
+    ).resolves.toBe(false);
+    await expect(
+      hydrateActiveInputFocus(
+        {
+          activeInputFocus: async () => ({
+            sessionId: "session-1",
+            selectedWindowId: "window-session-stale"
+          })
+        },
+        "session-1",
+        "window-session-1",
+        () => undefined
+      )
+    ).resolves.toBe(false);
+  });
+
+  it("keeps startup hydration alive when active input focus discovery fails", async () => {
+    const messages: string[] = [];
+
+    await expect(
+      hydrateActiveInputFocus(
+        {
+          activeInputFocus: async () => {
+            throw new Error("input focus discovery unavailable");
+          }
+        },
+        "session-1",
+        "window-session-1",
+        (message) => messages.push(message)
+      )
+    ).resolves.toBe(false);
+    expect(messages).toEqual(["input focus discovery unavailable"]);
   });
 
   it("hydrates the current matching active audio stream", () => {

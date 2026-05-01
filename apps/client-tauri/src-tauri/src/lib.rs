@@ -10,8 +10,9 @@ use apprelay_core::{
     FileConnectionProfileRepository, ServerConfig,
 };
 use apprelay_protocol::{
-    AppIcon, AppRelayError, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession,
-    ControlAuth, CreateSessionRequest, Feature, ForwardInputRequest, InputDelivery,
+    ActiveInputFocus, AppIcon, AppRelayError, ApplicationLaunch, ApplicationLaunchIntent,
+    ApplicationSession, ControlAuth, CreateSessionRequest, Feature, ForwardInputRequest,
+    InputDelivery,
     LaunchIntentStatus, Platform, PlatformCapability, ResizeIntentStatus, ResizeSessionRequest,
     SelectedWindow, SessionState, ViewportSize, WindowResizeIntent, WindowSelectionMethod,
 };
@@ -271,6 +272,16 @@ fn forward_input(
 ) -> Result<InputDelivery, String> {
     with_control_plane(|control_plane| {
         control_plane.forward_input(&paired_auth(auth_token, client_id), request)
+    })
+}
+
+#[tauri::command]
+fn active_input_focus(
+    auth_token: String,
+    client_id: String,
+) -> Result<Option<ActiveInputFocus>, String> {
+    with_control_plane(|control_plane| {
+        control_plane.active_input_focus(&paired_auth(auth_token, client_id))
     })
 }
 
@@ -711,6 +722,7 @@ pub fn run() {
             resize_application_session,
             close_application_session,
             forward_input,
+            active_input_focus,
             audio_stream::active_audio_streams,
             audio_stream::start_audio_stream,
             audio_stream::stop_audio_stream,

@@ -128,6 +128,11 @@ export type InputDelivery = {
   status: "focused" | "blurred" | "delivered" | "ignoredBlurred";
 };
 
+export type ActiveInputFocus = {
+  sessionId: string;
+  selectedWindowId: string;
+};
+
 export interface RemoteService {
   health(): Promise<HealthStatus>;
   capabilities(): Promise<Capability[]>;
@@ -141,6 +146,7 @@ export interface RemoteService {
     clientViewport: ViewportSize,
     event: InputEvent
   ): Promise<InputDelivery>;
+  activeInputFocus(): Promise<ActiveInputFocus | null>;
   activeVideoStreams(): Promise<VideoStreamSession[]>;
   startVideoStream(sessionId: string): Promise<VideoStreamSession>;
   stopVideoStream(streamId: string): Promise<VideoStreamSession>;
@@ -229,6 +235,21 @@ export async function hydrateActiveAudioStream(
   }
 }
 
+export async function hydrateActiveInputFocus(
+  remote: Pick<RemoteService, "activeInputFocus">,
+  sessionId: string,
+  selectedWindowId: string,
+  onError: (message: string) => void
+): Promise<boolean> {
+  try {
+    const focus = await remote.activeInputFocus();
+    return focus?.sessionId === sessionId && focus.selectedWindowId === selectedWindowId;
+  } catch (error) {
+    onError(error instanceof Error ? error.message : String(error));
+    return false;
+  }
+}
+
 export class TauriRemoteService implements RemoteService {
   private readonly authToken: string;
   private readonly clientId: string;
@@ -293,6 +314,13 @@ export class TauriRemoteService implements RemoteService {
       authToken: this.authToken,
       clientId: this.clientId,
       request: { sessionId, clientViewport, event }
+    });
+  }
+
+  async activeInputFocus(): Promise<ActiveInputFocus | null> {
+    return invoke<ActiveInputFocus | null>("active_input_focus", {
+      authToken: this.authToken,
+      clientId: this.clientId
     });
   }
 

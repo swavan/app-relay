@@ -1,6 +1,6 @@
 use apprelay_core::{FakeMacosWindowCaptureRuntime, ServerConfig};
 use apprelay_protocol::{
-    AppRelayError, AudioBackendFailureKind, AudioBackendKind, AudioBackendLeg,
+    ActiveInputFocus, AppRelayError, AudioBackendFailureKind, AudioBackendKind, AudioBackendLeg,
     AudioBackendReadiness, AudioStreamSession, AudioStreamState, ButtonAction, ClientPoint,
     ControlAuth, ControlError, CreateSessionRequest, Feature, ForwardInputRequest,
     InputDeliveryStatus, InputEvent, LaunchIntentStatus, MappedInputEvent, MicrophoneMode,
@@ -742,6 +742,56 @@ fn control_plane_rejects_unauthorized_input_requests() {
             },
         ),
         Err(ControlError::Unauthorized)
+    );
+}
+
+#[test]
+fn control_plane_lists_active_input_focus_for_paired_clients() {
+    let mut control_plane = ServerControlPlane::new(
+        server_services_for_platform(Platform::Linux, "integration-test"),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+
+    control_plane
+        .forward_input(
+            &auth,
+            ForwardInputRequest {
+                session_id: session.id.clone(),
+                client_viewport: ViewportSize::new(1280, 720),
+                event: InputEvent::Focus,
+            },
+        )
+        .expect("focus input");
+
+    assert_eq!(
+        control_plane.active_input_focus(&ControlAuth::new("wrong-token")),
+        Err(ControlError::Unauthorized)
+    );
+    assert_eq!(
+        control_plane.active_input_focus(&ControlAuth::with_client_id(
+            "correct-token",
+            "unknown-client"
+        )),
+        Err(ControlError::Service(AppRelayError::PermissionDenied(
+            "client unknown-client is not paired".to_string()
+        )))
+    );
+    assert_eq!(
+        control_plane.active_input_focus(&auth),
+        Ok(Some(ActiveInputFocus {
+            session_id: session.id,
+            selected_window_id: session.selected_window.id,
+        }))
     );
 }
 
