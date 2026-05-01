@@ -711,6 +711,7 @@ pub fn run() {
             resize_application_session,
             close_application_session,
             forward_input,
+            audio_stream::active_audio_streams,
             audio_stream::start_audio_stream,
             audio_stream::stop_audio_stream,
             audio_stream::update_audio_stream,

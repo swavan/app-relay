@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  hydrateActiveAudioStream,
   hydrateActiveVideoStream,
+  selectHydratedAudioStream,
   selectHydratedVideoStream,
   type InputEvent,
   type RemoteService,
   type ViewportSize
 } from "./services";
-import type { AudioStreamStartOptions, AudioStreamUpdate } from "./audioStreams";
+import type {
+  AudioStreamSession,
+  AudioStreamStartOptions,
+  AudioStreamUpdate
+} from "./audioStreams";
 import type {
   VideoStreamSession,
   WebRtcIceCandidate,
@@ -131,6 +137,50 @@ const pipeWireAudioBackendStatuses = nativeAudioBackendStatuses.map((leg) => ({
       "keep the control-plane stream active for state negotiation, but do not expect audio packets until the native backend is implemented"
   }
 }));
+
+function audioStreamFixture(
+  overrides: Partial<AudioStreamSession> & Pick<AudioStreamSession, "id" | "state">
+): AudioStreamSession {
+  return {
+    id: overrides.id,
+    sessionId: overrides.sessionId ?? "session-1",
+    selectedWindowId: overrides.selectedWindowId ?? "window-session-1",
+    source: overrides.source ?? {
+      scope: "selectedApplication",
+      selectedWindowId: "window-session-1",
+      applicationId: "terminal",
+      title: "Terminal"
+    },
+    backend: overrides.backend,
+    devices: overrides.devices ?? {},
+    microphone: overrides.microphone ?? "disabled",
+    microphoneInjection: overrides.microphoneInjection ?? {
+      requested: false,
+      active: false,
+      readiness: "plannedNative"
+    },
+    mute: overrides.mute ?? {
+      systemAudioMuted: false,
+      microphoneMuted: true
+    },
+    capabilities: overrides.capabilities ?? {
+      systemAudio: { supported: true },
+      microphoneCapture: { supported: true },
+      microphoneInjection: { supported: false },
+      echoCancellation: { supported: false },
+      deviceSelection: { supported: true }
+    },
+    stats: overrides.stats ?? {
+      packetsSent: 0,
+      packetsReceived: 0,
+      latencyMs: 0
+    },
+    health: overrides.health ?? {
+      healthy: true
+    },
+    state: overrides.state
+  };
+}
 
 class FakeRemoteService implements RemoteService {
   async health() {
@@ -313,6 +363,10 @@ class FakeRemoteService implements RemoteService {
 
   async activeVideoStreams() {
     return [await this.videoStreamStatus("stream-1")];
+  }
+
+  async activeAudioStreams() {
+    return [await this.audioStreamStatus("audio-stream-1")];
   }
 
   async stopVideoStream(streamId: string) {
@@ -890,9 +944,55 @@ describe("RemoteService contract", () => {
     expect(messages).toEqual(["stream discovery unavailable"]);
   });
 
+  it("hydrates the current matching active audio stream", () => {
+    expect(
+      selectHydratedAudioStream(
+        [
+          audioStreamFixture({ id: "stopped-audio-stream", state: "stopped" }),
+          audioStreamFixture({ id: "older-starting-audio-stream", state: "starting" }),
+          audioStreamFixture({ id: "older-streaming-audio-stream", state: "streaming" }),
+          audioStreamFixture({
+            id: "other-session-audio-stream",
+            sessionId: "session-2",
+            state: "streaming"
+          }),
+          audioStreamFixture({ id: "current-streaming-audio-stream", state: "streaming" })
+        ],
+        "session-1"
+      )
+    ).toMatchObject({
+      id: "current-streaming-audio-stream",
+      state: "streaming"
+    });
+  });
+
+  it("keeps startup hydration alive when active audio stream discovery fails", async () => {
+    const messages: string[] = [];
+
+    await expect(
+      hydrateActiveAudioStream(
+        {
+          activeAudioStreams: async () => {
+            throw new Error("audio discovery unavailable");
+          }
+        },
+        "session-1",
+        (message) => messages.push(message)
+      )
+    ).resolves.toBeNull();
+    expect(messages).toEqual(["audio discovery unavailable"]);
+  });
+
   it("starts, updates, checks, and stops audio streams", async () => {
     const service = new FakeRemoteService();
 
+    await expect(service.activeAudioStreams()).resolves.toEqual([
+      expect.objectContaining({
+        id: "audio-stream-1",
+        sessionId: "session-1",
+        state: "streaming"
+      })
+    ]);
     await expect(
       service.startAudioStream("session-1", {
         microphone: "enabled",

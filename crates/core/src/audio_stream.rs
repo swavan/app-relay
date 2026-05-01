@@ -33,6 +33,7 @@ pub trait AudioStreamService {
         &mut self,
         request: UpdateAudioStreamRequest,
     ) -> Result<AudioStreamSession, AppRelayError>;
+    fn active_streams(&self) -> Vec<AudioStreamSession>;
     fn stream_status(&self, stream_id: &str) -> Result<AudioStreamSession, AppRelayError>;
     fn record_session_closed(&mut self, session_id: &str);
 }
@@ -2279,6 +2280,14 @@ impl AudioStreamService for InMemoryAudioStreamService {
         Ok(stream.clone())
     }
 
+    fn active_streams(&self) -> Vec<AudioStreamSession> {
+        self.streams
+            .iter()
+            .filter(|stream| stream.state != AudioStreamState::Stopped)
+            .map(|stream| self.rebuilt_active_stream_status(stream))
+            .collect()
+    }
+
     fn stream_status(&self, stream_id: &str) -> Result<AudioStreamSession, AppRelayError> {
         self.streams
             .iter()
@@ -3412,6 +3421,74 @@ mod tests {
     }
 
     #[test]
+    fn active_audio_streams_rebuild_backend_from_current_native_runtime() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::default();
+        stream_service.configure_native_readiness(
+            AudioBackendNativeReadiness::with_available_legs(
+                AudioBackendNativeReadiness::native_legs(),
+            ),
+        );
+        let stream = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Enabled,
+                    system_audio_muted: false,
+                    microphone_muted: false,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+                &session,
+            )
+            .expect("start audio stream");
+
+        assert_eq!(
+            stream.stats,
+            AudioStreamStats {
+                packets_sent: 0,
+                packets_received: 0,
+                latency_ms: 0,
+            }
+        );
+
+        stream_service.start_native_media_session_without_refresh_for_test(
+            &stream.id,
+            native_media_stats_for_test(),
+        );
+
+        let active_streams = stream_service.active_streams();
+
+        assert_eq!(active_streams.len(), 1);
+        assert_eq!(
+            active_streams[0].stats,
+            AudioStreamStats {
+                packets_sent: 100,
+                packets_received: 200,
+                latency_ms: 15,
+            }
+        );
+        assert_backend_leg_media(&active_streams[0], AudioBackendLeg::Capture, true);
+        assert_backend_leg_media(&active_streams[0], AudioBackendLeg::Playback, true);
+        assert_backend_leg_media(
+            &active_streams[0],
+            AudioBackendLeg::ClientMicrophoneCapture,
+            true,
+        );
+        assert_backend_leg_media(
+            &active_streams[0],
+            AudioBackendLeg::ServerMicrophoneInjection,
+            true,
+        );
+    }
+
+    #[test]
     fn audio_backend_runtime_media_status_respects_mute_state() {
         let mut session_service = InMemoryApplicationSessionService::default();
         let session = session_service
@@ -3945,6 +4022,61 @@ mod tests {
         assert_eq!(capture.failure, None);
         assert_eq!(capture.media, AudioBackendMediaStats::default());
         assert!(!stream.microphone_injection.requested);
+    }
+
+    #[test]
+    fn audio_stream_service_lists_active_streams() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryAudioStreamService::default();
+
+        let streaming = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Disabled,
+                    system_audio_muted: false,
+                    microphone_muted: true,
+                    output_device_id: None,
+                    input_device_id: None,
+                },
+                &session,
+            )
+            .expect("start active audio stream");
+        let stopped = stream_service
+            .start_stream(
+                StartAudioStreamRequest {
+                    session_id: session.id.clone(),
+                    microphone: MicrophoneMode::Enabled,
+                    system_audio_muted: false,
+                    microphone_muted: false,
+                    output_device_id: Some("speakers".to_string()),
+                    input_device_id: Some("mic".to_string()),
+                },
+                &session,
+            )
+            .expect("start stopped audio stream");
+        stream_service
+            .stop_stream(StopAudioStreamRequest {
+                stream_id: stopped.id,
+            })
+            .expect("stop audio stream");
+
+        let active_streams = stream_service.active_streams();
+
+        assert_eq!(
+            active_streams
+                .iter()
+                .map(|stream| (&stream.id, &stream.state))
+                .collect::<Vec<_>>(),
+            vec![(&streaming.id, &AudioStreamState::Streaming)]
+        );
+        assert!(active_streams[0].backend.is_some());
     }
 
     #[test]
