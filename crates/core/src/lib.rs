@@ -15,8 +15,9 @@ pub use input::{
     InputForwardingService,
 };
 pub use video_stream::{
-    InMemoryVideoStreamService, VideoStreamService, WindowCaptureBackend,
-    WindowCaptureBackendService,
+    FakeMacosWindowCaptureRuntime, InMemoryVideoStreamService, MacosWindowCaptureRuntime,
+    MacosWindowCaptureRuntimeCalls, MacosWindowCaptureStartRequest, VideoStreamService,
+    WindowCaptureBackend, WindowCaptureBackendService,
 };
 
 use std::collections::HashSet;

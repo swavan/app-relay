@@ -1,6 +1,6 @@
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
 use apprelay_protocol::{
@@ -12,7 +12,7 @@ use apprelay_protocol::{
     VideoResolutionAdaptation, VideoResolutionAdaptationReason, VideoResolutionLimits,
     VideoStreamFailure, VideoStreamFailureKind, VideoStreamHealth, VideoStreamNegotiationState,
     VideoStreamRecovery, VideoStreamRecoveryAction, VideoStreamSession, VideoStreamSignaling,
-    VideoStreamSignalingKind, VideoStreamState, VideoStreamStats, WebRtcIceCandidate,
+    VideoStreamSignalingKind, VideoStreamState, VideoStreamStats, ViewportSize, WebRtcIceCandidate,
     WebRtcSdpType, WebRtcSessionDescription, WindowSelectionMethod,
 };
 
@@ -45,12 +45,112 @@ pub trait WindowCaptureBackend {
         stream_id: &str,
         session: &ApplicationSession,
     ) -> Result<WindowCaptureStart, AppRelayError>;
+    fn stop_capture(&self, stream_id: &str);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WindowCaptureStart {
     pub source: VideoCaptureSource,
     pub signaling: VideoStreamSignaling,
+}
+
+pub trait MacosWindowCaptureRuntime: std::fmt::Debug + Send + Sync {
+    fn start(&self, request: MacosWindowCaptureStartRequest) -> Result<(), AppRelayError>;
+    fn stop(&self, stream_id: &str);
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MacosWindowCaptureStartRequest {
+    pub stream_id: String,
+    pub selected_window_id: String,
+    pub application_id: String,
+    pub title: String,
+    pub target_viewport: ViewportSize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ControlPlaneMacosWindowCaptureRuntime {
+    calls: Arc<Mutex<MacosWindowCaptureRuntimeCalls>>,
+}
+
+impl MacosWindowCaptureRuntime for ControlPlaneMacosWindowCaptureRuntime {
+    fn start(&self, request: MacosWindowCaptureStartRequest) -> Result<(), AppRelayError> {
+        self.calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .starts
+            .push(request);
+        Ok(())
+    }
+
+    fn stop(&self, stream_id: &str) {
+        self.calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .stops
+            .push(stream_id.to_string());
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MacosWindowCaptureRuntimeCalls {
+    pub starts: Vec<MacosWindowCaptureStartRequest>,
+    pub stops: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct FakeMacosWindowCaptureRuntime {
+    calls: Arc<Mutex<MacosWindowCaptureRuntimeCalls>>,
+    failures: Arc<Mutex<Vec<String>>>,
+}
+
+impl FakeMacosWindowCaptureRuntime {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn fail_next_start(&self, message: impl Into<String>) {
+        self.failures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(message.into());
+    }
+
+    pub fn calls(&self) -> MacosWindowCaptureRuntimeCalls {
+        self.calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
+impl MacosWindowCaptureRuntime for FakeMacosWindowCaptureRuntime {
+    fn start(&self, request: MacosWindowCaptureStartRequest) -> Result<(), AppRelayError> {
+        self.calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .starts
+            .push(request);
+
+        if let Some(message) = self
+            .failures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pop()
+        {
+            Err(AppRelayError::InvalidRequest(message))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn stop(&self, stream_id: &str) {
+        self.calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .stops
+            .push(stream_id.to_string());
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -242,7 +342,9 @@ fn server_ice_candidates(candidates: &[WebRtcIceCandidate]) -> Vec<WebRtcIceCand
 #[derive(Clone, Debug)]
 pub enum WindowCaptureBackendService {
     LinuxSelectedWindow,
-    MacosSelectedWindow,
+    MacosSelectedWindow {
+        runtime: Arc<dyn MacosWindowCaptureRuntime>,
+    },
     FailingSelectedWindow {
         message: String,
     },
@@ -256,6 +358,16 @@ pub enum WindowCaptureBackendService {
 }
 
 impl WindowCaptureBackendService {
+    pub fn macos_selected_window() -> Self {
+        Self::MacosSelectedWindow {
+            runtime: Arc::new(ControlPlaneMacosWindowCaptureRuntime::default()),
+        }
+    }
+
+    pub fn macos_selected_window_with_runtime(runtime: Arc<dyn MacosWindowCaptureRuntime>) -> Self {
+        Self::MacosSelectedWindow { runtime }
+    }
+
     pub fn fails_once(message: impl Into<String>) -> Self {
         Self::FailsOnceSelectedWindow {
             failed: Arc::new(AtomicBool::new(false)),
@@ -271,13 +383,29 @@ impl WindowCaptureBackend for WindowCaptureBackendService {
         session: &ApplicationSession,
     ) -> Result<WindowCaptureStart, AppRelayError> {
         match self {
-            Self::LinuxSelectedWindow | Self::MacosSelectedWindow => Ok(WindowCaptureStart {
+            Self::LinuxSelectedWindow => Ok(WindowCaptureStart {
                 source: InMemoryVideoStreamService::capture_source_from_session(session),
                 signaling: InMemoryVideoStreamService::signaling_for_stream(
                     stream_id,
                     &session.selected_window.id,
                 ),
             }),
+            Self::MacosSelectedWindow { runtime } => {
+                runtime.start(MacosWindowCaptureStartRequest {
+                    stream_id: stream_id.to_string(),
+                    selected_window_id: session.selected_window.id.clone(),
+                    application_id: session.selected_window.application_id.clone(),
+                    title: session.selected_window.title.clone(),
+                    target_viewport: session.viewport.clone(),
+                })?;
+                Ok(WindowCaptureStart {
+                    source: InMemoryVideoStreamService::capture_source_from_session(session),
+                    signaling: InMemoryVideoStreamService::signaling_for_stream(
+                        stream_id,
+                        &session.selected_window.id,
+                    ),
+                })
+            }
             Self::FailingSelectedWindow { message } => {
                 Err(AppRelayError::InvalidRequest(message.clone()))
             }
@@ -298,6 +426,12 @@ impl WindowCaptureBackend for WindowCaptureBackendService {
                 *platform,
                 Feature::WindowVideoStream,
             )),
+        }
+    }
+
+    fn stop_capture(&self, stream_id: &str) {
+        if let Self::MacosSelectedWindow { runtime } = self {
+            runtime.stop(stream_id);
         }
     }
 }
@@ -503,6 +637,7 @@ impl VideoStreamService for InMemoryVideoStreamService {
         &mut self,
         request: StopVideoStreamRequest,
     ) -> Result<VideoStreamSession, AppRelayError> {
+        let capture_backend = self.capture_backend.clone();
         let stream = self
             .streams
             .iter_mut()
@@ -513,6 +648,9 @@ impl VideoStreamService for InMemoryVideoStreamService {
                 AppRelayError::NotFound(format!("stream {} was not found", request.stream_id))
             })?;
 
+        if stream.state != VideoStreamState::Failed {
+            capture_backend.stop_capture(&stream.id);
+        }
         stream.state = VideoStreamState::Stopped;
         InMemoryVideoEncodingPipeline::drain(&mut stream.encoding);
         stream.health = VideoStreamHealth {
@@ -681,9 +819,13 @@ impl VideoStreamService for InMemoryVideoStreamService {
     }
 
     fn record_session_closed(&mut self, session_id: &str) {
+        let capture_backend = self.capture_backend.clone();
         for stream in self.streams.iter_mut().filter(|stream| {
             stream.session_id == session_id && stream.state != VideoStreamState::Stopped
         }) {
+            if stream.state != VideoStreamState::Failed {
+                capture_backend.stop_capture(&stream.id);
+            }
             let failure = Self::app_closed_failure(session_id);
             Self::apply_failure(stream, failure);
         }
@@ -797,8 +939,12 @@ mod tests {
             resize_intent: None,
             state: SessionState::Ready,
         };
-        let mut stream_service =
-            InMemoryVideoStreamService::new(WindowCaptureBackendService::MacosSelectedWindow);
+        let runtime = FakeMacosWindowCaptureRuntime::new();
+        let mut stream_service = InMemoryVideoStreamService::new(
+            WindowCaptureBackendService::macos_selected_window_with_runtime(Arc::new(
+                runtime.clone(),
+            )),
+        );
 
         let stream = stream_service
             .start_stream(
@@ -839,6 +985,169 @@ mod tests {
                 sdp_mid: Some("video".to_string()),
                 sdp_m_line_index: Some(0),
             }]
+        );
+        assert_eq!(
+            runtime.calls().starts,
+            vec![MacosWindowCaptureStartRequest {
+                stream_id: "stream-1".to_string(),
+                selected_window_id: "macos-window-session-1-88".to_string(),
+                application_id: "dev.apprelay.fake".to_string(),
+                title: "Native Fake Window".to_string(),
+                target_viewport: ViewportSize::new(1280, 720),
+            }]
+        );
+        assert_eq!(runtime.calls().stops, Vec::<String>::new());
+    }
+
+    #[test]
+    fn macos_capture_runtime_failure_creates_retryable_capture_failure() {
+        let session = ApplicationSession {
+            id: "session-1".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            selected_window: SelectedWindow {
+                id: "macos-window-session-1-88".to_string(),
+                application_id: "dev.apprelay.fake".to_string(),
+                title: "Native Fake Window".to_string(),
+                selection_method: WindowSelectionMethod::NativeWindow,
+            },
+            launch_intent: None,
+            viewport: ViewportSize::new(1280, 720),
+            resize_intent: None,
+            state: SessionState::Ready,
+        };
+        let runtime = FakeMacosWindowCaptureRuntime::new();
+        runtime.fail_next_start("ScreenCaptureKit boundary failed");
+        let mut stream_service = InMemoryVideoStreamService::new(
+            WindowCaptureBackendService::macos_selected_window_with_runtime(Arc::new(
+                runtime.clone(),
+            )),
+        );
+
+        let failed = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream records failure");
+
+        assert_eq!(failed.state, VideoStreamState::Failed);
+        assert_eq!(
+            failed.failure.as_ref().map(|failure| &failure.kind),
+            Some(&VideoStreamFailureKind::CaptureFailed)
+        );
+        assert_eq!(
+            failed
+                .failure
+                .as_ref()
+                .map(|failure| &failure.recovery.action),
+            Some(&VideoStreamRecoveryAction::ReconnectStream)
+        );
+        assert!(failed.failure.as_ref().unwrap().recovery.retryable);
+        assert_eq!(
+            failed.failure_reason.as_deref(),
+            Some("ScreenCaptureKit boundary failed")
+        );
+        assert_eq!(runtime.calls().starts.len(), 1);
+    }
+
+    #[test]
+    fn macos_capture_runtime_reconnect_retries_after_failure_and_clears_it() {
+        let session = ApplicationSession {
+            id: "session-1".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            selected_window: SelectedWindow {
+                id: "macos-window-session-1-88".to_string(),
+                application_id: "dev.apprelay.fake".to_string(),
+                title: "Native Fake Window".to_string(),
+                selection_method: WindowSelectionMethod::NativeWindow,
+            },
+            launch_intent: None,
+            viewport: ViewportSize::new(1280, 720),
+            resize_intent: None,
+            state: SessionState::Ready,
+        };
+        let runtime = FakeMacosWindowCaptureRuntime::new();
+        runtime.fail_next_start("ScreenCaptureKit boundary failed");
+        let mut stream_service = InMemoryVideoStreamService::new(
+            WindowCaptureBackendService::macos_selected_window_with_runtime(Arc::new(
+                runtime.clone(),
+            )),
+        );
+        let failed = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream records failure");
+
+        let reconnected = stream_service
+            .reconnect_stream(ReconnectVideoStreamRequest {
+                stream_id: failed.id,
+            })
+            .expect("reconnect stream");
+
+        assert_eq!(reconnected.state, VideoStreamState::Starting);
+        assert_eq!(reconnected.failure, None);
+        assert_eq!(reconnected.failure_reason, None);
+        assert!(reconnected.health.healthy);
+        assert_eq!(reconnected.stats.reconnect_attempts, 1);
+        assert_eq!(runtime.calls().starts.len(), 2);
+    }
+
+    #[test]
+    fn macos_capture_runtime_stop_and_session_close_stop_active_streams() {
+        let session = ApplicationSession {
+            id: "session-1".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            selected_window: SelectedWindow {
+                id: "macos-window-session-1-88".to_string(),
+                application_id: "dev.apprelay.fake".to_string(),
+                title: "Native Fake Window".to_string(),
+                selection_method: WindowSelectionMethod::NativeWindow,
+            },
+            launch_intent: None,
+            viewport: ViewportSize::new(1280, 720),
+            resize_intent: None,
+            state: SessionState::Ready,
+        };
+        let runtime = FakeMacosWindowCaptureRuntime::new();
+        let mut stream_service = InMemoryVideoStreamService::new(
+            WindowCaptureBackendService::macos_selected_window_with_runtime(Arc::new(
+                runtime.clone(),
+            )),
+        );
+        let stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        stream_service
+            .stop_stream(StopVideoStreamRequest {
+                stream_id: stream.id,
+            })
+            .expect("stop stream");
+
+        let second_stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start second stream");
+        stream_service.record_session_closed(&session.id);
+
+        assert_eq!(
+            runtime.calls().stops,
+            vec!["stream-1".to_string(), second_stream.id]
         );
     }
 

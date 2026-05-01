@@ -9,6 +9,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use apprelay_core::{
     ApplicationDiscovery, ApplicationLaunchBackendService, ApplicationSessionService,
@@ -16,7 +17,8 @@ use apprelay_core::{
     DefaultCapabilityService, DesktopEntryApplicationDiscovery, EventSink, HealthService,
     InMemoryApplicationSessionService, InMemoryClientAuthorizationService,
     InMemoryInputForwardingService, InputForwardingService, MacosApplicationDiscovery,
-    ServerConfig, ServerEvent, SessionPolicy, StaticHealthService, UnsupportedApplicationDiscovery,
+    MacosWindowCaptureRuntime, ServerConfig, ServerEvent, SessionPolicy, StaticHealthService,
+    UnsupportedApplicationDiscovery,
 };
 use apprelay_protocol::{
     AppRelayError, ApplicationLaunch, ApplicationSession, ApplicationSummary,
@@ -116,6 +118,24 @@ impl ServerServices {
                 ApplicationLaunchBackendService::MacosNative { open_command },
                 ApplicationWindowSelectionBackendService::MacosNative { osascript_command },
             );
+        services
+    }
+
+    #[doc(hidden)]
+    pub fn with_macos_application_roots_open_osascript_and_capture_runtime(
+        version: impl Into<String>,
+        roots: Vec<PathBuf>,
+        open_command: PathBuf,
+        osascript_command: PathBuf,
+        capture_runtime: Arc<dyn MacosWindowCaptureRuntime>,
+    ) -> Self {
+        let mut services = Self::with_macos_application_roots_open_and_osascript_commands(
+            version,
+            roots,
+            open_command,
+            osascript_command,
+        );
+        services.video_stream = VideoStreamControl::for_macos_runtime(capture_runtime);
         services
     }
 

@@ -1,4 +1,9 @@
-use apprelay_core::{InMemoryVideoStreamService, VideoStreamService, WindowCaptureBackendService};
+use std::sync::Arc;
+
+use apprelay_core::{
+    InMemoryVideoStreamService, MacosWindowCaptureRuntime, VideoStreamService,
+    WindowCaptureBackendService,
+};
 use apprelay_protocol::{
     AppRelayError, ApplicationSession, NegotiateVideoStreamRequest, Platform,
     ReconnectVideoStreamRequest, ResizeSessionRequest, StartVideoStreamRequest,
@@ -20,7 +25,7 @@ impl VideoStreamControl {
     pub fn for_platform(platform: Platform) -> Self {
         let capture_backend = match platform {
             Platform::Linux => WindowCaptureBackendService::LinuxSelectedWindow,
-            Platform::Macos => WindowCaptureBackendService::MacosSelectedWindow,
+            Platform::Macos => WindowCaptureBackendService::macos_selected_window(),
             Platform::Android | Platform::Ios | Platform::Windows | Platform::Unknown => {
                 WindowCaptureBackendService::Unsupported { platform }
             }
@@ -28,6 +33,14 @@ impl VideoStreamControl {
 
         Self {
             stream_service: InMemoryVideoStreamService::new(capture_backend),
+        }
+    }
+
+    pub fn for_macos_runtime(runtime: Arc<dyn MacosWindowCaptureRuntime>) -> Self {
+        Self {
+            stream_service: InMemoryVideoStreamService::new(
+                WindowCaptureBackendService::macos_selected_window_with_runtime(runtime),
+            ),
         }
     }
 
