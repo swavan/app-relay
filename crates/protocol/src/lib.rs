@@ -416,6 +416,11 @@ pub struct ApprovePairingRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RevokeClientRequest {
+    pub client_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControlError {
     Unauthorized,
     Service(AppRelayError),

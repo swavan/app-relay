@@ -462,6 +462,11 @@ Completed:
   controls, pending pairing and explicit local/admin approval are modeled in
   protocol/core/server services, and foreground commands exercise the policy
   without treating caller-supplied client ids as authenticated device proof
+- completed paired-client revocation slice: local control-plane and shared-token
+  foreground command paths can remove an authorized client from the active
+  authorization set, update in-memory server config, audit revocation
+  success/failure without tokens, and deny subsequent sensitive controls from
+  that client; active resource teardown after revocation remains future work
 - completed local network and remote tunnel guidance slice in
   [`network-tunnel-guidance.md`](network-tunnel-guidance.md), covering default
   loopback binding, constrained local-LAN beta exceptions, SSH tunnel use,

@@ -26,9 +26,9 @@ use apprelay_protocol::{
     ControlResult, CreateSessionRequest, DiagnosticsBundle, Feature, ForwardInputRequest,
     HealthStatus, HeartbeatStatus, InputDelivery, LaunchIntentStatus, NegotiateVideoStreamRequest,
     PairingRequest, PendingPairing, Platform, PlatformCapability, ReconnectVideoStreamRequest,
-    ResizeSessionRequest, ServerVersion, StartAudioStreamRequest, StartVideoStreamRequest,
-    StopAudioStreamRequest, StopVideoStreamRequest, UpdateAudioStreamRequest, VideoStreamSession,
-    ViewportSize,
+    ResizeSessionRequest, RevokeClientRequest, ServerVersion, StartAudioStreamRequest,
+    StartVideoStreamRequest, StopAudioStreamRequest, StopVideoStreamRequest,
+    UpdateAudioStreamRequest, VideoStreamSession, ViewportSize,
 };
 
 use crate::audio_stream::AudioStreamControl;
@@ -522,6 +522,27 @@ impl ServerControlPlane {
         Ok(client)
     }
 
+    pub fn locally_revoke_client(
+        &mut self,
+        request: RevokeClientRequest,
+    ) -> ControlResult<apprelay_core::AuthorizedClient> {
+        let client = self
+            .client_authorization
+            .revoke_client(request)
+            .map_err(ControlError::Service)?;
+        self.config.authorized_clients = self.client_authorization.authorized_clients();
+        Ok(client)
+    }
+
+    pub fn revoke_client(
+        &mut self,
+        auth: &ControlAuth,
+        request: RevokeClientRequest,
+    ) -> ControlResult<apprelay_core::AuthorizedClient> {
+        self.authorize(auth)?;
+        self.locally_revoke_client(request)
+    }
+
     pub fn resize_session(
         &mut self,
         auth: &ControlAuth,
@@ -865,6 +886,37 @@ impl ForegroundControlServer {
                     )
                     .map(|pending| response_only(format_pairing_request_response(pending)))
             }
+            "pairing-revoke" => {
+                let Some(client_id) = args.next() else {
+                    return "ERROR bad-request".to_string();
+                };
+                if args.next().is_some() {
+                    return "ERROR bad-request".to_string();
+                }
+
+                let client_id = client_id.to_string();
+                match self.control_plane.borrow_mut().revoke_client(
+                    &auth,
+                    RevokeClientRequest {
+                        client_id: client_id.clone(),
+                    },
+                ) {
+                    Ok(client) => {
+                        let event = ServerEvent::ClientRevoked {
+                            client_id: client.id.clone(),
+                        };
+                        Ok((format_pairing_revoke_response(client), vec![event]))
+                    }
+                    Err(ControlError::Service(error)) => {
+                        events.record(ServerEvent::ClientRevocationFailed {
+                            client_id,
+                            reason: error.user_message(),
+                        });
+                        Err(ControlError::Service(error))
+                    }
+                    Err(error) => Err(error),
+                }
+            }
             "create-session" => {
                 let Some(client_id) = args.next() else {
                     return "ERROR bad-request".to_string();
@@ -1066,6 +1118,14 @@ fn format_pairing_request_response(pending: PendingPairing) -> String {
         line_token(&pending.client.id),
         line_token(&pending.client.label),
         pending.status
+    )
+}
+
+fn format_pairing_revoke_response(client: apprelay_core::AuthorizedClient) -> String {
+    format!(
+        "OK pairing-revoke client_id={} label={}",
+        line_token(&client.id),
+        line_token(&client.label)
     )
 }
 
@@ -2018,6 +2078,94 @@ mod tests {
     }
 
     #[test]
+    fn control_plane_revokes_paired_client_before_sensitive_controls() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config(),
+        );
+        let auth = paired_auth();
+
+        let revoked = control_plane
+            .locally_revoke_client(RevokeClientRequest {
+                client_id: "test-client".to_string(),
+            })
+            .expect("revoke paired client");
+
+        assert_eq!(revoked.id, "test-client");
+        assert!(control_plane.config.authorized_clients.is_empty());
+        assert_eq!(
+            control_plane.create_session(
+                &auth,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "client test-client is not paired".to_string()
+            )))
+        );
+    }
+
+    #[test]
+    fn control_plane_rejects_unknown_client_revoke() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config(),
+        );
+
+        assert_eq!(
+            control_plane.locally_revoke_client(RevokeClientRequest {
+                client_id: "unknown-client".to_string(),
+            }),
+            Err(ControlError::Service(AppRelayError::NotFound(
+                "client unknown-client was not paired".to_string()
+            )))
+        );
+    }
+
+    #[test]
+    fn control_plane_revoke_blocks_future_commands_but_does_not_close_active_sessions() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config(),
+        );
+        let auth = paired_auth();
+        let session = control_plane
+            .create_session(
+                &auth,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create session before revocation");
+
+        control_plane
+            .locally_revoke_client(RevokeClientRequest {
+                client_id: "test-client".to_string(),
+            })
+            .expect("revoke paired client");
+
+        assert_eq!(
+            control_plane.services.active_sessions(),
+            vec![session.clone()]
+        );
+        assert_eq!(
+            control_plane.resize_session(
+                &auth,
+                ResizeSessionRequest {
+                    session_id: session.id,
+                    viewport: apprelay_protocol::ViewportSize::new(800, 600),
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "client test-client is not paired".to_string()
+            )))
+        );
+    }
+
+    #[test]
     fn control_plane_requires_paired_client_for_sensitive_session_controls() {
         let mut control_plane = ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
@@ -2373,6 +2521,82 @@ mod tests {
                 &mut events,
             ),
             "OK create-session id=session-1 app=terminal window_id=window-session-1 window_title=terminal selection=existing-window launch=attached viewport=1280x720"
+        );
+    }
+
+    #[test]
+    fn foreground_server_revokes_paired_client_and_denies_future_session_creation() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config(),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request("pairing-revoke correct-token test-client", &mut events),
+            "OK pairing-revoke client_id=test-client label=Test%20Client"
+        );
+        assert_eq!(
+            server.handle_request(
+                "create-session correct-token test-client terminal 1280 720",
+                &mut events,
+            ),
+            "ERROR service client test-client is not paired"
+        );
+        assert_eq!(
+            events.events(),
+            &[
+                ServerEvent::RequestAuthorized {
+                    operation: "pairing-revoke".to_string(),
+                },
+                ServerEvent::ClientRevoked {
+                    client_id: "test-client".to_string(),
+                },
+                ServerEvent::RequestRejected {
+                    operation: "create-session".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn foreground_server_formats_unknown_pairing_revoke_error() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config(),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request("pairing-revoke correct-token unknown-client", &mut events),
+            "ERROR service client unknown-client was not paired"
+        );
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::ClientRevocationFailed {
+                client_id: "unknown-client".to_string(),
+                reason: "client unknown-client was not paired".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn foreground_server_rejects_unauthorized_pairing_revoke() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config(),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request("pairing-revoke wrong-token test-client", &mut events),
+            "ERROR unauthorized"
+        );
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::RequestRejected {
+                operation: "pairing-revoke".to_string(),
+            }]
         );
     }
 

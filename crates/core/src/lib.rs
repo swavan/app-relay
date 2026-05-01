@@ -34,7 +34,8 @@ use apprelay_protocol::{
     ApplicationSummary, ApprovePairingRequest, ControlClientIdentity, CreateSessionRequest,
     Feature, HealthStatus, LaunchIntentStatus, PairingRequest, PairingRequestStatus,
     PendingPairing, Platform, PlatformCapability, ResizeIntentStatus, ResizeSessionRequest,
-    SelectedWindow, SessionState, ViewportSize, WindowResizeIntent, WindowSelectionMethod,
+    RevokeClientRequest, SelectedWindow, SessionState, ViewportSize, WindowResizeIntent,
+    WindowSelectionMethod,
 };
 
 pub trait HealthService {
@@ -608,6 +609,10 @@ pub trait ClientAuthorizationService {
     fn approve_pairing(
         &mut self,
         request: ApprovePairingRequest,
+    ) -> Result<AuthorizedClient, AppRelayError>;
+    fn revoke_client(
+        &mut self,
+        request: RevokeClientRequest,
     ) -> Result<AuthorizedClient, AppRelayError>;
     fn authorize_client(&self, client_id: Option<&str>) -> Result<AuthorizedClient, AppRelayError>;
     fn authorized_clients(&self) -> Vec<AuthorizedClient>;
@@ -1317,6 +1322,13 @@ pub enum ServerEvent {
     RequestRejected {
         operation: String,
     },
+    ClientRevoked {
+        client_id: String,
+    },
+    ClientRevocationFailed {
+        client_id: String,
+        reason: String,
+    },
     SessionCreated {
         session_id: String,
         application_id: String,
@@ -1431,6 +1443,19 @@ fn format_event(event: &ServerEvent) -> String {
             format!(
                 "event=request_rejected operation={}",
                 event_field_value(operation)
+            )
+        }
+        ServerEvent::ClientRevoked { client_id } => {
+            format!(
+                "event=client_revoked client_id={}",
+                event_field_value(client_id)
+            )
+        }
+        ServerEvent::ClientRevocationFailed { client_id, reason } => {
+            format!(
+                "event=client_revocation_failed client_id={} reason={}",
+                event_field_value(client_id),
+                event_field_value(reason)
             )
         }
         ServerEvent::SessionCreated {
@@ -1751,6 +1776,30 @@ impl ClientAuthorizationService for InMemoryClientAuthorizationService {
             .retain(|client| client.id != authorized.id);
         self.authorized_clients.push(authorized.clone());
         Ok(authorized)
+    }
+
+    fn revoke_client(
+        &mut self,
+        request: RevokeClientRequest,
+    ) -> Result<AuthorizedClient, AppRelayError> {
+        if request.client_id.trim().is_empty() {
+            return Err(AppRelayError::InvalidRequest(
+                "client id is required".to_string(),
+            ));
+        }
+
+        let Some(index) = self
+            .authorized_clients
+            .iter()
+            .position(|client| client.id == request.client_id)
+        else {
+            return Err(AppRelayError::NotFound(format!(
+                "client {} was not paired",
+                request.client_id
+            )));
+        };
+
+        Ok(self.authorized_clients.remove(index))
     }
 
     fn authorize_client(&self, client_id: Option<&str>) -> Result<AuthorizedClient, AppRelayError> {
@@ -3422,6 +3471,9 @@ mod tests {
         sink.record(ServerEvent::RequestAuthorized {
             operation: "health".to_string(),
         });
+        sink.record(ServerEvent::ClientRevoked {
+            client_id: "client 1".to_string(),
+        });
         sink.record(ServerEvent::SessionCreated {
             session_id: "session 1".to_string(),
             application_id: "terminal".to_string(),
@@ -3435,6 +3487,7 @@ mod tests {
             contents,
             "event=control_plane_started bind_address=127.0.0.1 port=7676\n\
 event=request_authorized operation=health\n\
+event=client_revoked client_id=client%201\n\
 event=session_created session_id=session%201 application_id=terminal client_id=client-1 viewport_width=1280 viewport_height=720\n"
         );
 
@@ -3489,6 +3542,46 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
         assert_eq!(approved, AuthorizedClient::new("client-1", "Laptop"));
         assert_eq!(service.authorize_client(Some("client-1")), Ok(approved));
         assert!(service.pending_pairings().is_empty());
+    }
+
+    #[test]
+    fn client_authorization_revokes_paired_client() {
+        let mut service = InMemoryClientAuthorizationService::new(vec![
+            AuthorizedClient::new("client-1", "Laptop"),
+            AuthorizedClient::new("client-2", "Tablet"),
+        ]);
+
+        let revoked = service
+            .revoke_client(RevokeClientRequest {
+                client_id: "client-1".to_string(),
+            })
+            .expect("revoke client");
+
+        assert_eq!(revoked, AuthorizedClient::new("client-1", "Laptop"));
+        assert_eq!(
+            service.authorized_clients(),
+            vec![AuthorizedClient::new("client-2", "Tablet")]
+        );
+        assert_eq!(
+            service.authorize_client(Some("client-1")),
+            Err(AppRelayError::PermissionDenied(
+                "client client-1 is not paired".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn client_authorization_rejects_unknown_revoke() {
+        let mut service = InMemoryClientAuthorizationService::default();
+
+        assert_eq!(
+            service.revoke_client(RevokeClientRequest {
+                client_id: "client-1".to_string(),
+            }),
+            Err(AppRelayError::NotFound(
+                "client client-1 was not paired".to_string()
+            ))
+        );
     }
 
     #[test]
@@ -5859,7 +5952,11 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
     fn write_executable_script(path: &Path, contents: &str) {
         use std::os::unix::fs::PermissionsExt;
 
-        fs::write(path, contents).expect("write executable script");
+        let mut file = fs::File::create(path).expect("create executable script");
+        file.write_all(contents.as_bytes())
+            .expect("write executable script");
+        file.sync_all().expect("sync executable script");
+        drop(file);
         let mut permissions = fs::metadata(path)
             .expect("read executable script metadata")
             .permissions();

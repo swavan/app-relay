@@ -47,6 +47,9 @@ Pairing is modeled as an explicit service-layer contract:
 - local/admin approval is the explicit user-action boundary that authorizes that
   pending identity.
 - pending clients are not authorized until approved.
+- `pairing-revoke` removes an already authorized client from the active
+  authorization set through the foreground shared-token channel. This is a
+  source/local limited beta convenience path, not a distinct admin credential.
 
 This slice does not implement the final UI, QR-code, nearby-device, or native
 device-verification flow. The foreground command parser carries a caller-supplied
@@ -98,9 +101,9 @@ Server runtime config is persisted by the Rust service layer with
 - authorized paired client ids and labels
 
 The repository validates config before writing and reports corrupted files with
-a typed error. Runtime pairing approvals are held by the in-memory control plane;
-persisting newly approved clients back through the config repository is future
-work.
+a typed error. Runtime pairing approvals and revocations update the in-memory
+control-plane config; persisting those runtime changes back through the config
+repository is future work.
 
 ## Foreground Listener
 
@@ -114,6 +117,7 @@ foreground integration testing. It currently supports:
 - `diagnostics <token>`
 - `applications <token>`
 - `pairing-request <token> <client_id> <client_label>`
+- `pairing-revoke <token> <client_id>`
 - `create-session <token> <client_id> <application_id> <width> <height>`
 - `resize-session <token> <client_id> <session_id> <width> <height>`
 - `close-session <token> <client_id> <session_id>`
@@ -155,6 +159,11 @@ Manual foreground smoke test:
    resize intent for the selected session.
 8. Send `sessions <token> <client_id>` to confirm the created session is active.
 9. Send `close-session <token> <client_id> <session_id>` to close the session.
+10. Send `pairing-revoke <token> <client_id>` to remove the client from the
+    active authorization set and confirm later sensitive calls from that client
+    return `ERROR service client <client_id> is not paired`. Revocation blocks
+    future sensitive commands from that client id; it does not currently tear
+    down already active sessions, streams, or input state.
 
 ## Daemon Installation
 
@@ -185,11 +194,11 @@ Tests assert these generated artifacts without crashing installed services.
 ## Events
 
 The server emits structured events for control-plane start and stop, foreground
-TCP connection accept and close, authorized requests, rejected requests, session
-creation, session resize, session close, SSH tunnel lifecycle, and config
-persistence operations. Tests can use `InMemoryEventSink`; foreground and
-service runners can use `FileEventSink` to append line-oriented structured
-events to a log file.
+TCP connection accept and close, authorized requests, rejected requests,
+client revocation success/failure, session creation, session resize, session
+close, SSH tunnel lifecycle, and config persistence operations. Tests can use
+`InMemoryEventSink`; foreground and service runners can use `FileEventSink` to
+append line-oriented structured events to a log file.
 
 The current audit logging contract is documented in
 [audit-logging.md](audit-logging.md). It explicitly excludes auth tokens, media
