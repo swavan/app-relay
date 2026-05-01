@@ -49,7 +49,7 @@ export type ApplicationSession = {
     id: string;
     applicationId: string;
     title: string;
-    selectionMethod: "launchIntent" | "existingWindow" | "synthetic";
+    selectionMethod: "launchIntent" | "existingWindow" | "nativeWindow" | "synthetic";
   };
   launchIntent?: {
     sessionId: string;

@@ -12,11 +12,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use apprelay_core::{
     ApplicationDiscovery, ApplicationLaunchBackendService, ApplicationSessionService,
-    CapabilityService, ClientAuthorizationService, DefaultCapabilityService,
-    DesktopEntryApplicationDiscovery, EventSink, HealthService, InMemoryApplicationSessionService,
-    InMemoryClientAuthorizationService, InMemoryInputForwardingService, InputForwardingService,
-    MacosApplicationDiscovery, ServerConfig, ServerEvent, SessionPolicy, StaticHealthService,
-    UnsupportedApplicationDiscovery,
+    ApplicationWindowSelectionBackendService, CapabilityService, ClientAuthorizationService,
+    DefaultCapabilityService, DesktopEntryApplicationDiscovery, EventSink, HealthService,
+    InMemoryApplicationSessionService, InMemoryClientAuthorizationService,
+    InMemoryInputForwardingService, InputForwardingService, MacosApplicationDiscovery,
+    ServerConfig, ServerEvent, SessionPolicy, StaticHealthService, UnsupportedApplicationDiscovery,
 };
 use apprelay_protocol::{
     AppRelayError, ApplicationLaunch, ApplicationSession, ApplicationSummary,
@@ -53,10 +53,12 @@ impl ServerServices {
             health_service: StaticHealthService::new("apprelay-server", version.clone()),
             capability_service: DefaultCapabilityService::new(platform),
             application_discovery: ApplicationDiscoveryService::for_platform(platform),
-            session_service: InMemoryApplicationSessionService::with_launch_backend(
-                SessionPolicy::allow_all(),
-                launch_backend_for_platform(platform),
-            ),
+            session_service:
+                InMemoryApplicationSessionService::with_launch_and_window_selection_backends(
+                    SessionPolicy::allow_all(),
+                    launch_backend_for_platform(platform),
+                    window_selection_backend_for_platform(platform),
+                ),
             input_forwarding: InMemoryInputForwardingService::default(),
             video_stream: VideoStreamControl::for_platform(platform),
             audio_stream: AudioStreamControl::for_platform(platform),
@@ -87,10 +89,33 @@ impl ServerServices {
         let mut services = Self::new(Platform::Macos, version);
         services.application_discovery =
             ApplicationDiscoveryService::MacosApplications(MacosApplicationDiscovery::new(roots));
-        services.session_service = InMemoryApplicationSessionService::with_launch_backend(
-            SessionPolicy::allow_all(),
-            ApplicationLaunchBackendService::MacosNative { open_command },
+        services.session_service =
+            InMemoryApplicationSessionService::with_launch_and_window_selection_backends(
+                SessionPolicy::allow_all(),
+                ApplicationLaunchBackendService::MacosNative { open_command },
+                ApplicationWindowSelectionBackendService::RecordOnly,
+            );
+        services
+    }
+
+    #[doc(hidden)]
+    pub fn with_macos_application_roots_open_and_osascript_commands(
+        version: impl Into<String>,
+        roots: Vec<PathBuf>,
+        open_command: PathBuf,
+        osascript_command: PathBuf,
+    ) -> Self {
+        let mut services = Self::with_macos_application_roots_and_open_command(
+            version,
+            roots,
+            open_command.clone(),
         );
+        services.session_service =
+            InMemoryApplicationSessionService::with_launch_and_window_selection_backends(
+                SessionPolicy::allow_all(),
+                ApplicationLaunchBackendService::MacosNative { open_command },
+                ApplicationWindowSelectionBackendService::MacosNative { osascript_command },
+            );
         services
     }
 
@@ -260,6 +285,21 @@ fn launch_backend_for_platform(platform: Platform) -> ApplicationLaunchBackendSe
         Platform::Windows | Platform::Android | Platform::Ios | Platform::Unknown => {
             ApplicationLaunchBackendService::RecordOnly
         }
+    }
+}
+
+fn window_selection_backend_for_platform(
+    platform: Platform,
+) -> ApplicationWindowSelectionBackendService {
+    match platform {
+        Platform::Macos => ApplicationWindowSelectionBackendService::MacosNative {
+            osascript_command: PathBuf::from("/usr/bin/osascript"),
+        },
+        Platform::Linux
+        | Platform::Windows
+        | Platform::Android
+        | Platform::Ios
+        | Platform::Unknown => ApplicationWindowSelectionBackendService::RecordOnly,
     }
 }
 
@@ -1014,6 +1054,7 @@ fn selection_method(method: &apprelay_protocol::WindowSelectionMethod) -> &'stat
     match method {
         apprelay_protocol::WindowSelectionMethod::LaunchIntent => "launch-intent",
         apprelay_protocol::WindowSelectionMethod::ExistingWindow => "existing-window",
+        apprelay_protocol::WindowSelectionMethod::NativeWindow => "native-window",
         apprelay_protocol::WindowSelectionMethod::Synthetic => "synthetic",
     }
 }

@@ -295,6 +295,7 @@ pub struct SelectedWindow {
 pub enum WindowSelectionMethod {
     LaunchIntent,
     ExistingWindow,
+    NativeWindow,
     Synthetic,
 }
 

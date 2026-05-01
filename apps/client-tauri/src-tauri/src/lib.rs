@@ -664,6 +664,7 @@ fn window_selection_method_name(method: &WindowSelectionMethod) -> &'static str 
     match method {
         WindowSelectionMethod::LaunchIntent => "launchIntent",
         WindowSelectionMethod::ExistingWindow => "existingWindow",
+        WindowSelectionMethod::NativeWindow => "nativeWindow",
         WindowSelectionMethod::Synthetic => "synthetic",
     }
 }
@@ -727,6 +728,18 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_window_dto_maps_native_window_selection_method() {
+        let dto = SelectedWindowDto::from(SelectedWindow {
+            id: "macos-window-session-1-88".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            title: "Native Fake Window".to_string(),
+            selection_method: WindowSelectionMethod::NativeWindow,
+        });
+
+        assert_eq!(dto.selection_method, "nativeWindow");
+    }
 
     #[test]
     fn icon_data_url_encodes_icon_bytes() {
