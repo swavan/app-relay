@@ -148,6 +148,30 @@ describe("buildAppViewModel", () => {
     ]);
   });
 
+  it("preserves macOS video capability telemetry notes without implying playback", () => {
+    const reason =
+      "macOS selected-window video stream control-plane startup and capture runtime telemetry are available; decoded/live ScreenCaptureKit video delivery remains planned";
+    const viewModel = buildAppViewModel({
+      ...baseInput,
+      capabilities: [
+        {
+          platform: "macos",
+          feature: "windowVideoStream",
+          supported: true,
+          reason,
+        },
+      ],
+    });
+
+    expect(viewModel.capabilityNotes).toEqual([
+      {
+        feature: "Window Video Stream",
+        platform: "macOS",
+        reason,
+      },
+    ]);
+  });
+
   it("omits unsupported capabilities and blank reasons from capability notes", () => {
     const viewModel = buildAppViewModel({
       ...baseInput,

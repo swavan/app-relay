@@ -2200,7 +2200,7 @@ impl CapabilityService for DefaultCapabilityService {
                 "Linux selected-window video stream control-plane startup is available; native frame capture backend is planned"
             }
             Platform::Macos => {
-                "macOS selected-window video stream control-plane startup is available; native ScreenCaptureKit frame capture backend is planned"
+                "macOS selected-window video stream control-plane startup and capture runtime telemetry are available; decoded/live ScreenCaptureKit video delivery remains planned"
             }
             _ => unsupported_reason,
         };
@@ -3119,6 +3119,24 @@ mod tests {
                 .as_deref()
                 .is_some_and(|reason| reason.contains("control-plane startup")));
         }
+    }
+
+    #[test]
+    fn macos_video_capability_reports_capture_runtime_telemetry_boundary() {
+        let service = DefaultCapabilityService::new(Platform::Macos);
+        let capabilities = service.platform_capabilities();
+        let window_video = capabilities
+            .iter()
+            .find(|capability| capability.feature == Feature::WindowVideoStream)
+            .expect("window video capability");
+
+        assert!(window_video.supported);
+        assert_eq!(
+            window_video.reason.as_deref(),
+            Some(
+                "macOS selected-window video stream control-plane startup and capture runtime telemetry are available; decoded/live ScreenCaptureKit video delivery remains planned"
+            )
+        );
     }
 
     #[test]
