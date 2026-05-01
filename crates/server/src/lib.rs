@@ -21,7 +21,7 @@ use apprelay_core::{
     UnsupportedApplicationDiscovery,
 };
 use apprelay_protocol::{
-    AppRelayError, ApplicationLaunch, ApplicationSession, ApplicationSummary,
+    ActiveInputFocus, AppRelayError, ApplicationLaunch, ApplicationSession, ApplicationSummary,
     ApprovePairingRequest, AudioStreamSession, ControlAuth, ControlClientIdentity, ControlError,
     ControlResult, CreateSessionRequest, DiagnosticsBundle, Feature, ForwardInputRequest,
     HealthStatus, HeartbeatStatus, InputDelivery, LaunchIntentStatus, NegotiateVideoStreamRequest,
@@ -200,6 +200,11 @@ impl ServerServices {
     ) -> Result<InputDelivery, AppRelayError> {
         self.input_forwarding
             .forward_input(request, &self.session_service.active_sessions())
+    }
+
+    pub fn active_input_focus(&self) -> Option<ActiveInputFocus> {
+        self.input_forwarding
+            .active_input_focus(&self.session_service.active_sessions())
     }
 
     pub fn start_video_stream(
@@ -498,6 +503,14 @@ impl ServerControlPlane {
     ) -> ControlResult<InputDelivery> {
         self.authorize_paired_client(auth)?;
         self.services.forward_input(request).map_err(Into::into)
+    }
+
+    pub fn active_input_focus(
+        &self,
+        auth: &ControlAuth,
+    ) -> ControlResult<Option<ActiveInputFocus>> {
+        self.authorize_paired_client(auth)?;
+        Ok(self.services.active_input_focus())
     }
 
     pub fn start_video_stream(

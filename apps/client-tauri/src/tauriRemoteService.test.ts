@@ -35,6 +35,7 @@ describe("TauriRemoteService", () => {
         }
       ])
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
 
@@ -47,6 +48,7 @@ describe("TauriRemoteService", () => {
     await expect(service.capabilities()).resolves.toHaveLength(1);
     await expect(service.applications()).resolves.toEqual([{ id: "terminal", name: "Terminal" }]);
     await expect(service.activeSessions()).resolves.toEqual([]);
+    await expect(service.activeInputFocus()).resolves.toBeNull();
     await expect(service.activeVideoStreams()).resolves.toEqual([]);
     await expect(service.activeAudioStreams()).resolves.toEqual([]);
 
@@ -56,6 +58,10 @@ describe("TauriRemoteService", () => {
       ["server_applications", { authToken: "mobile-test-token" }],
       [
         "active_application_sessions",
+        { authToken: "mobile-test-token", clientId: "mobile-test-server" }
+      ],
+      [
+        "active_input_focus",
         { authToken: "mobile-test-token", clientId: "mobile-test-server" }
       ],
       [
@@ -102,6 +108,10 @@ describe("TauriRemoteService", () => {
         status: "focused"
       })
       .mockResolvedValueOnce({
+        sessionId: "session-1",
+        selectedWindowId: "window-session-1"
+      })
+      .mockResolvedValueOnce({
         id: "stream-1",
         sessionId: "session-1",
         selectedWindowId: "window-session-1",
@@ -132,6 +142,7 @@ describe("TauriRemoteService", () => {
     await service.createSession("terminal", { width: 1280, height: 720 });
     await service.resizeSession("session-1", { width: 1440, height: 900 });
     await service.forwardInput("session-1", { width: 1440, height: 900 }, { kind: "focus" });
+    await service.activeInputFocus();
     await service.startVideoStream("session-1");
     await service.startAudioStream("session-1", {
       outputDeviceId: "default",
@@ -175,6 +186,13 @@ describe("TauriRemoteService", () => {
             clientViewport: { width: 1440, height: 900 },
             event: { kind: "focus" }
           }
+        }
+      ],
+      [
+        "active_input_focus",
+        {
+          authToken: "mobile-test-token",
+          clientId: "mobile-test-server"
         }
       ],
       [

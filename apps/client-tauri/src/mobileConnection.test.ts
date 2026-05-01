@@ -94,6 +94,10 @@ class MobileTestRemoteService implements RemoteService {
     throw new Error("not used by mobile connection contract");
   }
 
+  async activeInputFocus(): Promise<never> {
+    throw new Error("not used by mobile connection contract");
+  }
+
   async startVideoStream(_sessionId: string): Promise<never> {
     throw new Error("not used by mobile connection contract");
   }

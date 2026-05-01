@@ -9,6 +9,13 @@ pub struct ForwardInputRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveInputFocus {
+    pub session_id: String,
+    pub selected_window_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum InputEvent {
     Focus,
