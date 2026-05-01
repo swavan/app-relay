@@ -3,11 +3,11 @@ use apprelay_protocol::{
     ActiveInputFocus, AppRelayError, AudioBackendFailureKind, AudioBackendKind, AudioBackendLeg,
     AudioBackendReadiness, AudioStreamSession, AudioStreamState, ButtonAction, ClientPoint,
     ControlAuth, ControlError, CreateSessionRequest, Feature, ForwardInputRequest,
-    InputDeliveryStatus, InputEvent, LaunchIntentStatus, MappedInputEvent, MicrophoneMode,
-    NegotiateVideoStreamRequest, Platform, PointerButton, ReconnectVideoStreamRequest,
-    ResizeIntentStatus, ResizeSessionRequest, ServerPoint, ServerVersion, SessionState,
-    StartAudioStreamRequest, StartVideoStreamRequest, StopAudioStreamRequest,
-    StopVideoStreamRequest, UpdateAudioStreamRequest, VideoCaptureScope,
+    InputDeliveryStatus, InputEvent, KeyAction, KeyModifiers, LaunchIntentStatus, MappedInputEvent,
+    MicrophoneMode, NegotiateVideoStreamRequest, Platform, PointerButton,
+    ReconnectVideoStreamRequest, ResizeIntentStatus, ResizeSessionRequest, ServerPoint,
+    ServerVersion, SessionState, StartAudioStreamRequest, StartVideoStreamRequest,
+    StopAudioStreamRequest, StopVideoStreamRequest, UpdateAudioStreamRequest, VideoCaptureScope,
     VideoEncodingPipelineState, VideoResolutionAdaptationReason, VideoStreamFailureKind,
     VideoStreamNegotiationState, VideoStreamRecoveryAction, VideoStreamSignalingKind,
     VideoStreamState, ViewportSize, WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription,
@@ -269,6 +269,33 @@ fn control_plane_reports_macos_app_discovery_capability() {
     assert!(capabilities
         .iter()
         .any(|capability| capability.feature == Feature::AppDiscovery && capability.supported));
+}
+
+#[test]
+fn control_plane_reports_macos_keyboard_but_not_mouse_capabilities() {
+    let control_plane = ServerControlPlane::new(
+        server_services_for_platform(Platform::Macos, "integration-test"),
+        paired_server_config(),
+    );
+    let capabilities = control_plane
+        .capabilities(&ControlAuth::new("correct-token"))
+        .expect("authorized capabilities response");
+    let keyboard = capabilities
+        .iter()
+        .find(|capability| capability.feature == Feature::KeyboardInput)
+        .expect("keyboard capability");
+    let mouse = capabilities
+        .iter()
+        .find(|capability| capability.feature == Feature::MouseInput)
+        .expect("mouse capability");
+
+    assert!(keyboard.supported);
+    assert!(
+        keyboard.reason.as_deref().is_some_and(
+            |reason| reason.contains("System Events") && reason.contains("Accessibility")
+        )
+    );
+    assert!(!mouse.supported);
 }
 
 #[test]
@@ -728,6 +755,117 @@ fn control_plane_authorizes_and_forwards_input_to_session() {
         }
     );
     assert_eq!(clicked.status, InputDeliveryStatus::Delivered);
+}
+
+#[test]
+#[cfg(unix)]
+fn control_plane_forwards_macos_keyboard_input_to_native_backend() {
+    let root = unique_test_dir("control-plane-macos-keyboard");
+    std::fs::create_dir_all(&root).expect("create test input directory");
+    let marker = root.join("keyboard-marker");
+    let osascript = root.join("fake-osascript");
+    write_executable_script(
+        &osascript,
+        &format!(
+            "#!/bin/sh\nlast=''\nfor arg in \"$@\"; do last=$arg; done\nprintf '%s\\n' \"$last\" > {}\n",
+            marker.display()
+        ),
+    );
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::with_macos_input_osascript_command("integration-test", osascript),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+
+    control_plane
+        .forward_input(
+            &auth,
+            ForwardInputRequest {
+                session_id: session.id.clone(),
+                client_viewport: ViewportSize::new(1280, 720),
+                event: InputEvent::Focus,
+            },
+        )
+        .expect("focus input");
+    let delivery = control_plane
+        .forward_input(
+            &auth,
+            ForwardInputRequest {
+                session_id: session.id,
+                client_viewport: ViewportSize::new(1280, 720),
+                event: InputEvent::KeyboardKey {
+                    key: "x".to_string(),
+                    action: KeyAction::Press,
+                    modifiers: KeyModifiers::default(),
+                },
+            },
+        )
+        .expect("forward keyboard input");
+
+    assert_eq!(delivery.status, InputDeliveryStatus::Delivered);
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("read keyboard marker"),
+        "x\n"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn control_plane_reports_macos_pointer_input_as_unsupported() {
+    let mut control_plane = ServerControlPlane::new(
+        server_services_for_platform(Platform::Macos, "integration-test"),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+
+    control_plane
+        .forward_input(
+            &auth,
+            ForwardInputRequest {
+                session_id: session.id.clone(),
+                client_viewport: ViewportSize::new(1280, 720),
+                event: InputEvent::Focus,
+            },
+        )
+        .expect("focus input");
+
+    assert_eq!(
+        control_plane.forward_input(
+            &auth,
+            ForwardInputRequest {
+                session_id: session.id,
+                client_viewport: ViewportSize::new(1280, 720),
+                event: InputEvent::PointerButton {
+                    position: ClientPoint::new(640.0, 360.0),
+                    button: PointerButton::Primary,
+                    action: ButtonAction::Press,
+                },
+            },
+        ),
+        Err(ControlError::Service(AppRelayError::unsupported(
+            Platform::Macos,
+            Feature::MouseInput
+        )))
+    );
 }
 
 #[test]

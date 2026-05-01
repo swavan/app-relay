@@ -10,7 +10,7 @@ baseline rather than a native media backend.
 | Platform | App discovery | Application launch | Window resize | Window video | System audio | Client microphone | Keyboard input | Mouse input |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Linux | Supported | Supported: `.desktop` Exec command spawn | Unsupported: planned | Supported: selected-window stream startup; native frame capture planned | Supported: PipeWire native backend planned | Supported: PipeWire native backend planned | Unsupported: planned | Unsupported: planned |
-| macOS | Supported | Supported: `.app` bundle launch through `open` | Supported: native selected-window resize through System Events | Supported: selected-window stream startup; ScreenCaptureKit frame capture planned | Supported: CoreAudio native backend planned | Supported: CoreAudio native backend planned | Unsupported: planned | Unsupported: planned |
+| macOS | Supported | Supported: `.app` bundle launch through `open` | Supported: native selected-window resize through System Events | Supported: selected-window stream startup; ScreenCaptureKit frame capture planned | Supported: CoreAudio native backend planned | Supported: CoreAudio native backend planned | Supported: keyboard text and conservative keys through System Events; requires Accessibility permission | Unsupported: planned |
 | Windows | Unsupported: discovery backend not implemented | Unsupported: launch intent only | Unsupported: planned | Unsupported: planned | Supported: WASAPI native backend planned | Supported: WASAPI native backend planned | Unsupported: planned | Unsupported: planned |
 | Android | Unsupported: client target | Unsupported: launch intent only | Unsupported: planned | Unsupported: planned | Unsupported: client target | Unsupported: client target | Unsupported: planned | Unsupported: planned |
 | iOS | Unsupported: client target | Unsupported: launch intent only | Unsupported: planned | Unsupported: planned | Unsupported: client target | Unsupported: client target | Unsupported: planned | Unsupported: planned |
@@ -35,5 +35,7 @@ baseline rather than a native media backend.
 - macOS window resize applies the requested viewport size to selected native
   windows through System Events using the native window id selected for the
   session.
+- macOS keyboard input sends text and a conservative set of key commands through
+  System Events. Pointer and mouse input is still unsupported on macOS.
 - Mobile platforms are client targets and do not expose desktop server capture
   or discovery capabilities.

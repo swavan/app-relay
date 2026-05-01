@@ -23,6 +23,7 @@
   } from "./services";
   import {
     centerPoint,
+    inputControlAvailability,
     inputModeFromDelivery,
     inputViewportForSession
   } from "./inputForwarding";
@@ -67,6 +68,7 @@
   $: requestedViewport = parseViewport(viewportWidth, viewportHeight);
   $: viewportValid = requestedViewport !== null;
   $: audioStreamActive = activeAudioStream !== null && activeAudioStream.state !== "stopped";
+  $: inputControls = inputControlAvailability(activeSession !== null, capabilities);
 
   $: appView = buildAppViewModel({
     health,
@@ -268,7 +270,7 @@
   }
 
   async function sendTestClick() {
-    if (!activeSession) {
+    if (!activeSession || !inputControls.testClickAvailable) {
       return;
     }
 
@@ -290,6 +292,10 @@
   }
 
   async function sendTestText() {
+    if (!inputControls.testTextAvailable) {
+      return;
+    }
+
     await forwardInput({ kind: "keyboardText", text: "AppRelay" });
   }
 
@@ -539,15 +545,24 @@
       <div class="session-actions">
         <button
           class:active={inputMode}
+          disabled={!inputControls.focusAvailable}
           on:click={() => setInputMode(!inputMode)}
           type="button"
         >
           {inputMode ? "Blur" : "Focus"}
         </button>
-        <button disabled={!inputMode} on:click={sendTestClick} type="button">
+        <button
+          disabled={!inputMode || !inputControls.testClickAvailable}
+          on:click={sendTestClick}
+          type="button"
+        >
           Click
         </button>
-        <button disabled={!inputMode} on:click={sendTestText} type="button">
+        <button
+          disabled={!inputMode || !inputControls.testTextAvailable}
+          on:click={sendTestText}
+          type="button"
+        >
           Type
         </button>
       </div>

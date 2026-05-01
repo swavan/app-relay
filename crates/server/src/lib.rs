@@ -16,9 +16,9 @@ use apprelay_core::{
     ApplicationWindowSelectionBackendService, CapabilityService, ClientAuthorizationService,
     DefaultCapabilityService, DesktopEntryApplicationDiscovery, EventSink, HealthService,
     InMemoryApplicationSessionService, InMemoryClientAuthorizationService,
-    InMemoryInputForwardingService, InputForwardingService, MacosApplicationDiscovery,
-    MacosWindowCaptureRuntime, ServerConfig, ServerEvent, SessionPolicy, StaticHealthService,
-    UnsupportedApplicationDiscovery, WindowResizeBackendService,
+    InMemoryInputForwardingService, InputBackendService, InputForwardingService,
+    MacosApplicationDiscovery, MacosWindowCaptureRuntime, ServerConfig, ServerEvent, SessionPolicy,
+    StaticHealthService, UnsupportedApplicationDiscovery, WindowResizeBackendService,
 };
 use apprelay_protocol::{
     ActiveInputFocus, AppRelayError, ApplicationLaunch, ApplicationSession, ApplicationSummary,
@@ -61,7 +61,9 @@ impl ServerServices {
                 window_selection_backend_for_platform(platform),
                 resize_backend_for_platform(platform),
             ),
-            input_forwarding: InMemoryInputForwardingService::default(),
+            input_forwarding: InMemoryInputForwardingService::new(input_backend_for_platform(
+                platform,
+            )),
             video_stream: VideoStreamControl::for_platform(platform),
             audio_stream: AudioStreamControl::for_platform(platform),
             platform,
@@ -118,8 +120,14 @@ impl ServerServices {
             ApplicationWindowSelectionBackendService::MacosNative {
                 osascript_command: osascript_command.clone(),
             },
-            WindowResizeBackendService::MacosNative { osascript_command },
+            WindowResizeBackendService::MacosNative {
+                osascript_command: osascript_command.clone(),
+            },
         );
+        services.input_forwarding =
+            InMemoryInputForwardingService::new(InputBackendService::MacosKeyboard {
+                osascript_command,
+            });
         services
     }
 
@@ -138,6 +146,19 @@ impl ServerServices {
             osascript_command,
         );
         services.video_stream = VideoStreamControl::for_macos_runtime(capture_runtime);
+        services
+    }
+
+    #[doc(hidden)]
+    pub fn with_macos_input_osascript_command(
+        version: impl Into<String>,
+        osascript_command: PathBuf,
+    ) -> Self {
+        let mut services = Self::new(Platform::Macos, version);
+        services.input_forwarding =
+            InMemoryInputForwardingService::new(InputBackendService::MacosKeyboard {
+                osascript_command,
+            });
         services
     }
 
@@ -370,6 +391,19 @@ fn resize_backend_for_platform(platform: Platform) -> WindowResizeBackendService
         | Platform::Android
         | Platform::Ios
         | Platform::Unknown => WindowResizeBackendService::RecordOnly,
+    }
+}
+
+fn input_backend_for_platform(platform: Platform) -> InputBackendService {
+    match platform {
+        Platform::Macos => InputBackendService::MacosKeyboard {
+            osascript_command: PathBuf::from("/usr/bin/osascript"),
+        },
+        Platform::Linux
+        | Platform::Windows
+        | Platform::Android
+        | Platform::Ios
+        | Platform::Unknown => InputBackendService::RecordOnly,
     }
 }
 
