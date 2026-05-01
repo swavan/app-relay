@@ -1,8 +1,11 @@
 use apprelay_protocol::{
     ActiveInputFocus, AppRelayError, ApplicationSession, ClientPoint, Feature, ForwardInputRequest,
-    InputBackendKind, InputDelivery, InputDeliveryStatus, InputEvent, MappedInputEvent, Platform,
-    ServerPoint, SessionState, ViewportSize,
+    InputBackendKind, InputDelivery, InputDeliveryStatus, InputEvent, KeyAction, KeyModifiers,
+    MappedInputEvent, Platform, ServerPoint, SessionState, ViewportSize, WindowSelectionMethod,
 };
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 pub trait InputForwardingService {
     fn forward_input(
@@ -18,12 +21,19 @@ pub trait InputForwardingService {
 }
 
 pub trait InputBackend {
-    fn deliver(&self, delivery: InputDelivery) -> Result<InputDelivery, AppRelayError>;
+    fn deliver(
+        &self,
+        delivery: InputDelivery,
+        session: &ApplicationSession,
+    ) -> Result<InputDelivery, AppRelayError>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InputBackendService {
     RecordOnly,
+    MacosKeyboard {
+        osascript_command: PathBuf,
+    },
     Unsupported {
         platform: Platform,
         kind: InputBackendKind,
@@ -31,9 +41,16 @@ pub enum InputBackendService {
 }
 
 impl InputBackend for InputBackendService {
-    fn deliver(&self, delivery: InputDelivery) -> Result<InputDelivery, AppRelayError> {
+    fn deliver(
+        &self,
+        delivery: InputDelivery,
+        session: &ApplicationSession,
+    ) -> Result<InputDelivery, AppRelayError> {
         match self {
             Self::RecordOnly => Ok(delivery),
+            Self::MacosKeyboard { osascript_command } => {
+                deliver_macos_keyboard_input(osascript_command, delivery, session)
+            }
             Self::Unsupported { platform, kind } => {
                 let feature = match kind {
                     InputBackendKind::Pointer => Feature::MouseInput,
@@ -41,6 +58,331 @@ impl InputBackend for InputBackendService {
                 };
                 Err(AppRelayError::unsupported(*platform, feature))
             }
+        }
+    }
+}
+
+const MACOS_KEYBOARD_INPUT_TIMEOUT: Duration = Duration::from_millis(400);
+
+fn deliver_macos_keyboard_input(
+    osascript_command: &Path,
+    delivery: InputDelivery,
+    session: &ApplicationSession,
+) -> Result<InputDelivery, AppRelayError> {
+    let bundle_id = session.application_id.trim();
+    if bundle_id.is_empty() {
+        return Err(AppRelayError::InvalidRequest(
+            "macOS keyboard input requires an application bundle id".to_string(),
+        ));
+    }
+    let native_window_id = macos_keyboard_target_window_id(session)?;
+
+    match &delivery.mapped_event {
+        MappedInputEvent::KeyboardText { text } => {
+            run_macos_keyboard_text_script(osascript_command, bundle_id, native_window_id, text)?;
+            Ok(delivery)
+        }
+        MappedInputEvent::KeyboardKey {
+            key,
+            action,
+            modifiers,
+        } => {
+            run_macos_keyboard_key_script(
+                osascript_command,
+                bundle_id,
+                native_window_id,
+                key,
+                *action,
+                *modifiers,
+            )?;
+            Ok(delivery)
+        }
+        MappedInputEvent::PointerMove { .. }
+        | MappedInputEvent::PointerButton { .. }
+        | MappedInputEvent::PointerScroll { .. }
+        | MappedInputEvent::PointerDrag { .. } => Err(AppRelayError::unsupported(
+            Platform::Macos,
+            Feature::MouseInput,
+        )),
+        MappedInputEvent::Focus | MappedInputEvent::Blur => Ok(delivery),
+    }
+}
+
+fn macos_keyboard_target_window_id(
+    session: &ApplicationSession,
+) -> Result<Option<&str>, AppRelayError> {
+    if session.selected_window.selection_method != WindowSelectionMethod::NativeWindow {
+        return Ok(None);
+    }
+
+    parse_macos_native_keyboard_window_id(&session.selected_window.id).map(Some)
+}
+
+fn parse_macos_native_keyboard_window_id(window_id: &str) -> Result<&str, AppRelayError> {
+    let Some(encoded_id) = window_id.strip_prefix("macos-window-") else {
+        return Err(AppRelayError::InvalidRequest(format!(
+            "selected window id `{window_id}` is not a macOS native window id"
+        )));
+    };
+    let Some((_, native_id)) = encoded_id.rsplit_once('-') else {
+        return Err(AppRelayError::InvalidRequest(format!(
+            "selected window id `{window_id}` is missing a macOS native window id"
+        )));
+    };
+    let native_id = native_id.trim();
+
+    if native_id.is_empty() || !native_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(AppRelayError::InvalidRequest(format!(
+            "selected window id `{window_id}` has an unusable macOS native window id"
+        )));
+    }
+
+    Ok(native_id)
+}
+
+fn run_macos_keyboard_text_script(
+    osascript_command: &Path,
+    bundle_id: &str,
+    native_window_id: Option<&str>,
+    text: &str,
+) -> Result<(), AppRelayError> {
+    let mut args = vec![bundle_id, text];
+    if let Some(native_window_id) = native_window_id {
+        args.push(native_window_id);
+    }
+
+    let output = run_macos_keyboard_osascript(
+        osascript_command,
+        &[
+            "on run argv",
+            "set targetBundleId to item 1 of argv",
+            "set inputText to item 2 of argv",
+            "if (count of argv) > 2 then set targetWindowId to (item 3 of argv) as integer",
+            "tell application \"System Events\"",
+            "set matchingProcesses to application processes whose bundle identifier is targetBundleId",
+            "if (count of matchingProcesses) is 0 then error \"application process not found\"",
+            "set targetProcess to missing value",
+            "if (count of argv) > 2 then",
+            "repeat with candidateProcess in matchingProcesses",
+            "set matchingWindows to windows of candidateProcess whose id is targetWindowId",
+            "if (count of matchingWindows) > 0 then",
+            "set targetProcess to candidateProcess",
+            "perform action \"AXRaise\" of item 1 of matchingWindows",
+            "exit repeat",
+            "end if",
+            "end repeat",
+            "if targetProcess is missing value then error \"window not found\"",
+            "else",
+            "set targetProcess to item 1 of matchingProcesses",
+            "end if",
+            "set frontmost of targetProcess to true",
+            "keystroke inputText",
+            "end tell",
+            "end run",
+        ],
+        &args,
+    )?;
+
+    validate_macos_keyboard_output(output)
+}
+
+fn run_macos_keyboard_key_script(
+    osascript_command: &Path,
+    bundle_id: &str,
+    native_window_id: Option<&str>,
+    key: &str,
+    action: KeyAction,
+    modifiers: KeyModifiers,
+) -> Result<(), AppRelayError> {
+    if action == KeyAction::Release {
+        return Ok(());
+    }
+
+    if let Some(key_code) = macos_key_code(key) {
+        let mut args = vec![bundle_id];
+        if let Some(native_window_id) = native_window_id {
+            args.push(native_window_id);
+        }
+
+        let command = format!("key code {key_code}{}", macos_modifier_clause(modifiers));
+        let output = run_macos_keyboard_osascript(
+            osascript_command,
+            &[
+                "on run argv",
+                "set targetBundleId to item 1 of argv",
+                "if (count of argv) > 1 then set targetWindowId to (item 2 of argv) as integer",
+                "tell application \"System Events\"",
+                "set matchingProcesses to application processes whose bundle identifier is targetBundleId",
+                "if (count of matchingProcesses) is 0 then error \"application process not found\"",
+                "set targetProcess to missing value",
+                "if (count of argv) > 1 then",
+                "repeat with candidateProcess in matchingProcesses",
+                "set matchingWindows to windows of candidateProcess whose id is targetWindowId",
+                "if (count of matchingWindows) > 0 then",
+                "set targetProcess to candidateProcess",
+                "perform action \"AXRaise\" of item 1 of matchingWindows",
+                "exit repeat",
+                "end if",
+                "end repeat",
+                "if targetProcess is missing value then error \"window not found\"",
+                "else",
+                "set targetProcess to item 1 of matchingProcesses",
+                "end if",
+                "set frontmost of targetProcess to true",
+                command.as_str(),
+                "end tell",
+                "end run",
+            ],
+            &args,
+        )?;
+        return validate_macos_keyboard_output(output);
+    }
+
+    if key.chars().count() == 1 {
+        let mut args = vec![bundle_id, key];
+        if let Some(native_window_id) = native_window_id {
+            args.push(native_window_id);
+        }
+
+        let command = format!("keystroke inputKey{}", macos_modifier_clause(modifiers));
+        let output = run_macos_keyboard_osascript(
+            osascript_command,
+            &[
+                "on run argv",
+                "set targetBundleId to item 1 of argv",
+                "set inputKey to item 2 of argv",
+                "if (count of argv) > 2 then set targetWindowId to (item 3 of argv) as integer",
+                "tell application \"System Events\"",
+                "set matchingProcesses to application processes whose bundle identifier is targetBundleId",
+                "if (count of matchingProcesses) is 0 then error \"application process not found\"",
+                "set targetProcess to missing value",
+                "if (count of argv) > 2 then",
+                "repeat with candidateProcess in matchingProcesses",
+                "set matchingWindows to windows of candidateProcess whose id is targetWindowId",
+                "if (count of matchingWindows) > 0 then",
+                "set targetProcess to candidateProcess",
+                "perform action \"AXRaise\" of item 1 of matchingWindows",
+                "exit repeat",
+                "end if",
+                "end repeat",
+                "if targetProcess is missing value then error \"window not found\"",
+                "else",
+                "set targetProcess to item 1 of matchingProcesses",
+                "end if",
+                "set frontmost of targetProcess to true",
+                command.as_str(),
+                "end tell",
+                "end run",
+            ],
+            &args,
+        )?;
+        return validate_macos_keyboard_output(output);
+    }
+
+    Err(AppRelayError::InvalidRequest(format!(
+        "macOS keyboard key `{}` is not supported",
+        key
+    )))
+}
+
+fn macos_key_code(key: &str) -> Option<u16> {
+    match key.trim().to_ascii_lowercase().as_str() {
+        "enter" | "return" => Some(36),
+        "tab" => Some(48),
+        "space" | "spacebar" => Some(49),
+        "escape" | "esc" => Some(53),
+        "backspace" | "delete" => Some(51),
+        "arrowleft" | "left" => Some(123),
+        "arrowright" | "right" => Some(124),
+        "arrowdown" | "down" => Some(125),
+        "arrowup" | "up" => Some(126),
+        _ => None,
+    }
+}
+
+fn macos_modifier_clause(modifiers: KeyModifiers) -> String {
+    let mut modifier_names = Vec::new();
+    if modifiers.shift {
+        modifier_names.push("shift down");
+    }
+    if modifiers.control {
+        modifier_names.push("control down");
+    }
+    if modifiers.alt {
+        modifier_names.push("option down");
+    }
+    if modifiers.meta {
+        modifier_names.push("command down");
+    }
+
+    if modifier_names.is_empty() {
+        String::new()
+    } else {
+        format!(" using {{{}}}", modifier_names.join(", "))
+    }
+}
+
+fn run_macos_keyboard_osascript(
+    osascript_command: &Path,
+    script_lines: &[&str],
+    args: &[&str],
+) -> Result<Output, AppRelayError> {
+    let mut command = Command::new(osascript_command);
+    for line in script_lines {
+        command.arg("-e").arg(line);
+    }
+    command.args(args);
+
+    let child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            AppRelayError::ServiceUnavailable(format!(
+                "failed to run macOS keyboard input command `{}`: {error}",
+                osascript_command.display()
+            ))
+        })?;
+
+    wait_for_macos_keyboard_output_with_timeout(child, MACOS_KEYBOARD_INPUT_TIMEOUT).ok_or_else(
+        || AppRelayError::ServiceUnavailable("macOS keyboard input command timed out".to_string()),
+    )
+}
+
+fn wait_for_macos_keyboard_output_with_timeout(
+    mut child: Child,
+    timeout: Duration,
+) -> Option<Output> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        match child.try_wait().ok()? {
+            Some(_) => return child.wait_with_output().ok(),
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+}
+
+fn validate_macos_keyboard_output(output: Output) -> Result<(), AppRelayError> {
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let message = stderr.trim();
+        if message.is_empty() {
+            Err(AppRelayError::ServiceUnavailable(
+                "macOS keyboard input command failed".to_string(),
+            ))
+        } else {
+            Err(AppRelayError::ServiceUnavailable(format!(
+                "macOS keyboard input command failed: {message}"
+            )))
         }
     }
 }
@@ -256,7 +598,7 @@ impl InputForwardingService for InMemoryInputForwardingService {
                     }
                 }
 
-                let delivered = self.backend.deliver(delivery)?;
+                let delivered = self.backend.deliver(delivery, session)?;
                 self.record_delivery(delivered.clone());
                 Ok(delivered)
             }
@@ -311,6 +653,50 @@ mod tests {
     };
 
     use crate::{ApplicationSessionService, InMemoryApplicationSessionService};
+
+    fn native_macos_session(window_id: &str) -> ApplicationSession {
+        ApplicationSession {
+            id: "session-1".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            selected_window: SelectedWindow {
+                id: window_id.to_string(),
+                application_id: "dev.apprelay.fake".to_string(),
+                title: "Native Fake Window".to_string(),
+                selection_method: WindowSelectionMethod::NativeWindow,
+            },
+            viewport: ViewportSize::new(1280, 720),
+            state: SessionState::Ready,
+            launch_intent: Some(ApplicationLaunchIntent {
+                session_id: "session-1".to_string(),
+                application_id: "dev.apprelay.fake".to_string(),
+                launch: None,
+                status: LaunchIntentStatus::Attached,
+            }),
+            resize_intent: None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn unique_test_dir(name: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after unix epoch")
+            .as_nanos();
+
+        std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()))
+    }
+
+    #[cfg(unix)]
+    fn write_executable_script(path: &std::path::Path, contents: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::write(path, contents).expect("write executable script");
+        let mut permissions = std::fs::metadata(path)
+            .expect("read executable script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("mark executable script");
+    }
 
     #[test]
     fn input_service_maps_pointer_coordinates_across_viewports() {
@@ -499,6 +885,348 @@ mod tests {
             Err(AppRelayError::unsupported(
                 Platform::Linux,
                 Feature::KeyboardInput
+            ))
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn macos_keyboard_backend_delivers_text_with_fake_osascript() {
+        let root = unique_test_dir("macos-keyboard-text");
+        std::fs::create_dir_all(&root).expect("create test input directory");
+        let marker = root.join("keyboard-marker");
+        let osascript = root.join("fake-osascript");
+        write_executable_script(
+            &osascript,
+            &format!(
+                "#!/bin/sh\nlast=''\nfor arg in \"$@\"; do last=$arg; done\nprintf '%s\\n' \"$last\" > {}\n",
+                marker.display()
+            ),
+        );
+        let mut sessions = InMemoryApplicationSessionService::default();
+        let session = sessions
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let active_sessions = sessions.active_sessions();
+        let mut input = InMemoryInputForwardingService::new(InputBackendService::MacosKeyboard {
+            osascript_command: osascript,
+        });
+
+        input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: session.id.clone(),
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::Focus,
+                },
+                &active_sessions,
+            )
+            .expect("focus session");
+        let delivery = input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: session.id,
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::KeyboardText {
+                        text: "AppRelay".to_string(),
+                    },
+                },
+                &active_sessions,
+            )
+            .expect("deliver keyboard text");
+
+        assert_eq!(delivery.status, InputDeliveryStatus::Delivered);
+        assert_eq!(
+            std::fs::read_to_string(&marker).expect("read keyboard marker"),
+            "AppRelay\n"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn macos_keyboard_backend_targets_native_selected_window() {
+        let root = unique_test_dir("macos-keyboard-native-window");
+        std::fs::create_dir_all(&root).expect("create test input directory");
+        let marker = root.join("keyboard-marker");
+        let osascript = root.join("fake-osascript");
+        write_executable_script(
+            &osascript,
+            &format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\n", marker.display()),
+        );
+        let active_sessions = vec![native_macos_session("macos-window-session-1-88")];
+        let mut input = InMemoryInputForwardingService::new(InputBackendService::MacosKeyboard {
+            osascript_command: osascript,
+        });
+
+        input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: "session-1".to_string(),
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::Focus,
+                },
+                &active_sessions,
+            )
+            .expect("focus session");
+        input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: "session-1".to_string(),
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::KeyboardText {
+                        text: "AppRelay".to_string(),
+                    },
+                },
+                &active_sessions,
+            )
+            .expect("deliver keyboard text");
+
+        let script_args = std::fs::read_to_string(&marker).expect("read keyboard marker");
+        assert!(script_args.contains("dev.apprelay.fake"));
+        assert!(script_args.contains("AppRelay"));
+        assert!(script_args.contains("88"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_keyboard_backend_rejects_unusable_native_window_id() {
+        let active_sessions = vec![native_macos_session("macos-window-session-1-not-a-number")];
+        let mut input = InMemoryInputForwardingService::new(InputBackendService::MacosKeyboard {
+            osascript_command: PathBuf::from("unused-osascript"),
+        });
+
+        input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: "session-1".to_string(),
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::Focus,
+                },
+                &active_sessions,
+            )
+            .expect("focus session");
+        let error = input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: "session-1".to_string(),
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::KeyboardText {
+                        text: "AppRelay".to_string(),
+                    },
+                },
+                &active_sessions,
+            )
+            .expect_err("invalid native window id should fail input");
+
+        assert!(matches!(error, AppRelayError::InvalidRequest(_)));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn macos_keyboard_backend_delivers_conservative_key_with_fake_osascript() {
+        let root = unique_test_dir("macos-keyboard-key");
+        std::fs::create_dir_all(&root).expect("create test input directory");
+        let marker = root.join("keyboard-marker");
+        let osascript = root.join("fake-osascript");
+        write_executable_script(
+            &osascript,
+            &format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\n", marker.display()),
+        );
+        let mut sessions = InMemoryApplicationSessionService::default();
+        let session = sessions
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let active_sessions = sessions.active_sessions();
+        let mut input = InMemoryInputForwardingService::new(InputBackendService::MacosKeyboard {
+            osascript_command: osascript,
+        });
+
+        input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: session.id.clone(),
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::Focus,
+                },
+                &active_sessions,
+            )
+            .expect("focus session");
+        input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: session.id,
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::KeyboardKey {
+                        key: "Enter".to_string(),
+                        action: KeyAction::Press,
+                        modifiers: KeyModifiers {
+                            meta: true,
+                            ..KeyModifiers::default()
+                        },
+                    },
+                },
+                &active_sessions,
+            )
+            .expect("deliver keyboard key");
+
+        let script_args = std::fs::read_to_string(&marker).expect("read keyboard marker");
+        assert!(script_args.contains("key code 36 using {command down}"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn macos_keyboard_backend_reports_osascript_failure() {
+        let root = unique_test_dir("macos-keyboard-failure");
+        std::fs::create_dir_all(&root).expect("create test input directory");
+        let osascript = root.join("fake-osascript");
+        write_executable_script(
+            &osascript,
+            "#!/bin/sh\nprintf 'accessibility denied\\n' >&2\nexit 7\n",
+        );
+        let mut sessions = InMemoryApplicationSessionService::default();
+        let session = sessions
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let active_sessions = sessions.active_sessions();
+        let mut input = InMemoryInputForwardingService::new(InputBackendService::MacosKeyboard {
+            osascript_command: osascript,
+        });
+
+        input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: session.id.clone(),
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::Focus,
+                },
+                &active_sessions,
+            )
+            .expect("focus session");
+        let error = input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: session.id,
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::KeyboardText {
+                        text: "AppRelay".to_string(),
+                    },
+                },
+                &active_sessions,
+            )
+            .expect_err("osascript failure should fail input");
+
+        assert!(matches!(
+            error,
+            AppRelayError::ServiceUnavailable(message) if message.contains("accessibility denied")
+        ));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn macos_keyboard_backend_times_out_hung_osascript() {
+        let root = unique_test_dir("macos-keyboard-timeout");
+        std::fs::create_dir_all(&root).expect("create test input directory");
+        let osascript = root.join("fake-osascript");
+        write_executable_script(&osascript, "#!/bin/sh\nsleep 1\n");
+        let mut sessions = InMemoryApplicationSessionService::default();
+        let session = sessions
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let active_sessions = sessions.active_sessions();
+        let mut input = InMemoryInputForwardingService::new(InputBackendService::MacosKeyboard {
+            osascript_command: osascript,
+        });
+
+        input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: session.id.clone(),
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::Focus,
+                },
+                &active_sessions,
+            )
+            .expect("focus session");
+        let started = Instant::now();
+        let error = input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: session.id,
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::KeyboardText {
+                        text: "AppRelay".to_string(),
+                    },
+                },
+                &active_sessions,
+            )
+            .expect_err("hung osascript should time out");
+
+        assert!(started.elapsed() < Duration::from_millis(800));
+        assert!(matches!(error, AppRelayError::ServiceUnavailable(_)));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn macos_keyboard_backend_reports_pointer_unsupported() {
+        let mut sessions = InMemoryApplicationSessionService::default();
+        let session = sessions
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let active_sessions = sessions.active_sessions();
+        let mut input = InMemoryInputForwardingService::new(InputBackendService::MacosKeyboard {
+            osascript_command: PathBuf::from("unused-osascript"),
+        });
+
+        input
+            .forward_input(
+                ForwardInputRequest {
+                    session_id: session.id.clone(),
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::Focus,
+                },
+                &active_sessions,
+            )
+            .expect("focus session");
+
+        assert_eq!(
+            input.forward_input(
+                ForwardInputRequest {
+                    session_id: session.id,
+                    client_viewport: ViewportSize::new(1280, 720),
+                    event: InputEvent::PointerButton {
+                        position: ClientPoint::new(10.0, 10.0),
+                        button: PointerButton::Primary,
+                        action: ButtonAction::Press,
+                    },
+                },
+                &active_sessions,
+            ),
+            Err(AppRelayError::unsupported(
+                Platform::Macos,
+                Feature::MouseInput
             ))
         );
     }

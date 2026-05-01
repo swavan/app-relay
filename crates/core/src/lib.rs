@@ -2313,11 +2313,18 @@ impl CapabilityService for DefaultCapabilityService {
                     audio_reason,
                 )
             },
-            PlatformCapability::unsupported(
-                self.platform,
-                Feature::KeyboardInput,
-                unsupported_reason,
-            ),
+            match self.platform {
+                Platform::Macos => PlatformCapability::supported_with_reason(
+                    self.platform,
+                    Feature::KeyboardInput,
+                    "macOS keyboard input uses System Events and requires Accessibility permission",
+                ),
+                _ => PlatformCapability::unsupported(
+                    self.platform,
+                    Feature::KeyboardInput,
+                    unsupported_reason,
+                ),
+            },
             PlatformCapability::unsupported(self.platform, Feature::MouseInput, unsupported_reason),
         ]
     }
@@ -3048,6 +3055,26 @@ mod tests {
         assert!(capabilities.iter().any(|capability| {
             capability.feature == Feature::WindowResize && capability.supported
         }));
+    }
+
+    #[test]
+    fn macos_capabilities_support_keyboard_but_not_mouse_input() {
+        let service = DefaultCapabilityService::new(Platform::Macos);
+        let capabilities = service.platform_capabilities();
+        let keyboard = capabilities
+            .iter()
+            .find(|capability| capability.feature == Feature::KeyboardInput)
+            .expect("keyboard capability");
+        let mouse = capabilities
+            .iter()
+            .find(|capability| capability.feature == Feature::MouseInput)
+            .expect("mouse capability");
+
+        assert!(keyboard.supported);
+        assert!(keyboard.reason.as_deref().is_some_and(
+            |reason| reason.contains("System Events") && reason.contains("Accessibility")
+        ));
+        assert!(!mouse.supported);
     }
 
     #[test]

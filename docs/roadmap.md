@@ -240,6 +240,10 @@ Completed:
 - per-session authorization through the control plane and selected-window checks
 - explicit unsupported keyboard and pointer backend errors
 - client service methods and lightweight input mode controls
+- macOS native keyboard backend for text and conservative key commands through
+  System Events, with pointer input still reported as unsupported
+- capability-aware client input controls that keep focus available for active
+  sessions and gate test typing/clicking by keyboard and mouse support
 
 ## Phase 6: Audio And Microphone (Complete)
 
