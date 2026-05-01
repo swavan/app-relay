@@ -1634,7 +1634,7 @@ mod tests {
                 bind_address: "127.0.0.1".to_string(),
                 control_port: 9898,
                 heartbeat_interval_millis: 2_500,
-                supported_capabilities: 4,
+                supported_capabilities: 5,
                 total_capabilities: 8,
                 active_sessions: 0,
             }
@@ -2087,7 +2087,7 @@ mod tests {
 
         assert_eq!(
             response,
-            "OK diagnostics format=1 telemetry=false secrets=redacted service=apprelay-server version=test platform=Linux bind=127.0.0.1 port=7676 heartbeat_ms=5000 capabilities=4/8 sessions=0"
+            "OK diagnostics format=1 telemetry=false secrets=redacted service=apprelay-server version=test platform=Linux bind=127.0.0.1 port=7676 heartbeat_ms=5000 capabilities=5/8 sessions=0"
         );
         assert_eq!(
             events.events(),

@@ -242,6 +242,7 @@ fn server_ice_candidates(candidates: &[WebRtcIceCandidate]) -> Vec<WebRtcIceCand
 #[derive(Clone, Debug)]
 pub enum WindowCaptureBackendService {
     LinuxSelectedWindow,
+    MacosSelectedWindow,
     FailingSelectedWindow {
         message: String,
     },
@@ -270,7 +271,7 @@ impl WindowCaptureBackend for WindowCaptureBackendService {
         session: &ApplicationSession,
     ) -> Result<WindowCaptureStart, AppRelayError> {
         match self {
-            Self::LinuxSelectedWindow => Ok(WindowCaptureStart {
+            Self::LinuxSelectedWindow | Self::MacosSelectedWindow => Ok(WindowCaptureStart {
                 source: InMemoryVideoStreamService::capture_source_from_session(session),
                 signaling: InMemoryVideoStreamService::signaling_for_stream(
                     stream_id,
@@ -778,6 +779,67 @@ mod tests {
 
         assert_eq!(stopped.state, VideoStreamState::Stopped);
         assert_eq!(stopped.encoding.state, VideoEncodingPipelineState::Drained);
+    }
+
+    #[test]
+    fn macos_selected_window_capture_starts_metadata_backed_stream() {
+        let session = ApplicationSession {
+            id: "session-1".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            selected_window: SelectedWindow {
+                id: "macos-window-session-1-88".to_string(),
+                application_id: "dev.apprelay.fake".to_string(),
+                title: "Native Fake Window".to_string(),
+                selection_method: WindowSelectionMethod::NativeWindow,
+            },
+            launch_intent: None,
+            viewport: ViewportSize::new(1280, 720),
+            resize_intent: None,
+            state: SessionState::Ready,
+        };
+        let mut stream_service =
+            InMemoryVideoStreamService::new(WindowCaptureBackendService::MacosSelectedWindow);
+
+        let stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start macOS stream");
+
+        assert_eq!(stream.selected_window_id, session.selected_window.id);
+        assert_eq!(
+            stream.capture_source.scope,
+            VideoCaptureScope::SelectedWindow
+        );
+        assert_eq!(
+            stream.capture_source.selected_window_id,
+            session.selected_window.id
+        );
+        assert_eq!(
+            stream.capture_source.application_id,
+            session.selected_window.application_id
+        );
+        assert_eq!(stream.capture_source.title, session.selected_window.title);
+        assert_eq!(stream.signaling.kind, VideoStreamSignalingKind::WebRtcOffer);
+        assert_eq!(
+            stream.signaling.offer,
+            Some(WebRtcSessionDescription {
+                sdp_type: WebRtcSdpType::Offer,
+                sdp: "apprelay-webrtc-offer:stream-1:macos-window-session-1-88".to_string(),
+            })
+        );
+        assert_eq!(
+            stream.signaling.ice_candidates,
+            vec![WebRtcIceCandidate {
+                candidate: "candidate:apprelay stream-1 macos-window-session-1-88 typ host"
+                    .to_string(),
+                sdp_mid: Some("video".to_string()),
+                sdp_m_line_index: Some(0),
+            }]
+        );
     }
 
     #[test]
