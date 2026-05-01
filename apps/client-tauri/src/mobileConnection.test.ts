@@ -98,6 +98,10 @@ class MobileTestRemoteService implements RemoteService {
     throw new Error("not used by mobile connection contract");
   }
 
+  async activeVideoStreams() {
+    throw new Error("not used by mobile connection contract");
+  }
+
   async stopVideoStream(_streamId: string): Promise<never> {
     throw new Error("not used by mobile connection contract");
   }

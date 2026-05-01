@@ -36,6 +36,7 @@ pub trait VideoStreamService {
     ) -> Result<VideoStreamSession, AppRelayError>;
     fn record_resize(&mut self, request: &ResizeSessionRequest);
     fn record_session_closed(&mut self, session_id: &str);
+    fn active_streams(&self) -> Vec<VideoStreamSession>;
     fn stream_status(&self, stream_id: &str) -> Result<VideoStreamSession, AppRelayError>;
 }
 
@@ -912,6 +913,14 @@ impl VideoStreamService for InMemoryVideoStreamService {
         }
     }
 
+    fn active_streams(&self) -> Vec<VideoStreamSession> {
+        self.streams
+            .iter()
+            .filter(|stream| stream.state != VideoStreamState::Stopped)
+            .cloned()
+            .collect()
+    }
+
     fn stream_status(&self, stream_id: &str) -> Result<VideoStreamSession, AppRelayError> {
         self.streams
             .iter()
@@ -1473,6 +1482,82 @@ mod tests {
         assert_eq!(
             reconnected.health.message.as_deref(),
             Some("reconnect requested")
+        );
+    }
+
+    #[test]
+    fn video_stream_service_lists_active_streams() {
+        let mut session_service = InMemoryApplicationSessionService::default();
+        let session = session_service
+            .create_session(CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            })
+            .expect("create session");
+        let mut stream_service = InMemoryVideoStreamService::new(
+            WindowCaptureBackendService::fails_once("initial capture failed"),
+        );
+
+        let failed = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start failed stream");
+        let streaming = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+        let streaming = stream_service
+            .negotiate_stream(NegotiateVideoStreamRequest {
+                stream_id: streaming.id.clone(),
+                client_answer: WebRtcSessionDescription {
+                    sdp_type: WebRtcSdpType::Answer,
+                    sdp: "client-answer".to_string(),
+                },
+                client_ice_candidates: Vec::new(),
+            })
+            .expect("negotiate stream");
+        let stopped = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stopped stream");
+        stream_service
+            .stop_stream(StopVideoStreamRequest {
+                stream_id: stopped.id,
+            })
+            .expect("stop stream");
+        let starting = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start active stream");
+
+        let active_streams = stream_service.active_streams();
+
+        assert_eq!(
+            active_streams
+                .iter()
+                .map(|stream| (&stream.id, &stream.state))
+                .collect::<Vec<_>>(),
+            vec![
+                (&failed.id, &VideoStreamState::Failed),
+                (&streaming.id, &VideoStreamState::Streaming),
+                (&starting.id, &VideoStreamState::Starting),
+            ]
         );
     }
 

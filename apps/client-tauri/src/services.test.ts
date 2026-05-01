@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
-import type { InputEvent, RemoteService, ViewportSize } from "./services";
+import {
+  hydrateActiveVideoStream,
+  selectHydratedVideoStream,
+  type InputEvent,
+  type RemoteService,
+  type ViewportSize
+} from "./services";
 import type { AudioStreamStartOptions, AudioStreamUpdate } from "./audioStreams";
-import type { WebRtcIceCandidate, WebRtcSessionDescription } from "./videoStreams";
+import type {
+  VideoStreamSession,
+  WebRtcIceCandidate,
+  WebRtcSessionDescription
+} from "./videoStreams";
 
 const streamOffer = {
   sdpType: "offer" as const,
@@ -54,6 +64,45 @@ const configuredEncoding = {
     lastFrame: null
   }
 };
+
+function videoStreamFixture(
+  overrides: Partial<VideoStreamSession> & Pick<VideoStreamSession, "id" | "state">
+): VideoStreamSession {
+  return {
+    id: overrides.id,
+    sessionId: overrides.sessionId ?? "session-1",
+    selectedWindowId: overrides.selectedWindowId ?? "window-session-1",
+    viewport: overrides.viewport ?? {
+      width: 1280,
+      height: 720
+    },
+    captureSource: overrides.captureSource ?? {
+      scope: "selectedWindow",
+      selectedWindowId: "window-session-1",
+      applicationId: "terminal",
+      title: "Terminal"
+    },
+    encoding: overrides.encoding ?? configuredEncoding,
+    signaling: overrides.signaling ?? {
+      kind: "webRtcOffer",
+      negotiationState: "awaitingAnswer",
+      offer: streamOffer,
+      iceCandidates: [serverIceCandidate]
+    },
+    stats: overrides.stats ?? {
+      framesEncoded: 0,
+      bitrateKbps: 0,
+      latencyMs: 0,
+      reconnectAttempts: 0
+    },
+    health: overrides.health ?? {
+      healthy: true
+    },
+    failure: overrides.failure,
+    state: overrides.state,
+    failureReason: overrides.failureReason
+  };
+}
 
 const nativeAudioBackendStatuses = [
   "capture",
@@ -260,6 +309,10 @@ class FakeRemoteService implements RemoteService {
       },
       state: "starting" as const
     };
+  }
+
+  async activeVideoStreams() {
+    return [await this.videoStreamStatus("stream-1")];
   }
 
   async stopVideoStream(streamId: string) {
@@ -691,6 +744,13 @@ describe("RemoteService contract", () => {
   it("starts, checks, and stops video streams", async () => {
     const service = new FakeRemoteService();
 
+    await expect(service.activeVideoStreams()).resolves.toEqual([
+      expect.objectContaining({
+        id: "stream-1",
+        sessionId: "session-1",
+        state: "starting"
+      })
+    ]);
     await expect(service.startVideoStream("session-1")).resolves.toMatchObject({
       id: "stream-1",
       sessionId: "session-1",
@@ -790,6 +850,44 @@ describe("RemoteService contract", () => {
       id: "stream-1",
       state: "stopped"
     });
+  });
+
+  it("hydrates the live stream ahead of older failed streams", () => {
+    expect(
+      selectHydratedVideoStream(
+        [
+          videoStreamFixture({ id: "failed-stream", state: "failed" }),
+          videoStreamFixture({ id: "stopped-stream", state: "stopped" }),
+          videoStreamFixture({ id: "streaming-stream", state: "streaming" }),
+          videoStreamFixture({
+            id: "starting-other-session",
+            sessionId: "session-2",
+            state: "starting"
+          })
+        ],
+        "session-1"
+      )
+    ).toMatchObject({
+      id: "streaming-stream",
+      state: "streaming"
+    });
+  });
+
+  it("keeps startup hydration alive when active video stream discovery fails", async () => {
+    const messages: string[] = [];
+
+    await expect(
+      hydrateActiveVideoStream(
+        {
+          activeVideoStreams: async () => {
+            throw new Error("stream discovery unavailable");
+          }
+        },
+        "session-1",
+        (message) => messages.push(message)
+      )
+    ).resolves.toBeNull();
+    expect(messages).toEqual(["stream discovery unavailable"]);
   });
 
   it("starts, updates, checks, and stops audio streams", async () => {

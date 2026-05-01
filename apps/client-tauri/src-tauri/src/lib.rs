@@ -715,6 +715,7 @@ pub fn run() {
             audio_stream::stop_audio_stream,
             audio_stream::update_audio_stream,
             audio_stream::audio_stream_status,
+            video_stream::active_video_streams,
             video_stream::start_video_stream,
             video_stream::stop_video_stream,
             video_stream::reconnect_video_stream,

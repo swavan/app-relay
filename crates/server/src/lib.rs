@@ -238,6 +238,21 @@ impl ServerServices {
         self.video_stream.status(stream_id)
     }
 
+    pub fn active_video_streams(&self) -> Vec<VideoStreamSession> {
+        let active_session_ids = self
+            .session_service
+            .active_sessions()
+            .into_iter()
+            .map(|session| session.id)
+            .collect::<std::collections::HashSet<_>>();
+
+        self.video_stream
+            .active_streams()
+            .into_iter()
+            .filter(|stream| active_session_ids.contains(&stream.session_id))
+            .collect()
+    }
+
     pub fn start_audio_stream(
         &mut self,
         request: StartAudioStreamRequest,
@@ -521,6 +536,14 @@ impl ServerControlPlane {
         self.services
             .video_stream_status(stream_id)
             .map_err(Into::into)
+    }
+
+    pub fn active_video_streams(
+        &self,
+        auth: &ControlAuth,
+    ) -> ControlResult<Vec<VideoStreamSession>> {
+        self.authorize_paired_client(auth)?;
+        Ok(self.services.active_video_streams())
     }
 
     pub fn start_audio_stream(
