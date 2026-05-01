@@ -484,6 +484,73 @@ fn control_plane_launches_macos_app_bundle_session() {
 }
 
 #[test]
+#[cfg(unix)]
+fn control_plane_launches_macos_app_bundle_session_with_native_window_selection() {
+    let root = unique_test_dir("control-plane-macos-native-selection");
+    let applications = root.join("Applications");
+    let bundle = applications.join("Fake.app");
+    let contents = bundle.join("Contents");
+    std::fs::create_dir_all(&contents).expect("create app bundle");
+    std::fs::write(
+        contents.join("Info.plist"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.apprelay.fake</string>
+  <key>CFBundleDisplayName</key>
+  <string>Fake Mac App</string>
+</dict>
+</plist>
+"#,
+    )
+    .expect("write info plist");
+    let marker = root.join("open-marker");
+    let open_command = root.join("fake-open");
+    write_executable_script(
+        &open_command,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" \"$2\" > {}\n",
+            marker.display()
+        ),
+    );
+    let osascript_command = root.join("fake-osascript");
+    write_executable_script(
+        &osascript_command,
+        "#!/bin/sh\nprintf '88\\tNative Fake Window\\n'\n",
+    );
+
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::with_macos_application_roots_open_and_osascript_commands(
+            "integration-test",
+            vec![applications],
+            open_command,
+            osascript_command,
+        ),
+        paired_server_config(),
+    );
+    let session = control_plane
+        .create_session(
+            &paired_auth(),
+            CreateSessionRequest {
+                application_id: "dev.apprelay.fake".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create launched macOS session");
+
+    wait_for_path(&marker);
+    assert_eq!(
+        session.selected_window.selection_method,
+        WindowSelectionMethod::NativeWindow
+    );
+    assert_eq!(session.selected_window.title, "Native Fake Window");
+    assert_eq!(session.selected_window.id, "macos-window-session-1-88");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn control_plane_authorizes_and_forwards_input_to_session() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),

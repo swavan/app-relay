@@ -25,7 +25,8 @@ use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use apprelay_protocol::{
     AppIcon, AppRelayError, ApplicationLaunch, ApplicationLaunchIntent, ApplicationSession,
@@ -146,6 +147,51 @@ impl ApplicationLaunchBackend for ApplicationLaunchBackendService {
     }
 }
 
+pub trait ApplicationWindowSelectionBackend {
+    fn select_window(
+        &self,
+        application: &ApplicationSummary,
+        session_id: &str,
+        launch_intent: &ApplicationLaunchIntent,
+        fallback: SelectedWindow,
+    ) -> SelectedWindow;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ApplicationWindowSelectionBackendService {
+    RecordOnly,
+    MacosNative {
+        osascript_command: PathBuf,
+    },
+    #[cfg(test)]
+    StaticNative {
+        selected_window: SelectedWindow,
+    },
+}
+
+impl ApplicationWindowSelectionBackend for ApplicationWindowSelectionBackendService {
+    fn select_window(
+        &self,
+        application: &ApplicationSummary,
+        session_id: &str,
+        launch_intent: &ApplicationLaunchIntent,
+        fallback: SelectedWindow,
+    ) -> SelectedWindow {
+        match self {
+            Self::RecordOnly => fallback,
+            Self::MacosNative { osascript_command } => select_macos_native_window(
+                osascript_command,
+                application,
+                session_id,
+                launch_intent,
+            )
+            .unwrap_or(fallback),
+            #[cfg(test)]
+            Self::StaticNative { selected_window } => selected_window.clone(),
+        }
+    }
+}
+
 fn spawn_linux_desktop_command(command: &str) -> Result<(), AppRelayError> {
     let argv = parse_desktop_exec(command)?;
     let (program, args) = argv.split_first().ok_or_else(|| {
@@ -186,6 +232,148 @@ fn spawn_macos_bundle(open_command: &Path, bundle_path: &str) -> Result<(), AppR
                 "failed to launch macOS application bundle `{bundle_path}`: {error}"
             ))
         })
+}
+
+fn select_macos_native_window(
+    osascript_command: &Path,
+    application: &ApplicationSummary,
+    session_id: &str,
+    launch_intent: &ApplicationLaunchIntent,
+) -> Option<SelectedWindow> {
+    if launch_intent.status != LaunchIntentStatus::Recorded || application.id.trim().is_empty() {
+        return None;
+    }
+
+    for attempt in 0..MACOS_WINDOW_SELECTION_ATTEMPTS {
+        if let Some(selected_window) =
+            select_macos_native_window_once(osascript_command, application, session_id)
+        {
+            return Some(selected_window);
+        }
+
+        if attempt + 1 < MACOS_WINDOW_SELECTION_ATTEMPTS {
+            std::thread::sleep(MACOS_WINDOW_SELECTION_RETRY_DELAY);
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+const MACOS_WINDOW_SELECTION_ATTEMPTS: usize = 2;
+#[cfg(not(test))]
+const MACOS_WINDOW_SELECTION_ATTEMPTS: usize = 5;
+#[cfg(test)]
+const MACOS_WINDOW_SELECTION_TIMEOUT: Duration = Duration::from_millis(50);
+#[cfg(not(test))]
+const MACOS_WINDOW_SELECTION_TIMEOUT: Duration = Duration::from_millis(400);
+#[cfg(test)]
+const MACOS_WINDOW_SELECTION_RETRY_DELAY: Duration = Duration::from_millis(10);
+#[cfg(not(test))]
+const MACOS_WINDOW_SELECTION_RETRY_DELAY: Duration = Duration::from_millis(150);
+
+fn select_macos_native_window_once(
+    osascript_command: &Path,
+    application: &ApplicationSummary,
+    session_id: &str,
+) -> Option<SelectedWindow> {
+    let output = run_macos_window_selection_script(osascript_command, &application.id)?;
+    if !output.status.success() {
+        return None;
+    }
+
+    parse_macos_native_window_output(
+        std::str::from_utf8(&output.stdout).ok()?,
+        application,
+        session_id,
+    )
+}
+
+fn run_macos_window_selection_script(osascript_command: &Path, bundle_id: &str) -> Option<Output> {
+    let child = Command::new(osascript_command)
+        .arg("-e")
+        .arg("on run argv")
+        .arg("-e")
+        .arg("set targetBundleId to item 1 of argv")
+        .arg("-e")
+        .arg("tell application \"System Events\"")
+        .arg("-e")
+        .arg("set matchingProcesses to application processes whose bundle identifier is targetBundleId")
+        .arg("-e")
+        .arg("if (count of matchingProcesses) is 0 then return \"\"")
+        .arg("-e")
+        .arg("set frontProcesses to application processes whose bundle identifier is targetBundleId and frontmost is true")
+        .arg("-e")
+        .arg("if (count of frontProcesses) > 0 then")
+        .arg("-e")
+        .arg("set targetProcess to item 1 of frontProcesses")
+        .arg("-e")
+        .arg("else")
+        .arg("-e")
+        .arg("set targetProcess to item 1 of matchingProcesses")
+        .arg("-e")
+        .arg("end if")
+        .arg("-e")
+        .arg("tell targetProcess")
+        .arg("-e")
+        .arg("if (count of windows) is 0 then return \"\"")
+        .arg("-e")
+        .arg("set selectedWindow to window 1")
+        .arg("-e")
+        .arg("return ((id of selectedWindow) as text) & tab & (name of selectedWindow as text)")
+        .arg("-e")
+        .arg("end tell")
+        .arg("-e")
+        .arg("end tell")
+        .arg("-e")
+        .arg("end run")
+        .arg(bundle_id)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    wait_for_output_with_timeout(child, MACOS_WINDOW_SELECTION_TIMEOUT)
+}
+
+fn wait_for_output_with_timeout(mut child: Child, timeout: Duration) -> Option<Output> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        match child.try_wait().ok()? {
+            Some(_) => return child.wait_with_output().ok(),
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+}
+
+fn parse_macos_native_window_output(
+    output: &str,
+    application: &ApplicationSummary,
+    session_id: &str,
+) -> Option<SelectedWindow> {
+    let output = output.trim();
+    let (native_id, title) = output.split_once('\t')?;
+    let native_id = native_id.trim();
+    let title = title.trim();
+
+    if native_id.is_empty() || title.is_empty() || native_id.contains('\n') || title.contains('\n')
+    {
+        return None;
+    }
+
+    Some(SelectedWindow {
+        id: format!("macos-window-{session_id}-{native_id}"),
+        application_id: application.id.clone(),
+        title: title.to_string(),
+        selection_method: WindowSelectionMethod::NativeWindow,
+    })
 }
 
 fn parse_desktop_exec(command: &str) -> Result<Vec<String>, AppRelayError> {
@@ -1195,6 +1383,7 @@ fn event_field_value(value: &str) -> String {
 pub struct InMemoryApplicationSessionService {
     policy: SessionPolicy,
     launch_backend: ApplicationLaunchBackendService,
+    window_selection_backend: ApplicationWindowSelectionBackendService,
     resize_backend: WindowResizeBackendService,
     sessions: Vec<ApplicationSession>,
     next_session_sequence: u64,
@@ -1205,6 +1394,7 @@ impl InMemoryApplicationSessionService {
         Self::with_backends(
             policy,
             ApplicationLaunchBackendService::RecordOnly,
+            ApplicationWindowSelectionBackendService::RecordOnly,
             WindowResizeBackendService::RecordOnly,
         )
     }
@@ -1216,6 +1406,7 @@ impl InMemoryApplicationSessionService {
         Self::with_backends(
             policy,
             ApplicationLaunchBackendService::RecordOnly,
+            ApplicationWindowSelectionBackendService::RecordOnly,
             resize_backend,
         )
     }
@@ -1227,6 +1418,20 @@ impl InMemoryApplicationSessionService {
         Self::with_backends(
             policy,
             launch_backend,
+            ApplicationWindowSelectionBackendService::RecordOnly,
+            WindowResizeBackendService::RecordOnly,
+        )
+    }
+
+    pub fn with_launch_and_window_selection_backends(
+        policy: SessionPolicy,
+        launch_backend: ApplicationLaunchBackendService,
+        window_selection_backend: ApplicationWindowSelectionBackendService,
+    ) -> Self {
+        Self::with_backends(
+            policy,
+            launch_backend,
+            window_selection_backend,
             WindowResizeBackendService::RecordOnly,
         )
     }
@@ -1234,11 +1439,13 @@ impl InMemoryApplicationSessionService {
     pub fn with_backends(
         policy: SessionPolicy,
         launch_backend: ApplicationLaunchBackendService,
+        window_selection_backend: ApplicationWindowSelectionBackendService,
         resize_backend: WindowResizeBackendService,
     ) -> Self {
         Self {
             policy,
             launch_backend,
+            window_selection_backend,
             resize_backend,
             sessions: Vec::new(),
             next_session_sequence: 1,
@@ -1284,15 +1491,22 @@ impl InMemoryApplicationSessionService {
             LaunchIntentStatus::Attached => WindowSelectionMethod::ExistingWindow,
             LaunchIntentStatus::Unsupported => WindowSelectionMethod::Synthetic,
         };
+        let selected_window = SelectedWindow {
+            id: format!("window-{session_id}"),
+            application_id: application.id.clone(),
+            title: application.name.clone(),
+            selection_method,
+        };
+        let selected_window = self.window_selection_backend.select_window(
+            &application,
+            &session_id,
+            &launch_intent,
+            selected_window,
+        );
         let session = ApplicationSession {
             id: session_id.clone(),
             application_id: application.id.clone(),
-            selected_window: SelectedWindow {
-                id: format!("window-{session_id}"),
-                application_id: application.id,
-                title: application.name,
-                selection_method,
-            },
+            selected_window,
             launch_intent: Some(launch_intent),
             viewport: request.viewport,
             resize_intent: None,
@@ -3158,6 +3372,183 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
                 status: LaunchIntentStatus::Recorded,
             })
         );
+    }
+
+    #[test]
+    fn session_service_uses_native_selected_window_when_backend_returns_one() {
+        let native_window = SelectedWindow {
+            id: "macos-window-session-1-42".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            title: "Native Fake Window".to_string(),
+            selection_method: WindowSelectionMethod::NativeWindow,
+        };
+        let mut service =
+            InMemoryApplicationSessionService::with_launch_and_window_selection_backends(
+                SessionPolicy::allow_all(),
+                ApplicationLaunchBackendService::RecordOnly,
+                ApplicationWindowSelectionBackendService::StaticNative {
+                    selected_window: native_window.clone(),
+                },
+            );
+
+        let session = service
+            .create_session_for_application(
+                CreateSessionRequest {
+                    application_id: "dev.apprelay.fake".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+                ApplicationSummary {
+                    id: "dev.apprelay.fake".to_string(),
+                    name: "Fake Mac App".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::MacosBundle {
+                        bundle_path: "/Applications/Fake.app".to_string(),
+                    }),
+                },
+            )
+            .expect("create session");
+
+        assert_eq!(session.selected_window, native_window);
+        assert_eq!(
+            session.launch_intent.expect("launch intent").status,
+            LaunchIntentStatus::Recorded
+        );
+    }
+
+    #[test]
+    fn session_service_preserves_fallback_selected_window_when_native_selection_is_unavailable() {
+        let root = unique_test_dir("macos-selection-fallback");
+        let missing_osascript = root.join("missing-osascript");
+        let mut service =
+            InMemoryApplicationSessionService::with_launch_and_window_selection_backends(
+                SessionPolicy::allow_all(),
+                ApplicationLaunchBackendService::RecordOnly,
+                ApplicationWindowSelectionBackendService::MacosNative {
+                    osascript_command: missing_osascript,
+                },
+            );
+
+        let session = service
+            .create_session_for_application(
+                CreateSessionRequest {
+                    application_id: "dev.apprelay.fake".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+                ApplicationSummary {
+                    id: "dev.apprelay.fake".to_string(),
+                    name: "Fake Mac App".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::MacosBundle {
+                        bundle_path: "/Applications/Fake.app".to_string(),
+                    }),
+                },
+            )
+            .expect("create session");
+
+        assert_eq!(
+            session.selected_window,
+            SelectedWindow {
+                id: "window-session-1".to_string(),
+                application_id: "dev.apprelay.fake".to_string(),
+                title: "Fake Mac App".to_string(),
+                selection_method: WindowSelectionMethod::LaunchIntent,
+            }
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn session_service_retries_macos_native_window_selection() {
+        let root = unique_test_dir("macos-selection-retry");
+        fs::create_dir_all(&root).expect("create test selection directory");
+        let attempts = root.join("attempts");
+        let osascript = root.join("fake-osascript");
+        write_executable_script(
+            &osascript,
+            &format!(
+                "#!/bin/sh\ncount=0\nif [ -f {0} ]; then count=$(cat {0}); fi\ncount=$((count + 1))\nprintf '%s' \"$count\" > {0}\nif [ \"$count\" -lt 2 ]; then exit 0; fi\nprintf '88\\tNative Fake Window\\n'\n",
+                attempts.display()
+            ),
+        );
+        let mut service =
+            InMemoryApplicationSessionService::with_launch_and_window_selection_backends(
+                SessionPolicy::allow_all(),
+                ApplicationLaunchBackendService::RecordOnly,
+                ApplicationWindowSelectionBackendService::MacosNative {
+                    osascript_command: osascript,
+                },
+            );
+
+        let session = service
+            .create_session_for_application(
+                CreateSessionRequest {
+                    application_id: "dev.apprelay.fake".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+                ApplicationSummary {
+                    id: "dev.apprelay.fake".to_string(),
+                    name: "Fake Mac App".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::MacosBundle {
+                        bundle_path: "/Applications/Fake.app".to_string(),
+                    }),
+                },
+            )
+            .expect("create session");
+
+        assert_eq!(
+            fs::read_to_string(&attempts).expect("read attempt count"),
+            "2"
+        );
+        assert_eq!(
+            session.selected_window.selection_method,
+            WindowSelectionMethod::NativeWindow
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn session_service_times_out_hung_macos_native_window_selection() {
+        let root = unique_test_dir("macos-selection-timeout");
+        fs::create_dir_all(&root).expect("create test selection directory");
+        let osascript = root.join("fake-osascript");
+        write_executable_script(&osascript, "#!/bin/sh\nsleep 1\n");
+        let mut service =
+            InMemoryApplicationSessionService::with_launch_and_window_selection_backends(
+                SessionPolicy::allow_all(),
+                ApplicationLaunchBackendService::RecordOnly,
+                ApplicationWindowSelectionBackendService::MacosNative {
+                    osascript_command: osascript,
+                },
+            );
+        let started = Instant::now();
+
+        let session = service
+            .create_session_for_application(
+                CreateSessionRequest {
+                    application_id: "dev.apprelay.fake".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+                ApplicationSummary {
+                    id: "dev.apprelay.fake".to_string(),
+                    name: "Fake Mac App".to_string(),
+                    icon: None,
+                    launch: Some(ApplicationLaunch::MacosBundle {
+                        bundle_path: "/Applications/Fake.app".to_string(),
+                    }),
+                },
+            )
+            .expect("create session");
+
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert_eq!(
+            session.selected_window.selection_method,
+            WindowSelectionMethod::LaunchIntent
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
