@@ -56,6 +56,7 @@ pub struct WindowCaptureStart {
 
 pub trait MacosWindowCaptureRuntime: std::fmt::Debug + Send + Sync {
     fn start(&self, request: MacosWindowCaptureStartRequest) -> Result<(), AppRelayError>;
+    fn resize(&self, request: MacosWindowCaptureResizeRequest) -> Result<(), AppRelayError>;
     fn stop(&self, stream_id: &str);
 }
 
@@ -65,6 +66,13 @@ pub struct MacosWindowCaptureStartRequest {
     pub selected_window_id: String,
     pub application_id: String,
     pub title: String,
+    pub target_viewport: ViewportSize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MacosWindowCaptureResizeRequest {
+    pub stream_id: String,
+    pub selected_window_id: String,
     pub target_viewport: ViewportSize,
 }
 
@@ -83,6 +91,15 @@ impl MacosWindowCaptureRuntime for ControlPlaneMacosWindowCaptureRuntime {
         Ok(())
     }
 
+    fn resize(&self, request: MacosWindowCaptureResizeRequest) -> Result<(), AppRelayError> {
+        self.calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .resizes
+            .push(request);
+        Ok(())
+    }
+
     fn stop(&self, stream_id: &str) {
         self.calls
             .lock()
@@ -95,13 +112,15 @@ impl MacosWindowCaptureRuntime for ControlPlaneMacosWindowCaptureRuntime {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MacosWindowCaptureRuntimeCalls {
     pub starts: Vec<MacosWindowCaptureStartRequest>,
+    pub resizes: Vec<MacosWindowCaptureResizeRequest>,
     pub stops: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct FakeMacosWindowCaptureRuntime {
     calls: Arc<Mutex<MacosWindowCaptureRuntimeCalls>>,
-    failures: Arc<Mutex<Vec<String>>>,
+    start_failures: Arc<Mutex<Vec<String>>>,
+    resize_failures: Arc<Mutex<Vec<String>>>,
 }
 
 impl FakeMacosWindowCaptureRuntime {
@@ -110,7 +129,14 @@ impl FakeMacosWindowCaptureRuntime {
     }
 
     pub fn fail_next_start(&self, message: impl Into<String>) {
-        self.failures
+        self.start_failures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(message.into());
+    }
+
+    pub fn fail_next_resize(&self, message: impl Into<String>) {
+        self.resize_failures
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(message.into());
@@ -133,7 +159,26 @@ impl MacosWindowCaptureRuntime for FakeMacosWindowCaptureRuntime {
             .push(request);
 
         if let Some(message) = self
-            .failures
+            .start_failures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pop()
+        {
+            Err(AppRelayError::InvalidRequest(message))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn resize(&self, request: MacosWindowCaptureResizeRequest) -> Result<(), AppRelayError> {
+        self.calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .resizes
+            .push(request);
+
+        if let Some(message) = self
+            .resize_failures
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .pop()
@@ -372,6 +417,31 @@ impl WindowCaptureBackendService {
         Self::FailsOnceSelectedWindow {
             failed: Arc::new(AtomicBool::new(false)),
             message: message.into(),
+        }
+    }
+
+    pub fn resize_capture(
+        &self,
+        stream_id: &str,
+        selected_window_id: &str,
+        target_viewport: ViewportSize,
+    ) -> Result<(), AppRelayError> {
+        match self {
+            Self::MacosSelectedWindow { runtime } => {
+                runtime.resize(MacosWindowCaptureResizeRequest {
+                    stream_id: stream_id.to_string(),
+                    selected_window_id: selected_window_id.to_string(),
+                    target_viewport,
+                })
+            }
+            Self::LinuxSelectedWindow | Self::FailsOnceSelectedWindow { .. } => Ok(()),
+            Self::FailingSelectedWindow { message } => {
+                Err(AppRelayError::InvalidRequest(message.clone()))
+            }
+            Self::Unsupported { platform } => Err(AppRelayError::unsupported(
+                *platform,
+                Feature::WindowVideoStream,
+            )),
         }
     }
 }
@@ -795,11 +865,22 @@ impl VideoStreamService for InMemoryVideoStreamService {
             return;
         }
 
+        let capture_backend = self.capture_backend.clone();
         for stream in self.streams.iter_mut().filter(|stream| {
             stream.session_id == request.session_id
                 && stream.state != VideoStreamState::Stopped
                 && stream.state != VideoStreamState::Failed
         }) {
+            if let Err(error) = capture_backend.resize_capture(
+                &stream.id,
+                &stream.selected_window_id,
+                request.viewport.clone(),
+            ) {
+                capture_backend.stop_capture(&stream.id);
+                let failure = Self::capture_failure(Self::capture_error_message(&error));
+                Self::apply_failure(stream, failure);
+                continue;
+            }
             stream.viewport = request.viewport.clone();
             InMemoryVideoEncodingPipeline::reconfigure(
                 &mut stream.encoding,
@@ -1096,6 +1177,213 @@ mod tests {
         assert!(reconnected.health.healthy);
         assert_eq!(reconnected.stats.reconnect_attempts, 1);
         assert_eq!(runtime.calls().starts.len(), 2);
+    }
+
+    #[test]
+    fn macos_capture_runtime_receives_resize_for_active_stream() {
+        let session = ApplicationSession {
+            id: "session-1".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            selected_window: SelectedWindow {
+                id: "macos-window-session-1-88".to_string(),
+                application_id: "dev.apprelay.fake".to_string(),
+                title: "Native Fake Window".to_string(),
+                selection_method: WindowSelectionMethod::NativeWindow,
+            },
+            launch_intent: None,
+            viewport: ViewportSize::new(1280, 720),
+            resize_intent: None,
+            state: SessionState::Ready,
+        };
+        let runtime = FakeMacosWindowCaptureRuntime::new();
+        let mut stream_service = InMemoryVideoStreamService::new(
+            WindowCaptureBackendService::macos_selected_window_with_runtime(Arc::new(
+                runtime.clone(),
+            )),
+        );
+        let stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        stream_service.record_resize(&ResizeSessionRequest {
+            session_id: session.id,
+            viewport: ViewportSize::new(1440, 900),
+        });
+
+        assert_eq!(
+            runtime.calls().resizes,
+            vec![MacosWindowCaptureResizeRequest {
+                stream_id: stream.id.clone(),
+                selected_window_id: "macos-window-session-1-88".to_string(),
+                target_viewport: ViewportSize::new(1440, 900),
+            }]
+        );
+        assert_eq!(
+            stream_service
+                .stream_status(&stream.id)
+                .expect("stream status")
+                .viewport,
+            ViewportSize::new(1440, 900)
+        );
+    }
+
+    #[test]
+    fn macos_capture_runtime_does_not_receive_invalid_resize() {
+        let session = ApplicationSession {
+            id: "session-1".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            selected_window: SelectedWindow {
+                id: "macos-window-session-1-88".to_string(),
+                application_id: "dev.apprelay.fake".to_string(),
+                title: "Native Fake Window".to_string(),
+                selection_method: WindowSelectionMethod::NativeWindow,
+            },
+            launch_intent: None,
+            viewport: ViewportSize::new(1280, 720),
+            resize_intent: None,
+            state: SessionState::Ready,
+        };
+        let runtime = FakeMacosWindowCaptureRuntime::new();
+        let mut stream_service = InMemoryVideoStreamService::new(
+            WindowCaptureBackendService::macos_selected_window_with_runtime(Arc::new(
+                runtime.clone(),
+            )),
+        );
+        stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        stream_service.record_resize(&ResizeSessionRequest {
+            session_id: session.id,
+            viewport: ViewportSize::new(100, 100),
+        });
+
+        assert_eq!(runtime.calls().resizes, Vec::new());
+    }
+
+    #[test]
+    fn macos_capture_runtime_does_not_resize_stopped_or_failed_streams() {
+        let session = ApplicationSession {
+            id: "session-1".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            selected_window: SelectedWindow {
+                id: "macos-window-session-1-88".to_string(),
+                application_id: "dev.apprelay.fake".to_string(),
+                title: "Native Fake Window".to_string(),
+                selection_method: WindowSelectionMethod::NativeWindow,
+            },
+            launch_intent: None,
+            viewport: ViewportSize::new(1280, 720),
+            resize_intent: None,
+            state: SessionState::Ready,
+        };
+        let runtime = FakeMacosWindowCaptureRuntime::new();
+        runtime.fail_next_start("ScreenCaptureKit boundary failed");
+        let mut stream_service = InMemoryVideoStreamService::new(
+            WindowCaptureBackendService::macos_selected_window_with_runtime(Arc::new(
+                runtime.clone(),
+            )),
+        );
+        let failed = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start failed stream");
+        assert_eq!(failed.state, VideoStreamState::Failed);
+        let active = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start active stream");
+        stream_service
+            .stop_stream(StopVideoStreamRequest {
+                stream_id: active.id,
+            })
+            .expect("stop stream");
+
+        stream_service.record_resize(&ResizeSessionRequest {
+            session_id: session.id,
+            viewport: ViewportSize::new(1440, 900),
+        });
+
+        assert_eq!(runtime.calls().resizes, Vec::new());
+    }
+
+    #[test]
+    fn macos_capture_runtime_resize_failure_marks_stream_failed() {
+        let session = ApplicationSession {
+            id: "session-1".to_string(),
+            application_id: "dev.apprelay.fake".to_string(),
+            selected_window: SelectedWindow {
+                id: "macos-window-session-1-88".to_string(),
+                application_id: "dev.apprelay.fake".to_string(),
+                title: "Native Fake Window".to_string(),
+                selection_method: WindowSelectionMethod::NativeWindow,
+            },
+            launch_intent: None,
+            viewport: ViewportSize::new(1280, 720),
+            resize_intent: None,
+            state: SessionState::Ready,
+        };
+        let runtime = FakeMacosWindowCaptureRuntime::new();
+        runtime.fail_next_resize("ScreenCaptureKit resize failed");
+        let mut stream_service = InMemoryVideoStreamService::new(
+            WindowCaptureBackendService::macos_selected_window_with_runtime(Arc::new(
+                runtime.clone(),
+            )),
+        );
+        let stream = stream_service
+            .start_stream(
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &session,
+            )
+            .expect("start stream");
+
+        stream_service.record_resize(&ResizeSessionRequest {
+            session_id: session.id,
+            viewport: ViewportSize::new(1440, 900),
+        });
+
+        let status = stream_service
+            .stream_status(&stream.id)
+            .expect("stream status");
+        assert_eq!(status.state, VideoStreamState::Failed);
+        assert_eq!(
+            status.failure.as_ref().map(|failure| &failure.kind),
+            Some(&VideoStreamFailureKind::CaptureFailed)
+        );
+        assert_eq!(
+            status
+                .failure
+                .as_ref()
+                .map(|failure| &failure.recovery.action),
+            Some(&VideoStreamRecoveryAction::ReconnectStream)
+        );
+        assert!(status.failure.as_ref().unwrap().recovery.retryable);
+        assert_eq!(
+            status.failure_reason.as_deref(),
+            Some("ScreenCaptureKit resize failed")
+        );
+        assert_eq!(runtime.calls().resizes.len(), 1);
+        assert_eq!(runtime.calls().stops, vec![stream.id]);
     }
 
     #[test]

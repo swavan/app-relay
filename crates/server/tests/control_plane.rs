@@ -620,6 +620,29 @@ fn control_plane_launches_macos_app_bundle_session_with_native_window_selection(
     );
 
     control_plane
+        .resize_session(
+            &auth,
+            ResizeSessionRequest {
+                session_id: session.id.clone(),
+                viewport: ViewportSize::new(1440, 900),
+            },
+        )
+        .expect("resize macOS selected-window session");
+    assert_eq!(capture_runtime.calls().resizes.len(), 1);
+    assert_eq!(
+        capture_runtime.calls().resizes[0].stream_id,
+        stream.id.clone()
+    );
+    assert_eq!(
+        capture_runtime.calls().resizes[0].selected_window_id,
+        "macos-window-session-1-88".to_string()
+    );
+    assert_eq!(
+        capture_runtime.calls().resizes[0].target_viewport,
+        ViewportSize::new(1440, 900)
+    );
+
+    control_plane
         .stop_video_stream(
             &auth,
             StopVideoStreamRequest {

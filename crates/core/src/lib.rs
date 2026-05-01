@@ -15,9 +15,9 @@ pub use input::{
     InputForwardingService,
 };
 pub use video_stream::{
-    FakeMacosWindowCaptureRuntime, InMemoryVideoStreamService, MacosWindowCaptureRuntime,
-    MacosWindowCaptureRuntimeCalls, MacosWindowCaptureStartRequest, VideoStreamService,
-    WindowCaptureBackend, WindowCaptureBackendService,
+    FakeMacosWindowCaptureRuntime, InMemoryVideoStreamService, MacosWindowCaptureResizeRequest,
+    MacosWindowCaptureRuntime, MacosWindowCaptureRuntimeCalls, MacosWindowCaptureStartRequest,
+    VideoStreamService, WindowCaptureBackend, WindowCaptureBackendService,
 };
 
 use std::collections::HashSet;
@@ -3623,11 +3623,7 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
             )
             .expect("create launched session");
 
-        wait_for_path(&marker);
-        assert_eq!(
-            fs::read_to_string(&marker).expect("read launch marker"),
-            "--name\nFake App\n"
-        );
+        wait_for_file_contents(&marker, "--name\nFake App\n");
         assert_eq!(
             session.launch_intent.expect("launch intent").status,
             LaunchIntentStatus::Recorded
@@ -3705,11 +3701,7 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
             )
             .expect("create launched macOS session");
 
-        wait_for_path(&marker);
-        assert_eq!(
-            fs::read_to_string(&marker).expect("read launch marker"),
-            format!("-n\n{}\n", bundle_path.display())
-        );
+        wait_for_file_contents(&marker, &format!("-n\n{}\n", bundle_path.display()));
         assert_eq!(
             session.launch_intent.expect("launch intent").status,
             LaunchIntentStatus::Recorded
@@ -5500,15 +5492,24 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
     }
 
     #[cfg(unix)]
-    fn wait_for_path(path: &Path) {
+    fn wait_for_file_contents(path: &Path, expected: &str) {
         for _ in 0..100 {
-            if path.exists() {
+            if matches!(
+                fs::read_to_string(path),
+                Ok(contents) if contents == expected
+            ) {
                 return;
             }
 
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
-        panic!("timed out waiting for {}", path.display());
+        let actual = fs::read_to_string(path).unwrap_or_else(|_| "<missing>".to_string());
+        panic!(
+            "timed out waiting for {} to contain {:?}, got {:?}",
+            path.display(),
+            expected,
+            actual
+        );
     }
 }
