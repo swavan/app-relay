@@ -18,7 +18,7 @@ use apprelay_core::{
     InMemoryApplicationSessionService, InMemoryClientAuthorizationService,
     InMemoryInputForwardingService, InputForwardingService, MacosApplicationDiscovery,
     MacosWindowCaptureRuntime, ServerConfig, ServerEvent, SessionPolicy, StaticHealthService,
-    UnsupportedApplicationDiscovery,
+    UnsupportedApplicationDiscovery, WindowResizeBackendService,
 };
 use apprelay_protocol::{
     ActiveInputFocus, AppRelayError, ApplicationLaunch, ApplicationSession, ApplicationSummary,
@@ -55,12 +55,12 @@ impl ServerServices {
             health_service: StaticHealthService::new("apprelay-server", version.clone()),
             capability_service: DefaultCapabilityService::new(platform),
             application_discovery: ApplicationDiscoveryService::for_platform(platform),
-            session_service:
-                InMemoryApplicationSessionService::with_launch_and_window_selection_backends(
-                    SessionPolicy::allow_all(),
-                    launch_backend_for_platform(platform),
-                    window_selection_backend_for_platform(platform),
-                ),
+            session_service: InMemoryApplicationSessionService::with_backends(
+                SessionPolicy::allow_all(),
+                launch_backend_for_platform(platform),
+                window_selection_backend_for_platform(platform),
+                resize_backend_for_platform(platform),
+            ),
             input_forwarding: InMemoryInputForwardingService::default(),
             video_stream: VideoStreamControl::for_platform(platform),
             audio_stream: AudioStreamControl::for_platform(platform),
@@ -91,12 +91,12 @@ impl ServerServices {
         let mut services = Self::new(Platform::Macos, version);
         services.application_discovery =
             ApplicationDiscoveryService::MacosApplications(MacosApplicationDiscovery::new(roots));
-        services.session_service =
-            InMemoryApplicationSessionService::with_launch_and_window_selection_backends(
-                SessionPolicy::allow_all(),
-                ApplicationLaunchBackendService::MacosNative { open_command },
-                ApplicationWindowSelectionBackendService::RecordOnly,
-            );
+        services.session_service = InMemoryApplicationSessionService::with_backends(
+            SessionPolicy::allow_all(),
+            ApplicationLaunchBackendService::MacosNative { open_command },
+            ApplicationWindowSelectionBackendService::RecordOnly,
+            WindowResizeBackendService::RecordOnly,
+        );
         services
     }
 
@@ -112,12 +112,14 @@ impl ServerServices {
             roots,
             open_command.clone(),
         );
-        services.session_service =
-            InMemoryApplicationSessionService::with_launch_and_window_selection_backends(
-                SessionPolicy::allow_all(),
-                ApplicationLaunchBackendService::MacosNative { open_command },
-                ApplicationWindowSelectionBackendService::MacosNative { osascript_command },
-            );
+        services.session_service = InMemoryApplicationSessionService::with_backends(
+            SessionPolicy::allow_all(),
+            ApplicationLaunchBackendService::MacosNative { open_command },
+            ApplicationWindowSelectionBackendService::MacosNative {
+                osascript_command: osascript_command.clone(),
+            },
+            WindowResizeBackendService::MacosNative { osascript_command },
+        );
         services
     }
 
@@ -355,6 +357,19 @@ fn window_selection_backend_for_platform(
         | Platform::Android
         | Platform::Ios
         | Platform::Unknown => ApplicationWindowSelectionBackendService::RecordOnly,
+    }
+}
+
+fn resize_backend_for_platform(platform: Platform) -> WindowResizeBackendService {
+    match platform {
+        Platform::Macos => WindowResizeBackendService::MacosNative {
+            osascript_command: PathBuf::from("/usr/bin/osascript"),
+        },
+        Platform::Linux
+        | Platform::Windows
+        | Platform::Android
+        | Platform::Ios
+        | Platform::Unknown => WindowResizeBackendService::RecordOnly,
     }
 }
 
@@ -2189,6 +2204,7 @@ mod tests {
         assert!(response.starts_with("OK capabilities supported="));
         assert!(response.contains(" total=8 "));
         assert!(response.contains("application-launch:supported"));
+        assert!(response.contains("window-resize:supported"));
         assert_eq!(
             events.events(),
             &[ServerEvent::RequestAuthorized {

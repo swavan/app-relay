@@ -126,6 +126,8 @@ Scope:
   when launch metadata is absent
 - completed real-data list and tile slice: the client renders both application
   views from the server-backed app view model, including launch or attach labels
+- completed macOS native resize slice: selected native macOS windows resize
+  through System Events using the window id captured during native selection
 
 Out of scope:
 
@@ -138,7 +140,8 @@ Acceptance criteria:
 - client lists real applications from the server
 - client can request a session for one app
 - server can track session state and close it cleanly
-- resize requests are validated and recorded
+- resize requests are validated and recorded; macOS applies them to selected
+  native windows
 - unsupported resize backends fail explicitly
 - app discovery and session APIs have unit and integration tests
 - client has tests for loading, empty, error, and success states
