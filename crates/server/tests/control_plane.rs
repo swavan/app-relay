@@ -1,4 +1,4 @@
-use apprelay_core::ServerConfig;
+use apprelay_core::{FakeMacosWindowCaptureRuntime, ServerConfig};
 use apprelay_protocol::{
     AppRelayError, AudioBackendFailureKind, AudioBackendKind, AudioBackendLeg,
     AudioBackendReadiness, AudioStreamSession, AudioStreamState, ButtonAction, ClientPoint,
@@ -519,13 +519,15 @@ fn control_plane_launches_macos_app_bundle_session_with_native_window_selection(
         &osascript_command,
         "#!/bin/sh\nprintf '88\\tNative Fake Window\\n'\n",
     );
+    let capture_runtime = FakeMacosWindowCaptureRuntime::new();
 
     let mut control_plane = ServerControlPlane::new(
-        ServerServices::with_macos_application_roots_open_and_osascript_commands(
+        ServerServices::with_macos_application_roots_open_osascript_and_capture_runtime(
             "integration-test",
             vec![applications],
             open_command,
             osascript_command,
+            std::sync::Arc::new(capture_runtime.clone()),
         ),
         paired_server_config(),
     );
@@ -595,6 +597,53 @@ fn control_plane_launches_macos_app_bundle_session_with_native_window_selection(
     assert!(stream.signaling.ice_candidates[0]
         .candidate
         .contains(&session.selected_window.id));
+    assert_eq!(capture_runtime.calls().starts.len(), 1);
+    assert_eq!(
+        capture_runtime.calls().starts[0].stream_id,
+        "stream-1".to_string()
+    );
+    assert_eq!(
+        capture_runtime.calls().starts[0].selected_window_id,
+        "macos-window-session-1-88".to_string()
+    );
+    assert_eq!(
+        capture_runtime.calls().starts[0].application_id,
+        "dev.apprelay.fake".to_string()
+    );
+    assert_eq!(
+        capture_runtime.calls().starts[0].title,
+        "Native Fake Window".to_string()
+    );
+    assert_eq!(
+        capture_runtime.calls().starts[0].target_viewport,
+        ViewportSize::new(1280, 720)
+    );
+
+    control_plane
+        .stop_video_stream(
+            &auth,
+            StopVideoStreamRequest {
+                stream_id: stream.id.clone(),
+            },
+        )
+        .expect("stop macOS selected-window video stream");
+    assert_eq!(capture_runtime.calls().stops, vec![stream.id]);
+
+    let second_stream = control_plane
+        .start_video_stream(
+            &auth,
+            StartVideoStreamRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .expect("start second macOS selected-window video stream");
+    control_plane
+        .close_session(&auth, &session.id)
+        .expect("close macOS session");
+    assert_eq!(
+        capture_runtime.calls().stops,
+        vec!["stream-1".to_string(), second_stream.id]
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }

@@ -25,7 +25,9 @@ baseline rather than a native media backend.
   CoreAudio, and WASAPI capture/playback backends remain planned.
 - Linux and macOS selected-window video support currently means session-bound
   stream startup, capture-source metadata, signaling state, and encoding
-  contract negotiation. Native frame capture remains planned.
+  contract negotiation. macOS also has a control-plane capture runtime boundary
+  for start/stop lifecycle handling. Native frame capture and delivery remain
+  planned.
 - Linux application launch spawns discovered `.desktop` `Exec=` commands
   directly without a shell after stripping common desktop-entry field codes.
 - macOS application launch opens discovered `.app` bundles with the native
