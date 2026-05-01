@@ -9,8 +9,8 @@ baseline rather than a native media backend.
 
 | Platform | App discovery | Application launch | Window resize | Window video | System audio | Client microphone | Keyboard input | Mouse input |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Linux | Supported | Supported: `.desktop` Exec command spawn | Unsupported: planned | Unsupported: planned | Supported: PipeWire native backend planned | Supported: PipeWire native backend planned | Unsupported: planned | Unsupported: planned |
-| macOS | Supported | Supported: `.app` bundle launch through `open` | Unsupported: planned | Unsupported: planned | Supported: CoreAudio native backend planned | Supported: CoreAudio native backend planned | Unsupported: planned | Unsupported: planned |
+| Linux | Supported | Supported: `.desktop` Exec command spawn | Unsupported: planned | Supported: selected-window stream startup; native frame capture planned | Supported: PipeWire native backend planned | Supported: PipeWire native backend planned | Unsupported: planned | Unsupported: planned |
+| macOS | Supported | Supported: `.app` bundle launch through `open` | Unsupported: planned | Supported: selected-window stream startup; ScreenCaptureKit frame capture planned | Supported: CoreAudio native backend planned | Supported: CoreAudio native backend planned | Unsupported: planned | Unsupported: planned |
 | Windows | Unsupported: discovery backend not implemented | Unsupported: launch intent only | Unsupported: planned | Unsupported: planned | Supported: WASAPI native backend planned | Supported: WASAPI native backend planned | Unsupported: planned | Unsupported: planned |
 | Android | Unsupported: client target | Unsupported: launch intent only | Unsupported: planned | Unsupported: planned | Unsupported: client target | Unsupported: client target | Unsupported: planned | Unsupported: planned |
 | iOS | Unsupported: client target | Unsupported: launch intent only | Unsupported: planned | Unsupported: planned | Unsupported: client target | Unsupported: client target | Unsupported: planned | Unsupported: planned |
@@ -23,6 +23,9 @@ baseline rather than a native media backend.
   unsupported-state messaging.
 - Desktop audio support is currently a control-plane contract. Native PipeWire,
   CoreAudio, and WASAPI capture/playback backends remain planned.
+- Linux and macOS selected-window video support currently means session-bound
+  stream startup, capture-source metadata, signaling state, and encoding
+  contract negotiation. Native frame capture remains planned.
 - Linux application launch spawns discovered `.desktop` `Exec=` commands
   directly without a shell after stripping common desktop-entry field codes.
 - macOS application launch opens discovered `.app` bundles with the native

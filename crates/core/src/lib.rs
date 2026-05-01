@@ -2070,6 +2070,15 @@ impl CapabilityService for DefaultCapabilityService {
             }
             Platform::Unknown => "unknown platform cannot expose desktop audio control-plane capture",
         };
+        let video_reason = match self.platform {
+            Platform::Linux => {
+                "Linux selected-window video stream control-plane startup is available; native frame capture backend is planned"
+            }
+            Platform::Macos => {
+                "macOS selected-window video stream control-plane startup is available; native ScreenCaptureKit frame capture backend is planned"
+            }
+            _ => unsupported_reason,
+        };
         let app_discovery = match self.platform {
             Platform::Linux | Platform::Macos => {
                 PlatformCapability::supported(self.platform, Feature::AppDiscovery)
@@ -2127,11 +2136,19 @@ impl CapabilityService for DefaultCapabilityService {
                 Feature::WindowResize,
                 unsupported_reason,
             ),
-            PlatformCapability::unsupported(
-                self.platform,
-                Feature::WindowVideoStream,
-                unsupported_reason,
-            ),
+            if matches!(self.platform, Platform::Linux | Platform::Macos) {
+                PlatformCapability::supported_with_reason(
+                    self.platform,
+                    Feature::WindowVideoStream,
+                    video_reason,
+                )
+            } else {
+                PlatformCapability::unsupported(
+                    self.platform,
+                    Feature::WindowVideoStream,
+                    video_reason,
+                )
+            },
             if matches!(
                 self.platform,
                 Platform::Linux | Platform::Macos | Platform::Windows
@@ -2889,6 +2906,24 @@ mod tests {
         assert!(capabilities
             .iter()
             .any(|capability| capability.feature == Feature::AppDiscovery && capability.supported));
+    }
+
+    #[test]
+    fn desktop_capabilities_support_selected_window_video_stream_startup() {
+        for platform in [Platform::Linux, Platform::Macos] {
+            let service = DefaultCapabilityService::new(platform);
+            let capabilities = service.platform_capabilities();
+            let window_video = capabilities
+                .iter()
+                .find(|capability| capability.feature == Feature::WindowVideoStream)
+                .expect("window video capability");
+
+            assert!(window_video.supported);
+            assert!(window_video
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("control-plane startup")));
+        }
     }
 
     #[test]

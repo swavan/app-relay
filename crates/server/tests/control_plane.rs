@@ -7,10 +7,10 @@ use apprelay_protocol::{
     NegotiateVideoStreamRequest, Platform, PointerButton, ReconnectVideoStreamRequest,
     ResizeSessionRequest, ServerPoint, ServerVersion, SessionState, StartAudioStreamRequest,
     StartVideoStreamRequest, StopAudioStreamRequest, StopVideoStreamRequest,
-    UpdateAudioStreamRequest, VideoEncodingPipelineState, VideoResolutionAdaptationReason,
-    VideoStreamFailureKind, VideoStreamNegotiationState, VideoStreamRecoveryAction,
-    VideoStreamState, ViewportSize, WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription,
-    WindowSelectionMethod,
+    UpdateAudioStreamRequest, VideoCaptureScope, VideoEncodingPipelineState,
+    VideoResolutionAdaptationReason, VideoStreamFailureKind, VideoStreamNegotiationState,
+    VideoStreamRecoveryAction, VideoStreamSignalingKind, VideoStreamState, ViewportSize,
+    WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription, WindowSelectionMethod,
 };
 use apprelay_server::{ServerControlPlane, ServerServices};
 
@@ -529,9 +529,10 @@ fn control_plane_launches_macos_app_bundle_session_with_native_window_selection(
         ),
         paired_server_config(),
     );
+    let auth = paired_auth();
     let session = control_plane
         .create_session(
-            &paired_auth(),
+            &auth,
             CreateSessionRequest {
                 application_id: "dev.apprelay.fake".to_string(),
                 viewport: ViewportSize::new(1280, 720),
@@ -546,6 +547,54 @@ fn control_plane_launches_macos_app_bundle_session_with_native_window_selection(
     );
     assert_eq!(session.selected_window.title, "Native Fake Window");
     assert_eq!(session.selected_window.id, "macos-window-session-1-88");
+
+    let stream = control_plane
+        .start_video_stream(
+            &auth,
+            StartVideoStreamRequest {
+                session_id: session.id.clone(),
+            },
+        )
+        .expect("start macOS selected-window video stream");
+
+    assert_eq!(stream.session_id, session.id);
+    assert_eq!(stream.selected_window_id, session.selected_window.id);
+    assert_eq!(
+        stream.capture_source.scope,
+        VideoCaptureScope::SelectedWindow
+    );
+    assert_eq!(
+        stream.capture_source.selected_window_id,
+        session.selected_window.id
+    );
+    assert_eq!(
+        stream.capture_source.application_id,
+        session.selected_window.application_id
+    );
+    assert_eq!(stream.capture_source.title, session.selected_window.title);
+    assert_eq!(stream.state, VideoStreamState::Starting);
+    assert_eq!(
+        stream.encoding.state,
+        VideoEncodingPipelineState::Configured
+    );
+    assert_eq!(stream.signaling.kind, VideoStreamSignalingKind::WebRtcOffer);
+    assert_eq!(
+        stream.signaling.negotiation_state,
+        VideoStreamNegotiationState::AwaitingAnswer
+    );
+    assert_eq!(
+        stream
+            .signaling
+            .offer
+            .as_ref()
+            .expect("WebRTC offer")
+            .sdp_type,
+        WebRtcSdpType::Offer
+    );
+    assert_eq!(stream.signaling.ice_candidates.len(), 1);
+    assert!(stream.signaling.ice_candidates[0]
+        .candidate
+        .contains(&session.selected_window.id));
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -707,6 +756,44 @@ fn control_plane_manages_video_stream_lifecycle() {
 
     assert_eq!(stopped.state, VideoStreamState::Stopped);
     assert_eq!(stopped.encoding.state, VideoEncodingPipelineState::Drained);
+}
+
+#[test]
+fn control_plane_reports_unsupported_video_stream_on_non_desktop_capture_platforms() {
+    for platform in [
+        Platform::Windows,
+        Platform::Android,
+        Platform::Ios,
+        Platform::Unknown,
+    ] {
+        let mut control_plane = ServerControlPlane::new(
+            server_services_for_platform(platform, "integration-test"),
+            paired_server_config(),
+        );
+        let auth = paired_auth();
+        let session = control_plane
+            .create_session(
+                &auth,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create session");
+
+        assert_eq!(
+            control_plane.start_video_stream(
+                &auth,
+                StartVideoStreamRequest {
+                    session_id: session.id,
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::unsupported(
+                platform,
+                Feature::WindowVideoStream
+            )))
+        );
+    }
 }
 
 #[test]

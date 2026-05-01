@@ -20,11 +20,10 @@ impl VideoStreamControl {
     pub fn for_platform(platform: Platform) -> Self {
         let capture_backend = match platform {
             Platform::Linux => WindowCaptureBackendService::LinuxSelectedWindow,
-            Platform::Android
-            | Platform::Ios
-            | Platform::Macos
-            | Platform::Windows
-            | Platform::Unknown => WindowCaptureBackendService::Unsupported { platform },
+            Platform::Macos => WindowCaptureBackendService::MacosSelectedWindow,
+            Platform::Android | Platform::Ios | Platform::Windows | Platform::Unknown => {
+                WindowCaptureBackendService::Unsupported { platform }
+            }
         };
 
         Self {
