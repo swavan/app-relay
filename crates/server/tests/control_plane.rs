@@ -1,12 +1,12 @@
 use apprelay_core::{FakeMacosWindowCaptureRuntime, ServerConfig};
 use apprelay_protocol::{
     ActiveInputFocus, AppRelayError, AudioBackendFailureKind, AudioBackendKind, AudioBackendLeg,
-    AudioBackendReadiness, AudioStreamSession, AudioStreamState, ButtonAction, ClientPoint,
-    ControlAuth, ControlError, CreateSessionRequest, Feature, ForwardInputRequest,
-    InputDeliveryStatus, InputEvent, KeyAction, KeyModifiers, LaunchIntentStatus, MappedInputEvent,
-    MicrophoneMode, NegotiateVideoStreamRequest, Platform, PointerButton,
-    ReconnectVideoStreamRequest, ResizeIntentStatus, ResizeSessionRequest, ServerPoint,
-    ServerVersion, SessionState, StartAudioStreamRequest, StartVideoStreamRequest,
+    AudioBackendMediaStats, AudioBackendReadiness, AudioStreamSession, AudioStreamState,
+    ButtonAction, ClientPoint, ControlAuth, ControlError, CreateSessionRequest, Feature,
+    ForwardInputRequest, InputDeliveryStatus, InputEvent, KeyAction, KeyModifiers,
+    LaunchIntentStatus, MappedInputEvent, MicrophoneMode, NegotiateVideoStreamRequest, Platform,
+    PointerButton, ReconnectVideoStreamRequest, ResizeIntentStatus, ResizeSessionRequest,
+    ServerPoint, ServerVersion, SessionState, StartAudioStreamRequest, StartVideoStreamRequest,
     StopAudioStreamRequest, StopVideoStreamRequest, UpdateAudioStreamRequest,
     VideoCaptureRuntimeState, VideoCaptureScope, VideoEncodingPipelineState,
     VideoResolutionAdaptationReason, VideoStreamFailureKind, VideoStreamNegotiationState,
@@ -1790,6 +1790,40 @@ fn control_plane_starts_audio_stream_on_desktop_platforms() {
                     failure.kind == AudioBackendFailureKind::NativeBackendNotImplemented
                 })
         }));
+        if platform == Platform::Macos {
+            assert!(backend.notes.iter().any(|note| {
+                note.contains("macOS CoreAudio")
+                    && note.contains("explicit but unavailable")
+                    && note.contains("remain planned")
+            }));
+        }
+    }
+}
+
+#[test]
+fn control_plane_macos_audio_reports_coreaudio_planned_unavailable() {
+    let audio = start_audio_stream_for_platform(Platform::Macos);
+    let backend = audio.backend.as_ref().expect("audio backend contract");
+
+    assert_eq!(backend.readiness, AudioBackendReadiness::ControlPlaneOnly);
+    assert!(backend.notes.iter().any(|note| {
+        note.contains("macOS CoreAudio adapter/runtime boundary")
+            && note.contains("explicit but unavailable")
+            && note.contains("remain planned")
+    }));
+
+    for status in &backend.statuses {
+        assert_eq!(status.backend, AudioBackendKind::CoreAudio);
+        assert!(!status.available);
+        assert_eq!(status.readiness, AudioBackendReadiness::PlannedNative);
+        assert_eq!(status.media, AudioBackendMediaStats::default());
+        let failure = status.failure.as_ref().expect("CoreAudio failure");
+        assert_eq!(
+            failure.kind,
+            AudioBackendFailureKind::NativeBackendNotImplemented
+        );
+        assert!(failure.message.contains("CoreAudio"));
+        assert!(!failure.message.contains("packets"));
     }
 }
 
@@ -1799,10 +1833,9 @@ fn control_plane_default_linux_audio_stream_has_no_pipewire_capture_boundary() {
     let audio = start_audio_stream_for_platform(Platform::Linux);
     let backend = audio.backend.as_ref().expect("audio backend contract");
 
-    assert!(backend
-        .notes
-        .iter()
-        .all(|note| !note.contains("PipeWire capture has an adapter boundary")));
+    assert!(backend.notes.iter().all(|note| !note
+        .contains("PipeWire capture has an adapter boundary")
+        && !note.contains("PipeWire native audio backend boundary")));
     let capture = backend
         .statuses
         .iter()

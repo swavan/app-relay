@@ -23,6 +23,7 @@ Use this checklist before promoting Phase 6 beyond the desktop audio control-pla
 - Confirm the optional `pipewire-capture` feature is treated as a Linux capture adapter boundary only: it must not claim live PipeWire packets until the real runtime is wired, and playback/client microphone/server microphone legs must remain planned unless separately implemented.
 - Confirm Linux servers built with `pipewire-capture` can opt into command-backed PipeWire capture with `APPRELAY_PIPEWIRE_CAPTURE=1` and optional `APPRELAY_PIPEWIRE_CAPTURE_RATE`, `APPRELAY_PIPEWIRE_CAPTURE_CHANNELS`, and `APPRELAY_PIPEWIRE_CAPTURE_FORMAT` overrides; default feature builds without the opt-in flag must still report the unavailable adapter boundary.
 - Confirm enabling the server `pipewire-capture` feature only changes Linux capture status messaging to the unavailable PipeWire adapter boundary; default server builds and macOS/Windows feature builds must keep the planned native status without PipeWire boundary messaging.
+- Confirm macOS audio backend status names the CoreAudio adapter/runtime boundary as planned/unavailable, keeps every leg at `NativeBackendNotImplemented`, and reports zero media counters until real CoreAudio media is implemented.
 - Confirm active audio stream status reports whether server-side microphone injection was requested, whether it is active, the native readiness state, and the reason when inactive.
 - Confirm unsupported platforms return explicit unsupported reasons.
 - Confirm audio can start while video is stopped.
