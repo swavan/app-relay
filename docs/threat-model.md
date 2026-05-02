@@ -151,9 +151,11 @@ Out of scope for this document:
   policy, but the foreground parser's caller-supplied id is not authenticated
   device proof. It still uses the existing session application policy and does
   not persist per-client application grants on the server.
-- Runtime pairing approvals and revocations are in-memory. Admin-authored
-  authorized clients can be stored in server config, but persisting runtime
-  pairing changes through the config repository remains future work.
+- Runtime pairing approvals and revocations are persisted when the server
+  control plane is constructed with a file-backed `ServerConfig` repository,
+  including foreground revocation in `--config` mode. Constructors without a
+  repository remain in-memory only. Config replacement is atomic on Unix and
+  best-effort on Windows after writing a synced temporary file.
 - Token storage is file-backed. Moving client secrets to a platform keychain or
   encrypted store remains future work.
 - Local network exposure guidance is documented in

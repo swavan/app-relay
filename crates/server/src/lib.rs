@@ -18,8 +18,9 @@ use apprelay_core::{
     DefaultCapabilityService, DesktopEntryApplicationDiscovery, EventSink, HealthService,
     InMemoryApplicationSessionService, InMemoryClientAuthorizationService,
     InMemoryInputForwardingService, InputBackendService, InputForwardingService,
-    MacosApplicationDiscovery, MacosWindowCaptureRuntime, ServerConfig, ServerEvent, SessionPolicy,
-    StaticHealthService, UnsupportedApplicationDiscovery, WindowResizeBackendService,
+    MacosApplicationDiscovery, MacosWindowCaptureRuntime, ServerConfig, ServerConfigRepository,
+    ServerEvent, SessionPolicy, StaticHealthService, UnsupportedApplicationDiscovery,
+    WindowResizeBackendService,
 };
 use apprelay_protocol::{
     ActiveInputFocus, AppRelayError, ApplicationLaunch, ApplicationSession, ApplicationSummary,
@@ -439,23 +440,54 @@ impl ApplicationDiscovery for ApplicationDiscoveryService {
     }
 }
 
-#[derive(Debug)]
 pub struct ServerControlPlane {
     services: ServerServices,
     client_authorization: InMemoryClientAuthorizationService,
     config: ServerConfig,
+    config_repository: Option<Arc<dyn ServerConfigRepository>>,
     heartbeat_sequence: AtomicU64,
     session_owners: HashMap<String, String>,
 }
 
+impl std::fmt::Debug for ServerControlPlane {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ServerControlPlane")
+            .field("services", &self.services)
+            .field("client_authorization", &self.client_authorization)
+            .field("config", &self.config)
+            .field("config_repository", &self.config_repository.is_some())
+            .field("heartbeat_sequence", &self.heartbeat_sequence)
+            .field("session_owners", &self.session_owners)
+            .finish()
+    }
+}
+
 impl ServerControlPlane {
     pub fn new(services: ServerServices, config: ServerConfig) -> Self {
+        Self::with_optional_config_repository(services, config, None)
+    }
+
+    pub fn with_config_repository(
+        services: ServerServices,
+        config: ServerConfig,
+        config_repository: impl ServerConfigRepository + 'static,
+    ) -> Self {
+        Self::with_optional_config_repository(services, config, Some(Arc::new(config_repository)))
+    }
+
+    fn with_optional_config_repository(
+        services: ServerServices,
+        config: ServerConfig,
+        config_repository: Option<Arc<dyn ServerConfigRepository>>,
+    ) -> Self {
         let client_authorization =
             InMemoryClientAuthorizationService::new(config.authorized_clients.clone());
         Self {
             services,
             client_authorization,
             config,
+            config_repository,
             heartbeat_sequence: AtomicU64::new(0),
             session_owners: HashMap::new(),
         }
@@ -523,11 +555,11 @@ impl ServerControlPlane {
         &mut self,
         request: ApprovePairingRequest,
     ) -> ControlResult<apprelay_core::AuthorizedClient> {
-        let client = self
-            .client_authorization
+        let mut next_authorization = self.client_authorization.clone();
+        let client = next_authorization
             .approve_pairing(request)
             .map_err(ControlError::Service)?;
-        self.config.authorized_clients = self.client_authorization.authorized_clients();
+        self.commit_authorization_change(next_authorization)?;
         Ok(client)
     }
 
@@ -561,19 +593,36 @@ impl ServerControlPlane {
         &mut self,
         request: RevokeClientRequest,
     ) -> ControlResult<(apprelay_core::AuthorizedClient, Vec<ApplicationSession>)> {
-        let client = self
-            .client_authorization
+        let mut next_authorization = self.client_authorization.clone();
+        let client = next_authorization
             .revoke_client(request)
             .map_err(ControlError::Service)?;
-        self.config.authorized_clients = self.client_authorization.authorized_clients();
-        let closed_sessions = self.close_sessions_owned_by(&client.id)?;
+        self.commit_authorization_change(next_authorization)?;
+        let closed_sessions = self.close_sessions_owned_by(&client.id);
         Ok((client, closed_sessions))
     }
 
-    fn close_sessions_owned_by(
+    fn commit_authorization_change(
         &mut self,
-        client_id: &str,
-    ) -> ControlResult<Vec<ApplicationSession>> {
+        next_authorization: InMemoryClientAuthorizationService,
+    ) -> ControlResult<()> {
+        let mut next_config = self.config.clone();
+        next_config.authorized_clients = next_authorization.authorized_clients();
+
+        if let Some(repository) = &self.config_repository {
+            repository.save(&next_config).map_err(|error| {
+                ControlError::Service(AppRelayError::ServiceUnavailable(format!(
+                    "failed to persist server config: {error:?}"
+                )))
+            })?;
+        }
+
+        self.client_authorization = next_authorization;
+        self.config = next_config;
+        Ok(())
+    }
+
+    fn close_sessions_owned_by(&mut self, client_id: &str) -> Vec<ApplicationSession> {
         let session_ids = self
             .session_owners
             .iter()
@@ -583,15 +632,13 @@ impl ServerControlPlane {
         let mut closed_sessions = Vec::new();
 
         for session_id in session_ids {
-            match self.services.close_session(&session_id) {
-                Ok(session) => closed_sessions.push(session),
-                Err(AppRelayError::NotFound(_)) => {}
-                Err(error) => return Err(ControlError::Service(error)),
+            if let Ok(session) = self.services.close_session(&session_id) {
+                closed_sessions.push(session);
             }
             self.session_owners.remove(&session_id);
         }
 
-        Ok(closed_sessions)
+        closed_sessions
     }
 
     pub fn resize_session(
@@ -1884,7 +1931,20 @@ fn xml_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use apprelay_core::InMemoryEventSink;
+    use apprelay_core::{ConfigStoreError, FileServerConfigRepository, InMemoryEventSink};
+
+    #[derive(Clone, Debug)]
+    struct FailingServerConfigRepository;
+
+    impl ServerConfigRepository for FailingServerConfigRepository {
+        fn load(&self) -> Result<ServerConfig, ConfigStoreError> {
+            Err(ConfigStoreError::CorruptedStore)
+        }
+
+        fn save(&self, _config: &ServerConfig) -> Result<(), ConfigStoreError> {
+            Err(ConfigStoreError::CorruptedStore)
+        }
+    }
 
     fn paired_server_config() -> ServerConfig {
         let mut config = ServerConfig::local("correct-token");
@@ -1921,12 +1981,17 @@ mod tests {
     fn write_executable_script(path: &Path, contents: &str) {
         use std::os::unix::fs::PermissionsExt;
 
-        std::fs::write(path, contents).expect("write executable script");
+        let mut file = std::fs::File::create(path).expect("create executable script");
+        file.write_all(contents.as_bytes())
+            .expect("write executable script");
+        file.sync_all().expect("sync executable script");
+        drop(file);
         let mut permissions = std::fs::metadata(path)
             .expect("read executable script metadata")
             .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(path, permissions).expect("mark executable script");
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 
     #[cfg(unix)]
@@ -2240,6 +2305,45 @@ mod tests {
     }
 
     #[test]
+    fn control_plane_persists_runtime_pairing_approval_to_file_config() {
+        let root = unique_test_dir("server-runtime-approve-config");
+        let repository = FileServerConfigRepository::new(root.join("server.conf"));
+        repository
+            .save(&ServerConfig::local("correct-token"))
+            .expect("save initial server config");
+        let mut control_plane = ServerControlPlane::with_config_repository(
+            ServerServices::new(Platform::Linux, "test"),
+            repository.load().expect("load initial server config"),
+            repository.clone(),
+        );
+        let pending = control_plane
+            .request_pairing(
+                &ControlAuth::new("correct-token"),
+                ControlClientIdentity {
+                    id: "client-1".to_string(),
+                    label: "Laptop".to_string(),
+                },
+            )
+            .expect("request pairing");
+
+        control_plane
+            .locally_approve_pairing(ApprovePairingRequest {
+                request_id: pending.request_id,
+            })
+            .expect("approve pairing");
+
+        assert_eq!(
+            repository
+                .load()
+                .expect("load persisted server config")
+                .authorized_clients,
+            vec![apprelay_core::AuthorizedClient::new("client-1", "Laptop")]
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn control_plane_revokes_paired_client_before_sensitive_controls() {
         let mut control_plane = ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
@@ -2270,6 +2374,34 @@ mod tests {
     }
 
     #[test]
+    fn control_plane_persists_runtime_pairing_revoke_to_file_config() {
+        let root = unique_test_dir("server-runtime-revoke-config");
+        let repository = FileServerConfigRepository::new(root.join("server.conf"));
+        repository
+            .save(&paired_server_config())
+            .expect("save initial server config");
+        let mut control_plane = ServerControlPlane::with_config_repository(
+            ServerServices::new(Platform::Linux, "test"),
+            repository.load().expect("load initial server config"),
+            repository.clone(),
+        );
+
+        control_plane
+            .locally_revoke_client(RevokeClientRequest {
+                client_id: "test-client".to_string(),
+            })
+            .expect("revoke paired client");
+
+        assert!(repository
+            .load()
+            .expect("load persisted server config")
+            .authorized_clients
+            .is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn control_plane_rejects_unknown_client_revoke() {
         let mut control_plane = ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
@@ -2283,6 +2415,74 @@ mod tests {
             Err(ControlError::Service(AppRelayError::NotFound(
                 "client unknown-client was not paired".to_string()
             )))
+        );
+    }
+
+    #[test]
+    fn control_plane_failed_revoke_does_not_overwrite_file_config() {
+        let root = unique_test_dir("server-runtime-failed-revoke-config");
+        let repository = FileServerConfigRepository::new(root.join("server.conf"));
+        let initial_config = paired_server_config();
+        repository
+            .save(&initial_config)
+            .expect("save initial server config");
+        let mut control_plane = ServerControlPlane::with_config_repository(
+            ServerServices::new(Platform::Linux, "test"),
+            repository.load().expect("load initial server config"),
+            repository.clone(),
+        );
+
+        assert_eq!(
+            control_plane.locally_revoke_client(RevokeClientRequest {
+                client_id: "unknown-client".to_string(),
+            }),
+            Err(ControlError::Service(AppRelayError::NotFound(
+                "client unknown-client was not paired".to_string()
+            )))
+        );
+        assert_eq!(
+            repository.load().expect("load server config after failure"),
+            initial_config
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn control_plane_revoke_save_failure_does_not_mutate_active_config() {
+        let mut control_plane = ServerControlPlane::with_config_repository(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config(),
+            FailingServerConfigRepository,
+        );
+
+        let error = control_plane
+            .locally_revoke_client(RevokeClientRequest {
+                client_id: "test-client".to_string(),
+            })
+            .expect_err("revoke should fail when config save fails");
+
+        assert!(matches!(
+            error,
+            ControlError::Service(AppRelayError::ServiceUnavailable(message))
+                if message.contains("failed to persist server config")
+        ));
+        assert_eq!(
+            control_plane.config.authorized_clients,
+            paired_server_config().authorized_clients
+        );
+        assert_eq!(
+            control_plane
+                .create_session(
+                    &paired_auth(),
+                    CreateSessionRequest {
+                        application_id: "terminal".to_string(),
+                        viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                    },
+                )
+                .expect("paired client remains authorized")
+                .application_id,
+            "terminal"
         );
     }
 
@@ -2344,6 +2544,63 @@ mod tests {
                 },
             )
             .is_ok());
+    }
+
+    #[test]
+    fn control_plane_persisted_revoke_closes_revoked_client_sessions() {
+        let root = unique_test_dir("server-runtime-revoke-teardown-config");
+        let repository = FileServerConfigRepository::new(root.join("server.conf"));
+        repository
+            .save(&two_client_server_config())
+            .expect("save initial server config");
+        let mut control_plane = ServerControlPlane::with_config_repository(
+            ServerServices::new(Platform::Linux, "test"),
+            repository.load().expect("load initial server config"),
+            repository.clone(),
+        );
+        let auth_1 = ControlAuth::with_client_id("correct-token", "client-1");
+        let auth_2 = ControlAuth::with_client_id("correct-token", "client-2");
+        control_plane
+            .create_session(
+                &auth_1,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create revoked client session before revocation");
+        let retained_session = control_plane
+            .create_session(
+                &auth_2,
+                CreateSessionRequest {
+                    application_id: "browser".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1024, 768),
+                },
+            )
+            .expect("create retained client session before revocation");
+
+        control_plane
+            .locally_revoke_client(RevokeClientRequest {
+                client_id: "client-1".to_string(),
+            })
+            .expect("revoke paired client");
+
+        assert_eq!(
+            repository
+                .load()
+                .expect("load persisted server config")
+                .authorized_clients,
+            vec![apprelay_core::AuthorizedClient::new(
+                "client-2",
+                "Client Two"
+            )]
+        );
+        assert_eq!(
+            control_plane.services.active_sessions(),
+            vec![retained_session]
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

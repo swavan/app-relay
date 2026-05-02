@@ -137,14 +137,20 @@ fn unique_test_dir(name: &str) -> std::path::PathBuf {
 
 #[cfg(unix)]
 fn write_executable_script(path: &std::path::Path, contents: &str) {
+    use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
 
-    std::fs::write(path, contents).expect("write executable script");
+    let mut file = std::fs::File::create(path).expect("create executable script");
+    file.write_all(contents.as_bytes())
+        .expect("write executable script");
+    file.sync_all().expect("sync executable script");
+    drop(file);
     let mut permissions = std::fs::metadata(path)
         .expect("read executable script metadata")
         .permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(path, permissions).expect("mark executable script");
+    std::thread::sleep(std::time::Duration::from_millis(5));
 }
 
 #[cfg(unix)]
