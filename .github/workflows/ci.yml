@@ -6,8 +6,18 @@ on:
   pull_request:
 
 jobs:
+  ci-policy:
+    name: CI Policy
+    runs-on: [self-hosted, linux, docker]
+    container: node:22-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check CI workflow policy
+        run: node apps/client-tauri/scripts/check-ci-workflow.mjs
+
   rust:
     name: Rust
+    needs: ci-policy
     runs-on: [self-hosted, linux, docker]
     container: rust:1.86-bookworm
     steps:
@@ -32,6 +42,7 @@ jobs:
 
   tauri-rust:
     name: Tauri Rust
+    needs: ci-policy
     runs-on: [self-hosted, linux, docker]
     container: rust:1.86-bookworm
     steps:
@@ -62,6 +73,7 @@ jobs:
 
   rust-advisories:
     name: Rust Advisories
+    needs: ci-policy
     runs-on: [self-hosted, linux, docker]
     container: rust:1.86-bookworm
     env:
@@ -90,6 +102,7 @@ jobs:
 
   client:
     name: Client
+    needs: ci-policy
     runs-on: [self-hosted, linux, docker]
     container: node:22-bookworm
     defaults:

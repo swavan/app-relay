@@ -9,6 +9,8 @@
     "audit:beta": "npm audit --audit-level=high",
     "beta-security-review:check": "node scripts/check-beta-security-review-manifest.mjs --template ../../docs/beta-security-review-manifest.template.json",
     "beta-security-review:test": "vitest run scripts/check-beta-security-review-manifest.test.mjs",
+    "ci-workflow:check": "node scripts/check-ci-workflow.mjs",
+    "ci-workflow:test": "vitest run scripts/check-ci-workflow.test.mjs",
     "dependency-audit-evidence:check": "node scripts/check-dependency-audit-evidence-manifest.mjs --template ../../docs/dependency-audit-evidence-manifest.template.json",
     "dependency-audit-evidence:test": "vitest run scripts/check-dependency-audit-evidence-manifest.test.mjs",
     "lifecycle-evidence:check": "node scripts/check-lifecycle-evidence-manifest.mjs --template ../../docs/lifecycle-evidence-manifest.template.json",
