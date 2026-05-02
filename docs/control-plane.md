@@ -154,7 +154,12 @@ Manual foreground smoke test:
    response. Application names are percent-escaped so each response remains one
    parseable line.
 5. Use a client id that is already authorized in the server config before
-   creating a session. To exercise the pending path, send
+   creating a session. Authorized client config entries may include persisted
+   server-side application grants; when a client's grant list is non-empty,
+   `create-session` is denied for application ids outside that list before the
+   session service runs. Legacy two-field authorized-client entries have an
+   empty grant list, which means all applications remain allowed subject to the
+   existing session policy. To exercise the pending path, send
    `pairing-request <token> <client_id> <client_label>` and confirm session
    creation is still denied until an in-process local/admin service action
    approves it. Approval is intentionally not exposed through the foreground

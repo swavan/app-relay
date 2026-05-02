@@ -531,6 +531,14 @@ impl ServerControlPlane {
         request: CreateSessionRequest,
     ) -> ControlResult<ApplicationSession> {
         let client = self.authorize_paired_client(auth)?;
+        if !client.allows_application(&request.application_id) {
+            return Err(ControlError::Service(AppRelayError::PermissionDenied(
+                format!(
+                    "client {} is not authorized for application {}",
+                    client.id, request.application_id
+                ),
+            )));
+        }
         let session = self
             .services
             .create_session(request)
@@ -2244,6 +2252,18 @@ mod tests {
         config
     }
 
+    fn paired_server_config_with_application_grants(application_ids: &[&str]) -> ServerConfig {
+        let mut config = ServerConfig::local("correct-token");
+        config.authorized_clients = vec![
+            apprelay_core::AuthorizedClient::with_allowed_application_ids(
+                "test-client",
+                "Test Client",
+                application_ids.iter().copied(),
+            ),
+        ];
+        config
+    }
+
     fn two_client_server_config() -> ServerConfig {
         let mut config = ServerConfig::local("correct-token");
         config.authorized_clients = vec![
@@ -2540,6 +2560,74 @@ mod tests {
             ),
             Err(ControlError::Service(AppRelayError::PermissionDenied(
                 "client unknown-client is not paired".to_string()
+            )))
+        );
+    }
+
+    #[test]
+    fn control_plane_allows_create_session_for_client_application_grant() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config_with_application_grants(&["terminal"]),
+        );
+
+        let session = control_plane
+            .create_session(
+                &paired_auth(),
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create granted session");
+
+        assert_eq!(session.application_id, "terminal");
+    }
+
+    #[test]
+    fn control_plane_rejects_create_session_outside_client_application_grants() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config_with_application_grants(&["terminal"]),
+        );
+
+        assert_eq!(
+            control_plane.create_session(
+                &paired_auth(),
+                CreateSessionRequest {
+                    application_id: "browser".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "client test-client is not authorized for application browser".to_string()
+            )))
+        );
+        assert!(control_plane.services.active_sessions().is_empty());
+    }
+
+    #[test]
+    fn control_plane_keeps_session_policy_after_client_application_grants() {
+        let mut services = ServerServices::new(Platform::Linux, "test");
+        services.session_service =
+            InMemoryApplicationSessionService::new(SessionPolicy::allow_applications(vec![
+                "terminal".to_string(),
+            ]));
+        let mut control_plane = ServerControlPlane::new(
+            services,
+            paired_server_config_with_application_grants(&["terminal", "browser"]),
+        );
+
+        assert_eq!(
+            control_plane.create_session(
+                &paired_auth(),
+                CreateSessionRequest {
+                    application_id: "browser".to_string(),
+                    viewport: apprelay_protocol::ViewportSize::new(1280, 720),
+                },
+            ),
+            Err(ControlError::Service(AppRelayError::PermissionDenied(
+                "application browser is not allowed".to_string()
             )))
         );
     }

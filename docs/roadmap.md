@@ -111,6 +111,9 @@ Scope:
 - completed permission allowlist slice: Rust-owned application grants persist
   to disk, Tauri enforces grants before creating sessions, and the client only
   prompts for approval
+- completed server per-client application grants slice: authorized clients can
+  persist bounded application id grants in server config, and session creation
+  denies paired clients outside their non-empty grant list
 - completed application listing icon slice: Tauri exposes renderable icon data
   when available, and the client renders image icons or stable fallback badges
 - completed selected-window identity slice: sessions expose application id and

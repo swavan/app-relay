@@ -623,6 +623,7 @@ pub trait ClientAuthorizationService {
 pub struct AuthorizedClient {
     pub id: String,
     pub label: String,
+    pub allowed_application_ids: Vec<String>,
 }
 
 impl AuthorizedClient {
@@ -630,7 +631,31 @@ impl AuthorizedClient {
         Self {
             id: id.into(),
             label: label.into(),
+            allowed_application_ids: Vec::new(),
         }
+    }
+
+    pub fn with_allowed_application_ids(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        allowed_application_ids: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            allowed_application_ids: allowed_application_ids
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
+    }
+
+    pub fn allows_application(&self, application_id: &str) -> bool {
+        self.allowed_application_ids.is_empty()
+            || self
+                .allowed_application_ids
+                .iter()
+                .any(|allowed_id| allowed_id == application_id)
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
@@ -642,6 +667,14 @@ impl AuthorizedClient {
             return Err(ConfigError::MissingAuthorizedClientLabel);
         }
 
+        if self
+            .allowed_application_ids
+            .iter()
+            .any(|application_id| application_id.trim().is_empty())
+        {
+            return Err(ConfigError::MissingAuthorizedClientApplicationId);
+        }
+
         Ok(())
     }
 }
@@ -651,6 +684,7 @@ impl From<ControlClientIdentity> for AuthorizedClient {
         Self {
             id: identity.id,
             label: identity.label,
+            allowed_application_ids: Vec::new(),
         }
     }
 }
@@ -2129,6 +2163,13 @@ impl ServerConfig {
             client.validate()?;
         }
 
+        let mut client_ids = HashSet::new();
+        for client in &self.authorized_clients {
+            if !client_ids.insert(&client.id) {
+                return Err(ConfigError::DuplicateAuthorizedClientId);
+            }
+        }
+
         self.ssh_tunnel.validate()
     }
 }
@@ -2178,6 +2219,8 @@ pub enum ConfigError {
     InvalidSshPort,
     MissingAuthorizedClientId,
     MissingAuthorizedClientLabel,
+    MissingAuthorizedClientApplicationId,
+    DuplicateAuthorizedClientId,
 }
 
 #[derive(Debug)]
@@ -2363,14 +2406,31 @@ fn encode_authorized_clients(clients: &[AuthorizedClient]) -> String {
     clients
         .iter()
         .map(|client| {
-            format!(
-                "{}:{}",
-                encode_config_list_field(&client.id),
-                encode_config_list_field(&client.label)
-            )
+            if client.allowed_application_ids.is_empty() && client.id != "v2" {
+                format!(
+                    "{}:{}",
+                    encode_config_list_field(&client.id),
+                    encode_config_list_field(&client.label)
+                )
+            } else {
+                format!(
+                    "v2:{}:{}:{}",
+                    encode_config_list_field(&client.id),
+                    encode_config_list_field(&client.label),
+                    encode_authorized_client_application_grants(&client.allowed_application_ids)
+                )
+            }
         })
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn encode_authorized_client_application_grants(application_ids: &[String]) -> String {
+    application_ids
+        .iter()
+        .map(|application_id| encode_config_list_field(application_id))
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 fn decode_authorized_clients(value: &str) -> Result<Vec<AuthorizedClient>, ConfigStoreError> {
@@ -2381,12 +2441,24 @@ fn decode_authorized_clients(value: &str) -> Result<Vec<AuthorizedClient>, Confi
     value
         .split(',')
         .map(|encoded| {
-            let Some((id, label)) = encoded.split_once(':') else {
-                return Err(ConfigStoreError::CorruptedStore);
-            };
+            let (id, label, allowed_application_ids) =
+                if let Some(versioned) = encoded.strip_prefix("v2:") {
+                    let fields = versioned.split(':').collect::<Vec<_>>();
+                    match fields.as_slice() {
+                        [id, label, grants] => (
+                            *id,
+                            *label,
+                            decode_authorized_client_application_grants(grants)?,
+                        ),
+                        _ => decode_legacy_authorized_client(encoded)?,
+                    }
+                } else {
+                    decode_legacy_authorized_client(encoded)?
+                };
             let client = AuthorizedClient {
                 id: decode_config_list_field(id)?,
                 label: decode_config_list_field(label)?,
+                allowed_application_ids,
             };
             client.validate()?;
             Ok(client)
@@ -2394,11 +2466,31 @@ fn decode_authorized_clients(value: &str) -> Result<Vec<AuthorizedClient>, Confi
         .collect()
 }
 
+fn decode_legacy_authorized_client(
+    encoded: &str,
+) -> Result<(&str, &str, Vec<String>), ConfigStoreError> {
+    let Some((id, label)) = encoded.split_once(':') else {
+        return Err(ConfigStoreError::CorruptedStore);
+    };
+    Ok((id, label, Vec::new()))
+}
+
+fn decode_authorized_client_application_grants(
+    value: &str,
+) -> Result<Vec<String>, ConfigStoreError> {
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    value.split(';').map(decode_config_list_field).collect()
+}
+
 fn encode_config_list_field(value: &str) -> String {
     encode_field(value)
         .replace('%', "%25")
         .replace(',', "%2C")
         .replace(':', "%3A")
+        .replace(';', "%3B")
 }
 
 fn decode_config_list_field(value: &str) -> Result<String, ConfigStoreError> {
@@ -2421,6 +2513,7 @@ fn decode_config_list_field(value: &str) -> Result<String, ConfigStoreError> {
             ('2', '5') => decoded.push('%'),
             ('2', 'C') => decoded.push(','),
             ('3', 'A') => decoded.push(':'),
+            ('3', 'B') => decoded.push(';'),
             _ => {
                 decoded.push('%');
                 decoded.push(first);
@@ -3535,6 +3628,135 @@ mod tests {
     }
 
     #[test]
+    fn file_server_config_repository_decodes_legacy_authorized_clients() {
+        let root = unique_test_dir("server-config-legacy-authorized-clients");
+        let path = root.join("server.conf");
+        fs::create_dir_all(&root).expect("create config store dir");
+        fs::write(
+            &path,
+            "bind_address=127.0.0.1\n\
+control_port=7676\n\
+auth_token=test-token\n\
+heartbeat_interval_millis=5000\n\
+ssh_user=local\n\
+ssh_host=localhost\n\
+ssh_local_port=7676\n\
+ssh_remote_port=7676\n\
+authorized_clients=client-1:Test Client\n",
+        )
+        .expect("write legacy server config");
+
+        let repository = FileServerConfigRepository::new(path);
+        let loaded = repository.load().expect("load legacy server config");
+
+        assert_eq!(
+            loaded.authorized_clients,
+            vec![AuthorizedClient::new("client-1", "Test Client")]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_server_config_repository_keeps_legacy_authorized_client_labels_with_colons() {
+        let root = unique_test_dir("server-config-legacy-authorized-client-colon-label");
+        let path = root.join("server.conf");
+        fs::create_dir_all(&root).expect("create config store dir");
+        fs::write(
+            &path,
+            "bind_address=127.0.0.1\n\
+control_port=7676\n\
+auth_token=test-token\n\
+heartbeat_interval_millis=5000\n\
+ssh_user=local\n\
+ssh_host=localhost\n\
+ssh_local_port=7676\n\
+ssh_remote_port=7676\n\
+authorized_clients=client-1:Office Mac:Book\n",
+        )
+        .expect("write legacy server config");
+
+        let repository = FileServerConfigRepository::new(path);
+        let loaded = repository.load().expect("load legacy server config");
+
+        assert_eq!(
+            loaded.authorized_clients,
+            vec![AuthorizedClient::new("client-1", "Office Mac:Book")]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_server_config_repository_persists_authorized_client_application_grants() {
+        let root = unique_test_dir("server-config-authorized-client-grants");
+        let path = root.join("server.conf");
+        let repository = FileServerConfigRepository::new(&path);
+        let mut config = ServerConfig::local("test-token");
+        config.authorized_clients = vec![AuthorizedClient::with_allowed_application_ids(
+            "client-1",
+            "Test Client",
+            ["terminal", "browser"],
+        )];
+
+        repository.save(&config).expect("save server config");
+
+        let encoded = fs::read_to_string(&path).expect("read server config");
+        assert!(encoded.contains("authorized_clients=v2:client-1:Test Client:terminal;browser\n"));
+        assert_eq!(repository.load().expect("load server config"), config);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_server_config_repository_round_trips_authorized_client_id_matching_version_marker() {
+        let root = unique_test_dir("server-config-authorized-client-v2-id");
+        let path = root.join("server.conf");
+        let repository = FileServerConfigRepository::new(&path);
+        let mut config = ServerConfig::local("test-token");
+        config.authorized_clients = vec![AuthorizedClient::new("v2", "Test Client")];
+
+        repository.save(&config).expect("save server config");
+
+        let encoded = fs::read_to_string(&path).expect("read server config");
+        assert!(encoded.contains("authorized_clients=v2:v2:Test Client:\n"));
+        assert_eq!(repository.load().expect("load server config"), config);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_server_config_repository_round_trips_escaped_authorized_client_application_grants() {
+        let root = unique_test_dir("server-config-authorized-client-escaped-grants");
+        let path = root.join("server.conf");
+        let repository = FileServerConfigRepository::new(&path);
+        let mut config = ServerConfig::local("test-token");
+        config.authorized_clients = vec![AuthorizedClient::with_allowed_application_ids(
+            "client:1",
+            "Test, Client",
+            [
+                "semi;colon",
+                "colon:id",
+                "comma,id",
+                "percent%id",
+                "slash\\id",
+                "line\nbreak",
+            ],
+        )];
+
+        repository.save(&config).expect("save server config");
+
+        let encoded = fs::read_to_string(&path).expect("read server config");
+        assert!(encoded.contains("semi%3Bcolon"));
+        assert!(encoded.contains("colon%3Aid"));
+        assert!(encoded.contains("comma%2Cid"));
+        assert!(encoded.contains("percent%25id"));
+        assert_eq!(repository.load().expect("load server config"), config);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn server_config_rejects_invalid_authorized_client() {
         let mut config = ServerConfig::local("test-token");
         config.authorized_clients = vec![AuthorizedClient::new(" ", "Test Client")];
@@ -3542,6 +3764,39 @@ mod tests {
         assert_eq!(
             config.validate(),
             Err(ConfigError::MissingAuthorizedClientId)
+        );
+    }
+
+    #[test]
+    fn server_config_rejects_blank_authorized_client_application_grant() {
+        let mut config = ServerConfig::local("test-token");
+        config.authorized_clients = vec![AuthorizedClient::with_allowed_application_ids(
+            "client-1",
+            "Test Client",
+            ["terminal", " "],
+        )];
+
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::MissingAuthorizedClientApplicationId)
+        );
+    }
+
+    #[test]
+    fn server_config_rejects_duplicate_authorized_client_ids() {
+        let mut config = ServerConfig::local("test-token");
+        config.authorized_clients = vec![
+            AuthorizedClient::new("client-1", "Test Client"),
+            AuthorizedClient::with_allowed_application_ids(
+                "client-1",
+                "Restricted Client",
+                ["terminal"],
+            ),
+        ];
+
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::DuplicateAuthorizedClientId)
         );
     }
 

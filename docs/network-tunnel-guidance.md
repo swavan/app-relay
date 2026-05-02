@@ -140,5 +140,7 @@ After the run:
   remain separate Phase 8 work. Dependency audit policy is documented in
   [dependency-audit-policy.md](dependency-audit-policy.md), with Rust advisory
   checks still a release-runner boundary.
-- Server-side per-client application grants remain incomplete. Runtime pairing
-  approval/revocation persistence is limited to file-backed server config mode.
+- Server-side per-client application grants are persisted in authorized-client
+  config entries and enforced during session creation when a paired client's
+  grant list is non-empty. Runtime pairing approval/revocation persistence is
+  limited to file-backed server config mode.
