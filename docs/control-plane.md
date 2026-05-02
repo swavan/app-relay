@@ -106,9 +106,13 @@ Server runtime config is persisted by the Rust service layer with
 - authorized paired client ids and labels
 
 The repository validates config before writing and reports corrupted files with
-a typed error. Runtime pairing approvals and revocations update the in-memory
-control-plane config; persisting those runtime changes back through the config
-repository is future work.
+a typed error. Runtime pairing approvals and revocations update the active
+control-plane config and are persisted back to `FileServerConfigRepository`
+when the control plane is constructed with a file-backed repository, including
+foreground revocation when the server is started with `--config`. Default
+test/local constructors without a repository remain in-memory only. File-backed
+saves write a synced temporary file before replacement; replacement is atomic on
+Unix and best-effort on Windows.
 
 ## Foreground Listener
 

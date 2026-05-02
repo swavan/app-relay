@@ -464,12 +464,14 @@ Completed:
   without treating caller-supplied client ids as authenticated device proof
 - completed paired-client revocation slice: local control-plane and shared-token
   foreground command paths can remove an authorized client from the active
-  authorization set, update in-memory server config, audit revocation
-  success/failure without tokens, and deny subsequent sensitive controls from
-  that client. The server tracks session ownership by paired client id, limits
-  session-scoped controls to the owner, and closes active sessions owned by a
-  revoked client through the normal close-session cleanup path, with foreground
-  session-close audit events for teardown.
+  authorization set, update server config, persist runtime pairing
+  approval/revocation changes when a file-backed server config repository is
+  configured, audit revocation success/failure without tokens, and deny
+  subsequent sensitive controls from that client. The server tracks session
+  ownership by paired client id, limits session-scoped controls to the owner,
+  and closes active sessions owned by a revoked client through the normal
+  close-session cleanup path, with foreground session-close audit events for
+  teardown.
 - completed local network and remote tunnel guidance slice in
   [`network-tunnel-guidance.md`](network-tunnel-guidance.md), covering default
   loopback binding, constrained local-LAN beta exceptions, SSH tunnel use,

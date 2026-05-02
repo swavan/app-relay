@@ -1,9 +1,10 @@
+use std::io::ErrorKind;
 use std::net::TcpListener;
 use std::path::PathBuf;
 
 use apprelay_core::{
-    EventSink, FileEventSink, FileServerConfigRepository, InMemoryEventSink, ServerConfig,
-    ServerConfigRepository,
+    ConfigStoreError, EventSink, FileEventSink, FileServerConfigRepository, InMemoryEventSink,
+    ServerConfig, ServerConfigRepository,
 };
 use apprelay_protocol::Platform;
 use apprelay_server::{
@@ -36,12 +37,8 @@ fn main() {
 }
 
 fn run_foreground(args: &[String]) {
-    let config_path = option_value(args, "--config").map(PathBuf::from);
     let log_path = option_value(args, "--log").map(PathBuf::from);
-    let config = load_config(config_path.as_ref());
-    let services = ServerServices::for_current_platform();
-    let control_plane = ServerControlPlane::new(services, config);
-    let server = ForegroundControlServer::new(control_plane);
+    let server = build_foreground_server(args).expect("failed to load server config");
     let bind_address = server.bind_address();
     let listener = TcpListener::bind(&bind_address).expect("failed to bind control listener");
 
@@ -58,27 +55,36 @@ fn run_foreground(args: &[String]) {
     }
 }
 
+fn build_foreground_server(args: &[String]) -> Result<ForegroundControlServer, ConfigStoreError> {
+    let config_path = option_value(args, "--config").map(PathBuf::from);
+    let services = ServerServices::for_current_platform();
+    let control_plane = match config_path {
+        Some(config_path) => {
+            let repository = FileServerConfigRepository::new(config_path);
+            let config = load_config(&repository)?;
+            ServerControlPlane::with_config_repository(services, config, repository)
+        }
+        None => ServerControlPlane::new(services, ServerConfig::local("local-dev-token")),
+    };
+
+    Ok(ForegroundControlServer::new(control_plane))
+}
+
 fn run_once(server: &ForegroundControlServer, listener: TcpListener, events: &mut impl EventSink) {
     server
         .run_once(listener, events)
         .expect("control listener failed");
 }
 
-fn load_config(config_path: Option<&PathBuf>) -> ServerConfig {
-    let Some(config_path) = config_path else {
-        return ServerConfig::local("local-dev-token");
-    };
-    let repository = FileServerConfigRepository::new(config_path);
-
+fn load_config(repository: &FileServerConfigRepository) -> Result<ServerConfig, ConfigStoreError> {
     match repository.load() {
-        Ok(config) => config,
-        Err(_) => {
+        Ok(config) => Ok(config),
+        Err(ConfigStoreError::Io(error)) if error.kind() == ErrorKind::NotFound => {
             let config = ServerConfig::local("local-dev-token");
-            repository
-                .save(&config)
-                .expect("failed to initialize server config");
-            config
+            repository.save(&config)?;
+            Ok(config)
         }
+        Err(error) => Err(error),
     }
 }
 
@@ -159,5 +165,69 @@ fn parse_platform(value: &str) -> Option<Platform> {
         "android" => Some(Platform::Android),
         "unknown" => Some(Platform::Unknown),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use apprelay_core::AuthorizedClient;
+
+    #[test]
+    fn foreground_config_mode_persists_pairing_revoke() {
+        let root = unique_test_dir("foreground-config-revoke");
+        let config_path = root.join("server.conf");
+        let repository = FileServerConfigRepository::new(&config_path);
+        let mut config = ServerConfig::local("correct-token");
+        config.authorized_clients = vec![AuthorizedClient::new("test-client", "Test Client")];
+        repository.save(&config).expect("save server config");
+        let args = vec![
+            "apprelay-server".to_string(),
+            "--config".to_string(),
+            config_path.display().to_string(),
+        ];
+        let server = build_foreground_server(&args).expect("build foreground server");
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request("pairing-revoke correct-token test-client", &mut events),
+            "OK pairing-revoke client_id=test-client label=Test%20Client"
+        );
+        assert!(repository
+            .load()
+            .expect("load persisted config")
+            .authorized_clients
+            .is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn load_config_rejects_corrupted_existing_config() {
+        let root = unique_test_dir("foreground-config-corrupt");
+        let config_path = root.join("server.conf");
+        std::fs::create_dir_all(&root).expect("create config dir");
+        std::fs::write(&config_path, "bad config").expect("write corrupt config");
+        let repository = FileServerConfigRepository::new(&config_path);
+
+        assert_eq!(
+            load_config(&repository),
+            Err(ConfigStoreError::CorruptedStore)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read corrupt config"),
+            "bad config"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after unix epoch")
+            .as_nanos();
+
+        std::env::temp_dir().join(format!("{name}-{}-{nanos}", std::process::id()))
     }
 }

@@ -2031,9 +2031,50 @@ impl ServerConfigRepository for FileServerConfigRepository {
             fs::create_dir_all(parent)?;
         }
 
-        fs::write(&self.path, encode_server_config(config))?;
+        let temporary_path = temporary_config_path(&self.path);
+        let mut file = fs::File::create(&temporary_path)?;
+        file.write_all(encode_server_config(config).as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        replace_config_file(&temporary_path, &self.path)?;
         Ok(())
     }
+}
+
+#[cfg(not(windows))]
+fn replace_config_file(temporary_path: &Path, target_path: &Path) -> std::io::Result<()> {
+    fs::rename(temporary_path, target_path).inspect_err(|_| {
+        let _ = fs::remove_file(temporary_path);
+    })
+}
+
+#[cfg(windows)]
+fn replace_config_file(temporary_path: &Path, target_path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(target_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            let _ = fs::remove_file(temporary_path);
+            return Err(error);
+        }
+    }
+
+    fs::rename(temporary_path, target_path).inspect_err(|_| {
+        let _ = fs::remove_file(temporary_path);
+    })
+}
+
+fn temporary_config_path(path: &Path) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("server.conf");
+
+    path.with_file_name(format!(".{file_name}.{}.{}.tmp", std::process::id(), nanos))
 }
 
 fn encode_server_config(config: &ServerConfig) -> String {
@@ -3307,6 +3348,30 @@ mod tests {
             Err(ConfigStoreError::InvalidConfig(
                 ConfigError::MissingAuthToken
             ))
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_server_config_repository_invalid_save_preserves_existing_config() {
+        let root = unique_test_dir("server-config-invalid-preserve");
+        let repository = FileServerConfigRepository::new(root.join("server.conf"));
+        let original = ServerConfig::local("test-token");
+        repository
+            .save(&original)
+            .expect("save original server config");
+        let invalid = ServerConfig::local(" ");
+
+        assert_eq!(
+            repository.save(&invalid),
+            Err(ConfigStoreError::InvalidConfig(
+                ConfigError::MissingAuthToken
+            ))
+        );
+        assert_eq!(
+            repository.load().expect("load preserved server config"),
+            original
         );
 
         let _ = fs::remove_dir_all(root);
@@ -5962,6 +6027,7 @@ event=session_created session_id=session%201 application_id=terminal client_id=c
             .permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).expect("mark executable script");
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 
     #[cfg(unix)]
