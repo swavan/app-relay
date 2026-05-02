@@ -557,7 +557,17 @@ impl ServerControlPlane {
         events: &mut impl EventSink,
     ) -> ControlResult<apprelay_core::AuthorizedClient> {
         let request_id = request.request_id.clone();
-        let client = self.locally_approve_pairing_inner(request)?;
+        let client = match self.locally_approve_pairing_inner(request) {
+            Ok(client) => client,
+            Err(ControlError::Service(error)) => {
+                events.record(ServerEvent::PairingApprovalFailed {
+                    request_id,
+                    reason: error.user_message(),
+                });
+                return Err(ControlError::Service(error));
+            }
+            Err(error) => return Err(error),
+        };
         events.record(ServerEvent::PairingApproved {
             request_id,
             client_id: client.id.clone(),
@@ -1254,19 +1264,28 @@ impl ForegroundControlServer {
                     return "ERROR bad-request".to_string();
                 }
 
-                self.control_plane
-                    .borrow_mut()
-                    .request_pairing(
-                        &auth,
-                        ControlClientIdentity {
-                            id: client_id.to_string(),
-                            label: label.replace("%20", " "),
-                        },
-                    )
-                    .map(|pending| {
+                let client_id = client_id.to_string();
+                let label = label.replace("%20", " ");
+                match self.control_plane.borrow_mut().request_pairing(
+                    &auth,
+                    ControlClientIdentity {
+                        id: client_id.clone(),
+                        label,
+                    },
+                ) {
+                    Ok(pending) => {
                         let event = pairing_requested_event(&pending);
-                        (format_pairing_request_response(pending), vec![event])
-                    })
+                        Ok((format_pairing_request_response(pending), vec![event]))
+                    }
+                    Err(ControlError::Service(error)) => {
+                        events.record(ServerEvent::PairingRequestFailed {
+                            client_id,
+                            reason: error.user_message(),
+                        });
+                        Err(ControlError::Service(error))
+                    }
+                    Err(error) => Err(error),
+                }
             }
             "pairing-revoke" => {
                 let Some(client_id) = args.next() else {
@@ -3295,6 +3314,36 @@ mod tests {
     }
 
     #[test]
+    fn control_plane_records_unknown_pairing_approval_failure() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        );
+        let mut events = InMemoryEventSink::default();
+
+        let error = control_plane
+            .locally_approve_pairing_with_audit(
+                ApprovePairingRequest {
+                    request_id: "unknown-pairing".to_string(),
+                },
+                &mut events,
+            )
+            .expect_err("reject unknown pairing request");
+
+        assert!(matches!(
+            error,
+            ControlError::Service(AppRelayError::NotFound(_))
+        ));
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::PairingApprovalFailed {
+                request_id: "unknown-pairing".to_string(),
+                reason: "pairing request unknown-pairing was not found".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     fn foreground_server_rejects_bad_pairing_request_args() {
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
@@ -3310,6 +3359,27 @@ mod tests {
     }
 
     #[test]
+    fn foreground_server_records_valid_token_invalid_pairing_request_failure() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request("pairing-request correct-token client-1 %20", &mut events),
+            "ERROR service client label is required"
+        );
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::PairingRequestFailed {
+                client_id: "client-1".to_string(),
+                reason: "client label is required".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     fn foreground_server_rejects_unauthorized_pairing_request() {
         let server = ForegroundControlServer::new(ServerControlPlane::new(
             ServerServices::new(Platform::Linux, "test"),
@@ -3319,6 +3389,26 @@ mod tests {
 
         assert_eq!(
             server.handle_request("pairing-request wrong-token client-1 Laptop", &mut events),
+            "ERROR unauthorized"
+        );
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::RequestRejected {
+                operation: "pairing-request".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn foreground_server_rejects_unauthorized_invalid_pairing_request_without_client_detail() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        assert_eq!(
+            server.handle_request("pairing-request wrong-token client-1 %20", &mut events),
             "ERROR unauthorized"
         );
         assert_eq!(

@@ -163,15 +163,18 @@ Out of scope for this document:
   release-runner boundary until final transport hardening and pairing UI work
   are complete.
 - Structured events now cover foreground connections, authorized and rejected
-  foreground requests, pairing request and approval success, session
+  foreground requests, pairing request success, valid-token foreground pairing
+  request failure, local/admin pairing approval success/failure, session
   create/resize/close lifecycle events, direct video and audio stream lifecycle
   successes, and direct input focus/blur successes without writing tokens,
   media contents, signaling payloads, raw input payloads, pointer coordinates,
-  or device ids. The Tauri client direct-control wrappers write those direct
-  lifecycle events to `client-events.log` under `APPRELAY_DATA_DIR`, or the OS
-  temp directory's `apprelay` folder when `APPRELAY_DATA_DIR` is unset.
-  Production retention, centralized collection, final audit review, and
-  detailed pairing failure coverage remain incomplete.
+  or device ids. Unauthorized bad-token pairing requests record only rejected
+  operation names, not caller-supplied client details. The Tauri client
+  direct-control wrappers write those direct lifecycle events to
+  `client-events.log` under `APPRELAY_DATA_DIR`, or the OS temp directory's
+  `apprelay` folder when `APPRELAY_DATA_DIR` is unset. Production retention,
+  centralized collection, final audit review, and final pairing
+  UI/device-verification review remain incomplete.
 - Release signing is not implemented. Signed release artifact policy is
   documented in
   [signed-release-artifact-policy.md](signed-release-artifact-policy.md), but

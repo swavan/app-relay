@@ -21,7 +21,10 @@ Current audit-relevant events cover:
 - rejected foreground requests, by operation name, for bad tokens and paired
   client authorization denials
 - pairing request success, with pairing request id and client id
-- local/admin pairing approval success, with pairing request id and client id
+- pairing request failure after valid foreground auth, with client id and
+  failure reason
+- local/admin pairing approval success and failure, with pairing request id and
+  client id or failure reason as applicable
 - client revocation success and failure, with target client id and failure
   reason
 - session created, resized, and closed, with session id, application id, client
@@ -47,14 +50,13 @@ Audit events must not include:
 Pairing, session, stream, input focus, audio lifecycle, and revocation events
 may include stable identifiers, operation names, application ids, paired client
 ids, pairing request ids, peer addresses, failure reasons, viewport dimensions,
-selected window ids, and audio mute booleans. File output percent-encodes unsafe
-event field bytes so spaces and control characters do not create additional
-fields.
+selected window ids, and audio mute booleans. Unauthorized bad-token pairing
+requests remain only `request_rejected` events by operation name and do not log
+caller-supplied client details. File output percent-encodes unsafe event field
+bytes so spaces and control characters do not create additional fields.
 
 ## Known Gaps
 
 This slice does not define production log retention, rotation, signing,
 centralized collection, SIEM mappings, or final security review approval.
-Pairing failure/rejection details beyond authorized and rejected foreground
-requests remain future work unless they are already represented indirectly as
-authorized, rejected, or revocation-specific foreground requests.
+Final pairing UI and device-verification audit review remain future work.

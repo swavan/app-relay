@@ -1326,9 +1326,17 @@ pub enum ServerEvent {
         request_id: String,
         client_id: String,
     },
+    PairingRequestFailed {
+        client_id: String,
+        reason: String,
+    },
     PairingApproved {
         request_id: String,
         client_id: String,
+    },
+    PairingApprovalFailed {
+        request_id: String,
+        reason: String,
     },
     ClientRevoked {
         client_id: String,
@@ -1511,6 +1519,13 @@ fn format_event(event: &ServerEvent) -> String {
                 event_field_value(client_id)
             )
         }
+        ServerEvent::PairingRequestFailed { client_id, reason } => {
+            format!(
+                "event=pairing_request_failed client_id={} reason={}",
+                event_field_value(client_id),
+                event_field_value(reason)
+            )
+        }
         ServerEvent::PairingApproved {
             request_id,
             client_id,
@@ -1519,6 +1534,13 @@ fn format_event(event: &ServerEvent) -> String {
                 "event=pairing_approved request_id={} client_id={}",
                 event_field_value(request_id),
                 event_field_value(client_id)
+            )
+        }
+        ServerEvent::PairingApprovalFailed { request_id, reason } => {
+            format!(
+                "event=pairing_approval_failed request_id={} reason={}",
+                event_field_value(request_id),
+                event_field_value(reason)
             )
         }
         ServerEvent::ClientRevoked { client_id } => {
@@ -3729,9 +3751,17 @@ mod tests {
             request_id: "pairing 1".to_string(),
             client_id: "client 1".to_string(),
         });
+        sink.record(ServerEvent::PairingRequestFailed {
+            client_id: "client 1".to_string(),
+            reason: "client label is required".to_string(),
+        });
         sink.record(ServerEvent::PairingApproved {
             request_id: "pairing 1".to_string(),
             client_id: "client 1".to_string(),
+        });
+        sink.record(ServerEvent::PairingApprovalFailed {
+            request_id: "pairing 2".to_string(),
+            reason: "pairing request pairing 2 was not found".to_string(),
         });
         sink.record(ServerEvent::SessionCreated {
             session_id: "session 1".to_string(),
@@ -3767,7 +3797,9 @@ mod tests {
 event=request_authorized operation=health\n\
 event=client_revoked client_id=client%201\n\
 event=pairing_requested request_id=pairing%201 client_id=client%201\n\
+event=pairing_request_failed client_id=client%201 reason=client%20label%20is%20required\n\
 event=pairing_approved request_id=pairing%201 client_id=client%201\n\
+event=pairing_approval_failed request_id=pairing%202 reason=pairing%20request%20pairing%202%20was%20not%20found\n\
 event=session_created session_id=session%201 application_id=terminal client_id=client-1 viewport_width=1280 viewport_height=720\n\
 event=video_stream_started stream_id=video%201 session_id=session%201 client_id=client-1 selected_window_id=window%201\n\
 event=audio_stream_updated stream_id=audio%201 session_id=session%201 client_id=client-1 selected_window_id=window%201 system_audio_muted=true microphone_muted=false\n\
