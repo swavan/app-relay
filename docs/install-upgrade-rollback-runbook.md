@@ -6,6 +6,9 @@ configuration, assets, and permission intent; it does not install OS services,
 run native bundle builders, sign artifacts, or exercise OS package managers.
 Phase 8 signed artifact evidence and blocking rules are documented in
 [`signed-release-artifact-policy.md`](signed-release-artifact-policy.md).
+Lifecycle install, upgrade, uninstall, and rollback evidence is recorded with
+[`lifecycle-evidence-manifest.template.json`](lifecycle-evidence-manifest.template.json)
+and checked with `npm run lifecycle-evidence:check`.
 
 This runbook defines what a release runner must verify when native packages are
 available, and what remains covered by deterministic checks before that point.
@@ -166,3 +169,11 @@ the artifact checksum and signature status required by
 native package that cannot satisfy that policy must not be offered for public
 beta distribution. It may be used only in the explicitly documented
 manual-runner channel allowed by that policy.
+
+The release runner should fill a lifecycle evidence manifest for the exact
+commit under test. The filled manifest must name the runner, test date,
+included platforms, artifact/package identifiers, CI or build record, explicit
+package-manager/manual-runner boundary, per-platform service or package
+lifecycle results, rollback result, and final lifecycle evidence decision. CI
+checks the template shape only; it must not be cited as native lifecycle
+execution evidence.
