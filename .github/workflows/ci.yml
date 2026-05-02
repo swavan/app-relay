@@ -8,10 +8,13 @@ on:
 jobs:
   rust:
     name: Rust
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, docker]
+    container: rust:1.86-bookworm
     steps:
+      - name: Capture workspace owner
+        run: echo "WORKSPACE_OWNER=$(stat -c '%u:%g' "$GITHUB_WORKSPACE")" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.86.0
         with:
           components: rustfmt, clippy
       - name: Format
@@ -20,17 +23,26 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+      - name: Restore workspace ownership
+        if: always()
+        run: |
+          if [ -n "$WORKSPACE_OWNER" ]; then
+            chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+          fi
 
   tauri-rust:
     name: Tauri Rust
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, docker]
+    container: rust:1.86-bookworm
     steps:
+      - name: Capture workspace owner
+        run: echo "WORKSPACE_OWNER=$(stat -c '%u:%g' "$GITHUB_WORKSPACE")" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.86.0
       - name: Install Tauri Linux dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          apt-get update
+          apt-get install -y \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libssl-dev \
@@ -41,14 +53,24 @@ jobs:
         run: cargo check --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked
       - name: Test
         run: cargo test --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked
+      - name: Restore workspace ownership
+        if: always()
+        run: |
+          if [ -n "$WORKSPACE_OWNER" ]; then
+            chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+          fi
 
   client:
     name: Client
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, docker]
+    container: node:22-bookworm
     defaults:
       run:
         working-directory: apps/client-tauri
     steps:
+      - name: Capture workspace owner
+        working-directory: .
+        run: echo "WORKSPACE_OWNER=$(stat -c '%u:%g' "$GITHUB_WORKSPACE")" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -65,3 +87,10 @@ jobs:
         run: npm run build
       - name: Check packaging config
         run: npm run package:check
+      - name: Restore workspace ownership
+        if: always()
+        working-directory: .
+        run: |
+          if [ -n "$WORKSPACE_OWNER" ]; then
+            chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+          fi
