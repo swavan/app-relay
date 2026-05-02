@@ -119,13 +119,17 @@ available.
 
 ## Current Deterministic Boundary
 
-CI currently checks formatting, Rust linting and tests, client tests and build,
-the Node beta dependency audit, and deterministic client package configuration.
-It does not produce signed release artifacts.
+CI currently checks formatting, Rust linting and tests for the root workspace,
+locked `cargo check` and `cargo test` for the Tauri Rust crate, client tests and
+build, the Node beta dependency audit, and deterministic client package
+configuration. It does not produce signed release artifacts.
 
 For the current beta boundary, release runners must use:
 
 - `cargo test --workspace` for server and shared Rust coverage
+- locked `cargo check` and `cargo test` for
+  `apps/client-tauri/src-tauri/Cargo.toml`, because the Tauri Rust crate is
+  excluded from the root workspace
 - `cd apps/client-tauri && npm run audit:beta`
 - `cd apps/client-tauri && npm run build`
 - `cd apps/client-tauri && npm run package:check`
