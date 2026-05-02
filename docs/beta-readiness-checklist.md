@@ -25,7 +25,7 @@ packages, automatic telemetry, production support, or implemented native media.
 | Pairing requires explicit user action | `release-runner/manual boundary` | [`control-plane.md`](control-plane.md) describes pending pairing requests and local/admin approval as the explicit user-action boundary. [`threat-model.md`](threat-model.md) records that final pairing UI, QR-code, nearby-device, and native device-verification flows are not implemented. | Blocked for public beta until the final pairing UI and device-verification path exist and are manually verified on included platforms. The foreground parser's caller-supplied client id exercises policy but is not authenticated device proof. |
 | Server denies unknown clients by default | `satisfied for source/local limited beta` | [`control-plane.md`](control-plane.md) states that sensitive session, stream, and input service methods require a paired client identity and deny unknown or missing ids. It also documents shared-token foreground client revocation for source/local limited beta use, including active session teardown for sessions owned by the revoked client and runtime authorized-client persistence when a file-backed server config repository is configured. [`network-tunnel-guidance.md`](network-tunnel-guidance.md) includes a release-runner check that session creation fails for an unknown paired-client id. [`threat-model.md`](threat-model.md) lists this as a current mitigation. | Server-side per-client application grants, stronger device verification, richer device labels, and least-privilege client capabilities remain future hardening. |
 | Audit logs capture connection and session events | `release-runner/manual boundary` | [`audit-logging.md`](audit-logging.md) covers foreground start/stop, TCP connection accept/close, authorized and rejected foreground requests, pairing request and approval success, session create/resize/close, direct video/audio stream lifecycle successes, direct input focus/blur successes, SSH tunnel lifecycle, and config load/save with token/media/input redaction. [`control-plane.md`](control-plane.md) summarizes the event contract. | The roadmap connection/session criterion has current source coverage, but the broader threat-model beta checklist still requires release-runner confirmation for detailed pairing failure coverage and authorization audit coverage. Production retention, rotation, signing, centralized collection, SIEM mappings, and final audit review remain incomplete. |
-| Dependency audit has no unresolved production-critical issues | `release-runner/manual boundary` | [`dependency-audit-policy.md`](dependency-audit-policy.md) defines high/critical production advisories as beta blockers. The current deterministic Node command is `cd apps/client-tauri && npm run audit:beta`; Rust advisory tooling is explicitly not configured in CI yet. | Public beta is blocked if release evidence cannot state there are no unresolved production `critical` or `high` findings. Rust advisory review remains a manual boundary until deterministic `cargo-audit`, `cargo-deny`, or equivalent tooling is adopted. |
+| Dependency audit has no unresolved production-critical issues | `release-runner/manual boundary` | [`dependency-audit-policy.md`](dependency-audit-policy.md) defines high/critical production advisories as beta blockers. The current deterministic Node command is `cd apps/client-tauri && npm run audit:beta`; CI also runs locked `cargo check` and `cargo test` for the Tauri Rust crate. Rust advisory tooling is explicitly not configured in CI yet. | Public beta is blocked if release evidence cannot state there are no unresolved production `critical` or `high` findings. Rust advisory review remains a manual boundary until deterministic `cargo-audit`, `cargo-deny`, or equivalent tooling is adopted. |
 | Beta release notes include known limitations | `release-runner/manual boundary` | [`beta-feedback-process.md`](beta-feedback-process.md) defines the release-notes known-limitations template, including supported and unsupported platforms, partial features, signing status, dependency audit status, install/rollback status, local network boundaries, native package gaps, security/privacy limitations, and feedback/crash channels. | Each beta candidate still needs a release-specific note. Known limitations cannot waive blockers from the threat model, dependency audit policy, signed artifact policy, or local network guidance. |
 
 ## Pre-Test Evidence Commands
@@ -51,13 +51,15 @@ npm run package:check
 
 ```sh
 cd apps/client-tauri/src-tauri
-cargo check
-cargo test
+cargo check --locked
+cargo test --locked
 ```
 
-The root Rust workspace excludes `apps/client-tauri/src-tauri`, so release
-runners must capture the Tauri Rust crate evidence separately until it is moved
-into the root workspace or covered by a native package build.
+The root Rust workspace excludes `apps/client-tauri/src-tauri`; CI covers the
+crate separately with locked `cargo check` and `cargo test` against that
+manifest. Release runners should capture the CI job URL or equivalent local
+output as evidence. Native package builds, platform signing, mobile launch, and
+package-manager execution remain release-runner/manual boundaries.
 
 Additional evidence references:
 
@@ -85,8 +87,8 @@ when all of these are true:
 - diagnostics and crash evidence are collected manually and redacted
 - release notes state that native media support remains partial or planned, and
   unsupported paths return typed errors
-- the dependency audit record includes the Node beta audit result and the Rust
-  advisory boundary
+- the dependency audit record includes the Node beta audit result, Tauri Rust
+  crate CI coverage, and the Rust advisory boundary
 - any distributed artifact has checksum/signature status recorded and is not
   presented as a signed native package unless signing evidence exists
 

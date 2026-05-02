@@ -76,6 +76,18 @@ from tooling that executes while producing beta artifacts.
 Lower-severity npm findings do not fail this CI step, but release runners still
 must triage and record them when they appear in local or release audit evidence.
 
+The root Rust workspace excludes the Tauri Rust crate at
+`apps/client-tauri/src-tauri`, so CI covers that crate with locked manifest
+commands:
+
+```sh
+cargo check --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked
+cargo test --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked
+```
+
+These commands verify the crate builds and tests against its checked-in
+`Cargo.lock`; they do not perform Rust advisory scanning.
+
 Rust dependency advisories are not checked by CI yet. The repository has Rust
 lockfiles for the workspace and the Tauri client, but it does not currently pin
 or configure `cargo-audit`, `cargo-deny`, or an advisory database cache. Release
@@ -95,14 +107,16 @@ For each beta candidate, capture evidence with the commit SHA and date:
 3. The package manager manifests used for the run:
    `apps/client-tauri/package.json` and
    `apps/client-tauri/package-lock.json`.
-4. Rust audit boundary evidence for `Cargo.lock` and
+4. CI run URL or local output showing locked `cargo check` and `cargo test`
+   passed for `apps/client-tauri/src-tauri/Cargo.toml`.
+5. Rust audit boundary evidence for `Cargo.lock` and
    `apps/client-tauri/src-tauri/Cargo.lock`:
    either output from an approved Rust advisory tool, or a release note stating
    that no deterministic Rust advisory gate is configured yet.
-5. Triage notes for every non-blocking advisory, including dependency class,
+6. Triage notes for every non-blocking advisory, including dependency class,
    severity, affected package, fixed version if available, and why it does not
    affect beta runtime or artifact generation.
-6. A statement that there are no unresolved production `critical` or `high`
+7. A statement that there are no unresolved production `critical` or `high`
    findings. If that statement cannot be made, the beta release is blocked.
 
 Evidence must not include auth tokens, signing material, private registry

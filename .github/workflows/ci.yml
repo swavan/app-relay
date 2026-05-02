@@ -21,6 +21,27 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  tauri-rust:
+    name: Tauri Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            pkg-config
+      - name: Check
+        run: cargo check --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked
+      - name: Test
+        run: cargo test --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked
+
   client:
     name: Client
     runs-on: ubuntu-latest
