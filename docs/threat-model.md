@@ -140,12 +140,12 @@ Out of scope for this document:
 - Authorization policy is still coarse. The server now models paired client
   identity separately from the shared token for sensitive session, stream, and
   input methods, and shared-token foreground revocation removes a paired client
-  from the active authorization set. Stronger device verification, a distinct
+  from the active authorization set. Sessions are tracked by paired-client owner
+  and session-scoped controls are limited to that owner; revocation closes
+  active sessions owned by the revoked client through the normal close-session
+  cleanup path. Stronger device verification, a distinct
   admin credential or local-only revocation channel, richer device naming, and
   least-privilege client capabilities remain future work.
-- Revocation blocks future sensitive commands for the revoked client id, but it
-  does not currently terminate already active sessions, streams, or input state.
-  Per-client resource ownership and teardown remain future hardening.
 - Server-side application authorization remains incomplete. The foreground
   `create-session` path now requires a client id that appears in the local
   policy, but the foreground parser's caller-supplied id is not authenticated
