@@ -200,6 +200,14 @@ Out of scope for this document:
 
 ## Beta Review Checklist
 
+Use the deterministic
+[beta security review manifest template](beta-security-review-manifest.template.json)
+for release-runner evidence. A filled manifest must identify the exact commit,
+review date, reviewer identity and role, included platforms, CI/run URL, each
+review decision and evidence source, and the dependency audit, artifact, and
+release-notes manifest path/results. The manifest records limited-beta
+security review evidence only; it does not claim public beta readiness.
+
 - Confirm the pairing flow requires explicit user action and denies unknown
   clients by default.
 - Confirm paired clients have stable identity, revocation, and clear user-facing

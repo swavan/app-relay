@@ -21,7 +21,7 @@ packages, automatic telemetry, production support, or implemented native media.
 
 | Phase 8 acceptance criterion | Current status | Evidence | Blockers and gaps |
 | --- | --- | --- | --- |
-| Threat model is documented and reviewed | `release-runner/manual boundary` | [`threat-model.md`](threat-model.md) documents assets, actors, trust boundaries, entry points, mitigations, gaps, and a beta review checklist. [`network-tunnel-guidance.md`](network-tunnel-guidance.md), [`dependency-audit-policy.md`](dependency-audit-policy.md), [`signed-release-artifact-policy.md`](signed-release-artifact-policy.md), and [`beta-feedback-process.md`](beta-feedback-process.md) cover the related Phase 8 policy boundaries. | A beta candidate still needs a release-runner review record that signs off the checklist for the exact commit and included platforms. This is not an external security audit, penetration test, or production approval. Final public beta review remains blocked by pairing UI/device verification, signed artifacts, production transport hardening, and production retention/support decisions. |
+| Threat model is documented and reviewed | `release-runner/manual boundary` | [`threat-model.md`](threat-model.md) documents assets, actors, trust boundaries, entry points, mitigations, gaps, and a beta review checklist. [`network-tunnel-guidance.md`](network-tunnel-guidance.md), [`dependency-audit-policy.md`](dependency-audit-policy.md), [`signed-release-artifact-policy.md`](signed-release-artifact-policy.md), and [`beta-feedback-process.md`](beta-feedback-process.md) cover the related Phase 8 policy boundaries. [`beta-security-review-manifest.template.json`](beta-security-review-manifest.template.json) provides the deterministic release-runner evidence record shape checked by `npm run beta-security-review:check`. | A beta candidate still needs a filled release-runner review record that signs off the checklist for the exact commit, review date, reviewer, included platforms, CI/run URL, and supporting manifest results. This is not an external security audit, penetration test, production approval, or public beta readiness claim. Final public beta review remains blocked by pairing UI/device verification, signed artifacts, production transport hardening, and production retention/support decisions unless those blockers are later reviewed as closed or scoped out. |
 | Pairing requires explicit user action | `release-runner/manual boundary` | [`control-plane.md`](control-plane.md) describes pending pairing requests and local/admin approval as the explicit user-action boundary. [`threat-model.md`](threat-model.md) records that final pairing UI, QR-code, nearby-device, and native device-verification flows are not implemented. | Blocked for public beta until the final pairing UI and device-verification path exist and are manually verified on included platforms. The foreground parser's caller-supplied client id exercises policy but is not authenticated device proof. |
 | Server denies unknown clients by default | `satisfied for source/local limited beta` | [`control-plane.md`](control-plane.md) states that sensitive session, stream, and input service methods require a paired client identity and deny unknown or missing ids. It also documents shared-token foreground client revocation for source/local limited beta use, including active session teardown for sessions owned by the revoked client, runtime authorized-client persistence when a file-backed server config repository is configured, and persisted server-side per-client application grants enforced during session creation. [`network-tunnel-guidance.md`](network-tunnel-guidance.md) includes a release-runner check that session creation fails for an unknown paired-client id. [`threat-model.md`](threat-model.md) lists this as a current mitigation. | Stronger device verification, richer device labels, grant-management UX, and least-privilege client capabilities remain future hardening. |
 | Audit logs capture connection and session events | `release-runner/manual boundary` | [`audit-logging.md`](audit-logging.md) covers foreground start/stop, TCP connection accept/close, authorized and rejected foreground requests, pairing request success/failure after valid auth, local/admin pairing approval success/failure, session create/resize/close, direct video/audio stream lifecycle successes, direct input focus/blur successes, SSH tunnel lifecycle, and config load/save with token/media/input redaction. [`control-plane.md`](control-plane.md) summarizes the event contract. | The roadmap connection/session criterion has current source coverage, but the broader threat-model beta checklist still requires release-runner confirmation for authorization audit coverage and final pairing UI/device-verification audit review. Production retention, rotation, signing, centralized collection, SIEM mappings, and final audit review remain incomplete. |
@@ -50,9 +50,11 @@ npm run dependency-audit-evidence:check
 npm run package:check
 npm run release-artifacts:check
 npm run release-notes:check
+npm run beta-security-review:check
 node scripts/check-dependency-audit-evidence-manifest.mjs ../../path/to/dependency-audit-evidence-manifest.json
 node scripts/check-release-artifact-manifest.mjs ../../path/to/release-artifact-manifest.json
 node scripts/check-beta-release-notes.mjs ../../path/to/release-notes.md
+node scripts/check-beta-security-review-manifest.mjs ../../path/to/beta-security-review-manifest.json
 ```
 
 ```sh
@@ -78,6 +80,13 @@ Additional evidence references:
 - [`dependency-audit-evidence-manifest.template.json`](dependency-audit-evidence-manifest.template.json)
   provides the deterministic dependency audit evidence shape checked by
   `npm run dependency-audit-evidence:check`.
+- [`beta-security-review-manifest.template.json`](beta-security-review-manifest.template.json)
+  provides the deterministic security review evidence shape for the
+  release-runner/manual boundary. The filled manifest records the exact commit,
+  review date, reviewer identity/role, included platforms, CI/run URL, boundary
+  decisions, dependency/artifact/release-notes manifest path/results, and a
+  final public-beta readiness claim status that remains `not-claimed` unless
+  all public-beta blockers are explicitly reviewed as closed or scoped out.
 - [`install-upgrade-rollback-runbook.md`](install-upgrade-rollback-runbook.md)
   defines the manual service/package install, upgrade, uninstall, and rollback
   evidence boundary.

@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "audit:beta": "npm audit --audit-level=high",
+    "beta-security-review:check": "node scripts/check-beta-security-review-manifest.mjs --template ../../docs/beta-security-review-manifest.template.json",
+    "beta-security-review:test": "vitest run scripts/check-beta-security-review-manifest.test.mjs",
     "dependency-audit-evidence:check": "node scripts/check-dependency-audit-evidence-manifest.mjs --template ../../docs/dependency-audit-evidence-manifest.template.json",
     "dependency-audit-evidence:test": "vitest run scripts/check-dependency-audit-evidence-manifest.test.mjs",
     "package:check": "node scripts/check-tauri-package.mjs",
