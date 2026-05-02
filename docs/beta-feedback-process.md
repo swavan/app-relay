@@ -168,10 +168,15 @@ Checklist:
   media, or native package execution are supported unless release evidence
   proves that exact path.
 - `Unsupported platforms`: name platforms that are not included or remain
-  explicit unsupported-feature paths.
+  explicit unsupported-feature paths. Filled release notes must explicitly say
+  Windows desktop-server workflows are excluded or unsupported until a separate
+  Windows application discovery and launch implementation and evidence gate
+  exists.
 - `Unsupported or partial features`: call out planned-native media/input/audio
   gaps, missing final pairing UI, missing production transport hardening, and
-  any feature that returns typed unsupported errors.
+  any feature that returns typed unsupported errors. Repeat that Windows
+  desktop-server workflows are excluded or unsupported here or under unsupported
+  platforms.
 - `Artifact signing and distribution status`: state whether each artifact is
   signed, unsigned manual-runner, source-built, or blocked. Unsigned manual
   artifacts must follow

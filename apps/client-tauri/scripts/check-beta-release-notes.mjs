@@ -24,6 +24,19 @@ const answerRequirements = {
 };
 
 const nonAnswers = /^(?:n\/a|na|none|tbd|todo|unknown|pending|later|wip|placeholder)$/i;
+const windowsTextFragments = (text) => text.split(/[.;\n]/);
+const windowsDesktopServerContext = (text) =>
+  windowsTextFragments(text).some(
+    (fragment) =>
+      /\bwindows\b/i.test(fragment) &&
+      /\b(?:desktop[- ]server|server workflow|desktop workflow|desktop[- ]server workflow|application discovery|discovery\/launch|application launch|discovery and launch|launch support)\b/i.test(
+        fragment,
+      ),
+  );
+const windowsUnsupportedLanguage =
+  /\b(?:is|are|remains?|remain|must be|will be|currently|explicitly)?\s*(?:excluded?|unsupported|not supported|not included|out of scope|blocked|unavailable)\b/i;
+const negatedWindowsUnsupportedLanguage =
+  /\b(?:not|never|no longer)\s+(?:excluded?|unsupported|blocked|unavailable|out of scope)\b|\bnot\s+not\s+(?:supported|included)\b/i;
 
 const args = process.argv.slice(2);
 const templateMode = args.includes("--template");
@@ -62,6 +75,8 @@ const knownLimitationsLines = lines.slice(
   nextSectionIndex === -1 ? lines.length : nextSectionIndex,
 );
 
+const answersByItem = new Map();
+
 let previousItemIndex = -1;
 for (const item of requiredItems) {
   const lineIndex = knownLimitationsLines.findIndex((entry) =>
@@ -91,6 +106,7 @@ for (const item of requiredItems) {
   ]
     .filter(Boolean)
     .join(" ");
+  answersByItem.set(item, answer);
   if (!answer) {
     fail(`Known Limitations item '${item}' must have an answer`);
   }
@@ -111,6 +127,25 @@ for (const item of requiredItems) {
         );
       }
     }
+  }
+}
+
+if (!templateMode) {
+  const windowsUnsupportedAnswer = [
+    answersByItem.get("Unsupported platforms for this beta") ?? "",
+    answersByItem.get("Unsupported or partial features") ?? "",
+  ].join(" ");
+  const hasWindowsExclusion = windowsTextFragments(windowsUnsupportedAnswer).some(
+    (fragment) =>
+      windowsDesktopServerContext(fragment) &&
+      windowsUnsupportedLanguage.test(fragment) &&
+      !negatedWindowsUnsupportedLanguage.test(fragment),
+  );
+
+  if (!hasWindowsExclusion) {
+    fail(
+      "filled release notes must explicitly exclude or mark unsupported Windows desktop-server workflows",
+    );
   }
 }
 
