@@ -480,9 +480,9 @@ Completed:
 - completed initial audit logging contract slice in
   [`audit-logging.md`](audit-logging.md), covering structured foreground
   connection accept/close events, authorized and rejected foreground requests,
-  session create/resize/close lifecycle events, and the current redaction
-  boundary without claiming production retention, SIEM integration, or final
-  audit review
+  pairing request and approval success, session create/resize/close lifecycle
+  events, and the current redaction boundary without claiming production
+  retention, SIEM integration, or final audit review
 - completed dependency audit policy slice in
   [`dependency-audit-policy.md`](dependency-audit-policy.md), distinguishing
   production and development dependencies, defining beta-blocking severity

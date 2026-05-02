@@ -163,10 +163,11 @@ Out of scope for this document:
   release-runner boundary until final transport hardening and pairing UI work
   are complete.
 - Structured events now cover foreground connections, authorized and rejected
-  foreground requests, and session create/resize/close lifecycle events without
-  writing tokens, media contents, or raw input payloads. Production retention,
-  centralized collection, final audit review, and pairing/stream/input/audio
-  lifecycle coverage remain incomplete.
+  foreground requests, pairing request and approval success, and session
+  create/resize/close lifecycle events without writing tokens, media contents,
+  or raw input payloads. Production retention, centralized collection, final
+  audit review, and pairing failure plus stream/input/audio lifecycle coverage
+  remain incomplete.
 - Release signing is not implemented. Signed release artifact policy is
   documented in
   [signed-release-artifact-policy.md](signed-release-artifact-policy.md), but
@@ -197,8 +198,9 @@ Out of scope for this document:
 - Confirm audit logs cover successful and rejected connections, pairing events,
   session creation/close, stream start/stop, input enable/disable, and
   authorization failures without writing tokens, media contents, or raw input
-  payloads. The current implementation only covers the foreground connection
-  and request contract plus session create/resize/close events.
+  payloads. The current implementation covers the foreground connection and
+  request contract, pairing request/approval success, and session
+  create/resize/close events.
 - Confirm diagnostics remain telemetry-free and redact secrets.
 - Confirm application launch paths do not invoke shells for untrusted metadata.
 - Confirm unsupported feature paths return typed errors with user-facing

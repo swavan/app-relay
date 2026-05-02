@@ -204,8 +204,9 @@ Tests assert these generated artifacts without crashing installed services.
 
 The server emits structured events for control-plane start and stop, foreground
 TCP connection accept and close, authorized requests, rejected requests,
-client revocation success/failure, session creation, session resize, session
-close, SSH tunnel lifecycle, and config persistence operations. Tests can use
+pairing request success, local/admin pairing approval success, client
+revocation success/failure, session creation, session resize, session close,
+SSH tunnel lifecycle, and config persistence operations. Tests can use
 `InMemoryEventSink`; foreground and service runners can use `FileEventSink` to
 append line-oriented structured events to a log file.
 

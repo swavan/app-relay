@@ -17,6 +17,8 @@ Current audit-relevant events cover:
 - authorized foreground requests, by operation name
 - rejected foreground requests, by operation name, for bad tokens and paired
   client authorization denials
+- pairing request success, with pairing request id and client id
+- local/admin pairing approval success, with pairing request id and client id
 - client revocation success and failure, with target client id and failure
   reason
 - session created, resized, and closed, with session id, application id, client
@@ -33,15 +35,17 @@ Audit events must not include:
 - media contents, encoded frames, audio samples, or signaling payload bodies
 - raw keyboard text, pointer coordinates, or other input payload contents
 
-Session lifecycle and revocation events may include stable identifiers,
-operation names, application ids, paired client ids, peer addresses, failure
-reasons, and viewport dimensions. File output percent-encodes unsafe event
-field bytes so spaces and control characters do not create additional fields.
+Pairing, session lifecycle, and revocation events may include stable
+identifiers, operation names, application ids, paired client ids, pairing
+request ids, peer addresses, failure reasons, and viewport dimensions. File
+output percent-encodes unsafe event field bytes so spaces and control
+characters do not create additional fields.
 
 ## Known Gaps
 
 This slice does not define production log retention, rotation, signing,
 centralized collection, SIEM mappings, or final security review approval.
-Pairing, stream, input, and audio lifecycle audit events remain future work
-unless they are already represented indirectly as authorized, rejected, or
+Pairing failure/rejection details beyond authorized and rejected foreground
+requests, plus stream, input, and audio lifecycle audit events, remain future
+work unless they are already represented indirectly as authorized, rejected, or
 revocation-specific foreground requests.
