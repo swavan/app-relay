@@ -73,6 +73,24 @@ The release must be blocked if the release runner cannot reproduce the checksum
 for an artifact, cannot identify the commit used to build it, or sees signature
 verification fail.
 
+Start release artifact evidence from
+[`release-artifact-manifest.template.json`](release-artifact-manifest.template.json).
+CI validates that template with `npm run release-artifacts:check`. A release
+runner can validate a filled manifest by running:
+
+```sh
+cd apps/client-tauri
+node scripts/check-release-artifact-manifest.mjs ../../path/to/release-artifact-manifest.json
+```
+
+The checker verifies required metadata, lowercase SHA-256 format, checksum
+evidence, signature status, release-runner decision consistency, signing tool
+and verification evidence for signed artifacts, and unsigned/manual evidence
+for unsigned artifacts. In template mode it also requires required fields to
+remain `<required: ...>` placeholders so CI cannot pass a filled release
+manifest as the template. It does not sign artifacts, produce checksums, or
+verify platform signatures.
+
 ## Key And Material Boundaries
 
 Signing keys, certificates, API tokens, notarization credentials, private
@@ -138,11 +156,25 @@ For the current beta boundary, release runners must use:
   Rust lockfiles
 - `cd apps/client-tauri && npm run build`
 - `cd apps/client-tauri && npm run package:check`
+- `cd apps/client-tauri && npm run release-artifacts:check`
+- a filled JSON manifest based on
+  [`release-artifact-manifest.template.json`](release-artifact-manifest.template.json),
+  checked with
+  `node scripts/check-release-artifact-manifest.mjs <path-to-manifest.json>`
 - generated server service and uninstall plans described in
   [`install-upgrade-rollback-runbook.md`](install-upgrade-rollback-runbook.md)
 
 These checks support release review but do not replace signing or native package
 verification.
+
+The release artifact manifest checker verifies required release and artifact
+fields, 40-character lowercase commit SHA format, YYYY-MM-DD build date format,
+64-character lowercase SHA-256 format, checksum evidence, signature status, and
+release-runner decision. It rejects contradictory status/decision pairs,
+requires signing tool and verification output evidence for signed artifacts, and
+requires unsigned/manual evidence for unsigned manual-runner and source-local
+artifacts. It records checksum and release-runner evidence only; it does not
+implement signing or claim public beta readiness.
 
 ## Known Limitations
 

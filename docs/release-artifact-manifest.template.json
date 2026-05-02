@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "policyStatement": "Checksum manifests record byte identity and release evidence only; this template does not implement signing and does not claim public beta readiness.",
+  "release": {
+    "commitSha": "<required: reviewed 40-character lowercase git commit sha>",
+    "buildDate": "<required: YYYY-MM-DD build date>",
+    "ciRunUrl": "<required: CI run URL or release-runner build record>"
+  },
+  "artifacts": [
+    {
+      "name": "<required: artifact file name>",
+      "version": "<required: artifact version>",
+      "platform": "<required: target platform>",
+      "architecture": "<required: target architecture>",
+      "class": "<required: binary, archive, package, mobile-package, service-script, checksum-manifest, signature-metadata, release-notes, or rollback>",
+      "sha256": "<required: lowercase 64-character SHA-256 hex>",
+      "checksumEvidence": "<required: sha256sum, shasum -a 256, Get-FileHash, certutil -hashfile, openssl dgst -sha256, CI artifact output, or build record evidence for the exact file>",
+      "signatureStatus": "<required: signed, unsigned-manual-runner, unsigned-source-local, or blocked>",
+      "signer": "<required: signer identity/key id, or unsigned reason>",
+      "signingTool": "<required: signing tool/status for signed artifacts, or unsigned/source-local status evidence>",
+      "signatureVerificationEvidence": "<required: verification command output/status for signed artifacts, or unsigned/source-local evidence>",
+      "manualChannelReason": "<required when unsigned-manual-runner; otherwise state not applicable>",
+      "releaseNotesLimitation": "<required: user-facing signing/distribution limitation text>",
+      "releaseRunnerDecision": "<required: signed, unsigned-but-manually-retained, or blocked>"
+    }
+  ]
+}

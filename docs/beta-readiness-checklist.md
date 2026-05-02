@@ -47,7 +47,9 @@ npm test
 npm run build
 npm run audit:beta
 npm run package:check
+npm run release-artifacts:check
 npm run release-notes:check
+node scripts/check-release-artifact-manifest.mjs ../../path/to/release-artifact-manifest.json
 node scripts/check-beta-release-notes.mjs ../../path/to/release-notes.md
 ```
 
@@ -66,7 +68,11 @@ package-manager execution remain release-runner/manual boundaries.
 Additional evidence references:
 
 - [`signed-release-artifact-policy.md`](signed-release-artifact-policy.md)
-  requires checksum/signature status for any artifact offered to testers.
+  requires checksum/signature status for any artifact offered to testers and
+  defines the checked release artifact manifest template.
+- [`release-artifact-manifest.template.json`](release-artifact-manifest.template.json)
+  provides the deterministic checksum manifest shape checked by
+  `npm run release-artifacts:check`.
 - [`install-upgrade-rollback-runbook.md`](install-upgrade-rollback-runbook.md)
   defines the manual service/package install, upgrade, uninstall, and rollback
   evidence boundary.
@@ -92,7 +98,8 @@ when all of these are true:
 - the dependency audit record includes the Node beta audit result, Rust
   advisory CI result for both lockfiles, and Tauri Rust crate CI coverage
 - any distributed artifact has checksum/signature status recorded and is not
-  presented as a signed native package unless signing evidence exists
+  presented as a signed native package unless signing tool/status and
+  verification command output evidence exists
 
 ## Public Beta Blockers
 
