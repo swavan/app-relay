@@ -73,6 +73,11 @@ The release must be blocked if the release runner cannot reproduce the checksum
 for an artifact, cannot identify the commit used to build it, or sees signature
 verification fail.
 
+The checked manifest requires `release.buildDate` to be a real calendar date
+and `release.ciRunUrl` to name a CI URL, CI artifact, command output, or
+release-runner build record. Free-form assertions without a run or build record
+are not sufficient release evidence.
+
 Start release artifact evidence from
 [`release-artifact-manifest.template.json`](release-artifact-manifest.template.json).
 CI validates that template with `npm run release-artifacts:check`. A release

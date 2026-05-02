@@ -3,6 +3,37 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const requiredRunnerLabels = ["self-hosted", "linux", "docker"];
+const requiredRunCommandsByJob = {
+  "ci-policy": ["node apps/client-tauri/scripts/check-ci-workflow.mjs"],
+  rust: [
+    "cargo fmt --all --check",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "cargo test --workspace --locked",
+  ],
+  "tauri-rust": [
+    "cargo check --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked",
+    "cargo test --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked",
+  ],
+  "rust-advisories": [
+    'cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked',
+    "cargo metadata --locked --format-version 1 > /dev/null",
+    "cargo audit --file Cargo.lock",
+    "cargo metadata --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked --format-version 1 > /dev/null",
+    "cargo audit --file apps/client-tauri/src-tauri/Cargo.lock",
+  ],
+  client: [
+    "npm ci",
+    "npm run audit:beta",
+    "npm test",
+    "npm run build",
+    "npm run package:check",
+    "npm run release-artifacts:check",
+    "npm run dependency-audit-evidence:check",
+    "npm run lifecycle-evidence:check",
+    "npm run release-notes:check",
+    "npm run beta-security-review:check",
+  ],
+};
 
 const fail = (message) => {
   throw new Error(message);
@@ -62,6 +93,14 @@ const parseInlineMappingImage = (value) => {
 };
 
 const lineIndent = (line) => line.match(/^ */)?.[0].length ?? 0;
+
+const cleanRunCommand = (value) =>
+  value
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .trim();
+
+const isBlockScalar = (value) => /^[|>][+-]?$/.test(value.trim());
 
 const collectJobs = (rawWorkflow) => {
   const lines = rawWorkflow.split(/\r?\n/);
@@ -202,6 +241,42 @@ const containerImage = (job) => {
   return "";
 };
 
+const parseRunCommands = (job) => {
+  const commands = [];
+
+  for (let index = 0; index < job.lines.length; index += 1) {
+    const line = job.lines[index];
+    const match =
+      line.match(/^ {8,}run:\s*(.*)$/) ?? line.match(/^ {6,}-\s+run:\s*(.*)$/);
+
+    if (!match) {
+      continue;
+    }
+
+    const value = cleanRunCommand(match[1]);
+    if (!isBlockScalar(value)) {
+      if (value) {
+        commands.push(value);
+      }
+      continue;
+    }
+
+    const runIndent = lineIndent(line);
+    for (const nextLine of job.lines.slice(index + 1)) {
+      if (lineIndent(nextLine) <= runIndent && nextLine.trim() !== "") {
+        break;
+      }
+
+      const command = cleanRunCommand(nextLine);
+      if (command) {
+        commands.push(command);
+      }
+    }
+  }
+
+  return commands;
+};
+
 export const validateCiWorkflow = (rawWorkflow) => {
   const jobs = collectJobs(rawWorkflow);
   if (!jobs.some((job) => job.name === "ci-policy")) {
@@ -234,6 +309,20 @@ export const validateCiWorkflow = (rawWorkflow) => {
 
     if (job.name !== "ci-policy" && !parseNeeds(job).includes("ci-policy")) {
       fail(`job ${job.name} must depend on ci-policy`);
+    }
+  }
+
+  for (const [jobName, requiredCommands] of Object.entries(requiredRunCommandsByJob)) {
+    const job = jobs.find((candidate) => candidate.name === jobName);
+    if (!job) {
+      fail(`ci.yml jobs block must define a ${jobName} job`);
+    }
+
+    const runCommands = parseRunCommands(job);
+    for (const requiredCommand of requiredCommands) {
+      if (!runCommands.includes(requiredCommand)) {
+        fail(`job ${jobName} is missing required run command: ${requiredCommand}`);
+      }
     }
   }
 };

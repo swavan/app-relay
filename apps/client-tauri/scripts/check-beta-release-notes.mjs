@@ -15,10 +15,39 @@ const requiredItems = [
 ];
 
 const answerRequirements = {
-  "Dependency audit status": [/node/i, /rust advisories/i],
+  "Artifact signing and distribution status": [
+    /signed|unsigned|source-built|source built|blocked/i,
+    /checksum|signature|manual-runner|manual runner|source-built|source built/i,
+  ],
+  "Dependency audit status": [
+    /node/i,
+    /rust advisories/i,
+    /locked/i,
+    /cargo check/i,
+    /cargo test/i,
+    /apps\/client-tauri\/src-tauri\/Cargo\.toml|tauri rust/i,
+  ],
+  "Install, upgrade, uninstall, and rollback status": [
+    /install/i,
+    /upgrade/i,
+    /uninstall/i,
+    /rollback/i,
+    /manual|release-runner|package-manager|package manager|generated plan/i,
+  ],
   "Local network and tunnel boundary": [
     /loopback|127\.0\.0\.1|trusted-lan|trusted LAN|ssh/i,
     /(?:broad|internet|exposure).*(?:prohibit|not allowed|must not|forbid|block|disallow)|(?:prohibit|not allowed|must not|forbid|block|disallow).*(?:broad|internet|exposure)/i,
+  ],
+  "Native package gaps": [
+    /linux/i,
+    /macos|macOS|developer id|notarization/i,
+    /windows|authenticode/i,
+    /mobile|android|ios|iOS/i,
+  ],
+  "Security and privacy limitations": [
+    /manual|telemetry-free|telemetry free|no telemetry/i,
+    /token|secret/i,
+    /no secrets|must not include secrets|redact/i,
   ],
   "Feedback and crash reporting channel": [/feedback|channel/i, /crash/i],
 };

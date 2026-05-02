@@ -81,6 +81,26 @@ describe("release artifact manifest checker", () => {
     );
   });
 
+  it("rejects impossible release build dates", () => {
+    const manifest = baseManifest();
+    manifest.release.buildDate = "2026-02-30";
+
+    expectFail(
+      runChecker(writeManifest(manifest)),
+      /release\.buildDate must be a real calendar date/,
+    );
+  });
+
+  it("rejects weak release run evidence", () => {
+    const manifest = baseManifest();
+    manifest.release.ciRunUrl = "release owner said it was built";
+
+    expectFail(
+      runChecker(writeManifest(manifest)),
+      /release\.ciRunUrl must include a CI URL, CI artifact, command output, or release-runner build record/,
+    );
+  });
+
   it("accepts signed artifacts with signing and verification evidence", () => {
     expectPass(
       runChecker(

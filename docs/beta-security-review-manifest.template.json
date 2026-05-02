@@ -58,6 +58,12 @@
       "result": "<required: passed, failed, blocked, or not-run>",
       "evidence": "<required: release artifact manifest checker output, CI/run URL, command output, or build record>"
     },
+    "lifecycleEvidenceManifest": {
+      "decision": "<required: reviewed, blocked, or not-applicable>",
+      "manifestPath": "<required: path to filled lifecycle evidence manifest>",
+      "result": "<required: passed, failed, blocked, or not-run>",
+      "evidence": "<required: lifecycle evidence manifest checker output, CI/run URL, command output, or build record>"
+    },
     "betaReleaseNotes": {
       "decision": "<required: reviewed, blocked, or not-applicable>",
       "manifestPath": "<required: path to filled beta release notes>",
@@ -109,6 +115,6 @@
   ],
   "finalPublicBetaReadinessClaim": {
     "status": "not-claimed",
-    "rationale": "<required: state that public beta readiness is not claimed, or cite closed/scoped-out blocker evidence>"
+    "rationale": "<required: state that public beta readiness is not claimed for this limited-beta line>"
   }
 }

@@ -15,6 +15,7 @@
     "dependency-audit-evidence:test": "vitest run scripts/check-dependency-audit-evidence-manifest.test.mjs",
     "lifecycle-evidence:check": "node scripts/check-lifecycle-evidence-manifest.mjs --template ../../docs/lifecycle-evidence-manifest.template.json",
     "lifecycle-evidence:test": "vitest run scripts/check-lifecycle-evidence-manifest.test.mjs",
+    "mobile-contract:test": "vitest run src/mobileConnection.test.ts",
     "package:check": "node scripts/check-tauri-package.mjs",
     "release-artifacts:check": "node scripts/check-release-artifact-manifest.mjs --template ../../docs/release-artifact-manifest.template.json",
     "release-artifacts:test": "vitest run scripts/check-release-artifact-manifest.test.mjs",

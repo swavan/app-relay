@@ -70,7 +70,7 @@ const runEvidencePattern =
   /\b(?:https?:\/\/|github\.com\/.+\/actions\/runs\/|CI run|CI step|command output|build record|release-runner audit record)\b/i;
 
 const toolEvidencePattern =
-  /\b(?:npm(?:\s+|\/)?\d|npm version|cargo-audit(?:\s+|\/)?\d|cargo audit|CI run|CI step|command output|tool version)\b/i;
+  /\b(?:npm(?:\s+|\/)?\d|npm version|cargo-audit(?:\s+|\/)?\d|cargo audit|cargo(?:\s+|\/)?\d|cargo version|CI run|CI step|command output|tool version)\b/i;
 
 const noHighCriticalAdvisorySummaryPattern =
   /\b(?:no|zero|without)\b.*\b(?:unresolved\s+)?(?:high\/critical|high or critical|high|critical)\b.*\b(?:advisories|findings)\b|\b(?:reported|found|detected|returned)\b.*\b(?:no|zero)\b.*\b(?:unresolved\s+)?(?:high\/critical|high or critical|high|critical)\b/i;
@@ -82,6 +82,9 @@ const advisorySeverityPattern = /\b(?:critical|high|moderate|medium|low)\b/i;
 
 const advisoryPackageTriagePattern =
   /\b(?:package|dependency|crate|affects|affected|patched|fixed|version|production|non-production|development-only|runtime|artifact|blocked|triage|remediat(?:e|ion)|ignored?)\b/i;
+
+const lockedCheckTestSummaryPattern =
+  /\blocked\b.*\bcargo check\b.*\bcargo test\b.*\b(?:passed|failed|blocked|not-run|not run)\b|\bcargo check\b.*\bcargo test\b.*\blocked\b.*\b(?:passed|failed|blocked|not-run|not run)\b/i;
 
 const statesNoAdvisories = (value) => {
   if (noHighCriticalAdvisorySummaryPattern.test(value)) {
@@ -183,6 +186,15 @@ const auditSpecs = [
     lockfile: "apps/client-tauri/src-tauri/Cargo.lock",
     command: "cargo audit --file apps/client-tauri/src-tauri/Cargo.lock",
   },
+  {
+    key: "tauriRustLockedChecks",
+    manifestPath: "apps/client-tauri/src-tauri/Cargo.toml",
+    checkCommand:
+      "cargo check --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked",
+    testCommand:
+      "cargo test --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked",
+    summaryField: "checkTestSummary",
+  },
 ];
 
 let hasNonPassingAuditResult = false;
@@ -201,14 +213,21 @@ for (const spec of auditSpecs) {
   if (spec.lockfile) {
     expectLiteral(audit.lockfile, `${prefix}.lockfile`, spec.lockfile);
   }
-  expectLiteral(audit.command, `${prefix}.command`, spec.command);
+  if (spec.manifestPath) {
+    expectLiteral(audit.manifestPath, `${prefix}.manifestPath`, spec.manifestPath);
+  }
+  if (spec.command) {
+    expectLiteral(audit.command, `${prefix}.command`, spec.command);
+  }
+  if (spec.checkCommand) {
+    expectLiteral(audit.checkCommand, `${prefix}.checkCommand`, spec.checkCommand);
+  }
+  if (spec.testCommand) {
+    expectLiteral(audit.testCommand, `${prefix}.testCommand`, spec.testCommand);
+  }
 
-  for (const field of [
-    "result",
-    "toolEvidence",
-    "runEvidence",
-    "advisorySummary",
-  ]) {
+  const summaryField = spec.summaryField ?? "advisorySummary";
+  for (const field of ["result", "toolEvidence", "runEvidence", summaryField]) {
     expectRequiredField(audit[field], `${prefix}.${field}`);
   }
 
@@ -231,7 +250,16 @@ for (const spec of auditSpecs) {
     runEvidencePattern,
     "must include a CI/run URL, command output, or build record evidence",
   );
-  expectAdvisorySummary(audit.advisorySummary, `${prefix}.advisorySummary`);
+  if (summaryField === "advisorySummary") {
+    expectAdvisorySummary(audit.advisorySummary, `${prefix}.advisorySummary`);
+  } else if (
+    !isTemplatePlaceholder(audit[summaryField]) &&
+    !lockedCheckTestSummaryPattern.test(audit[summaryField])
+  ) {
+    fail(
+      `${prefix}.${summaryField} must summarize locked cargo check and cargo test evidence`,
+    );
+  }
 }
 
 const productionDecision =

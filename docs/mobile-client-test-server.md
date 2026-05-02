@@ -26,10 +26,17 @@ CI can run the deterministic frontend contract with:
 
 ```sh
 cd apps/client-tauri
+npm run mobile-contract:test
 npm test
 npm run build
 npm run package:check
 ```
+
+`npm run mobile-contract:test` is a focused alias for the shared Android/iOS
+client contract in `src/mobileConnection.test.ts`. It proves token/profile
+plumbing and the in-process control-plane calls only. It does not prove native
+device launch, emulator/simulator execution, mobile transport, package signing,
+store distribution, or TestFlight readiness.
 
 Native Android and iOS verification remains a release-runner/manual boundary for
 this slice. A release runner should:

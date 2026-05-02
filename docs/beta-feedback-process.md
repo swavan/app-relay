@@ -181,8 +181,10 @@ Checklist:
   signed, unsigned manual-runner, source-built, or blocked. Unsigned manual
   artifacts must follow
   [`signed-release-artifact-policy.md`](signed-release-artifact-policy.md).
-- `Dependency audit status`: include the Node beta audit result and Rust
-  Advisories CI result for both Rust lockfiles. Do not release with unresolved
+- `Dependency audit status`: include the Node beta audit result, Rust
+  Advisories CI result for both Rust lockfiles, and locked Tauri Rust
+  `cargo check`/`cargo test` evidence for
+  `apps/client-tauri/src-tauri/Cargo.toml`. Do not release with unresolved
   production `critical` or `high` findings.
 - `Install, upgrade, uninstall, and rollback status`: say whether native
   package managers were exercised or whether the beta relies on deterministic

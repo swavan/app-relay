@@ -15,7 +15,7 @@ telemetry.
 - Unsupported platforms for this beta: <required: list excluded or explicitly unsupported platforms; explicitly state that Windows desktop-server workflows are excluded or unsupported until a separate Windows application discovery/launch implementation and evidence gate exists>
 - Unsupported or partial features: <required: include pairing UI/device verification, native media/input gaps, Windows desktop-server discovery/launch exclusion if unsupported, and typed unsupported paths>
 - Artifact signing and distribution status: <required: state signed, unsigned manual-runner, source-built, or blocked for each artifact>
-- Dependency audit status: <required: include Node beta audit and Rust Advisories evidence, or state blocked>
+- Dependency audit status: <required: include Node beta audit, Rust Advisories evidence for both Rust lockfiles, and locked Tauri Rust cargo check/cargo test evidence for apps/client-tauri/src-tauri/Cargo.toml, or state blocked>
 - Install, upgrade, uninstall, and rollback status: <required: state package-manager evidence or manual generated-plan boundary>
 - Local network and tunnel boundary: <required: state loopback/trusted-LAN/SSH boundary and broad exposure prohibition>
 - Native package gaps: <required: list signing, notarization, repository metadata, mobile distribution, or package gaps>

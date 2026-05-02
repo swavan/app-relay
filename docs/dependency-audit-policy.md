@@ -85,6 +85,8 @@ cargo metadata --locked --format-version 1
 cargo audit --file Cargo.lock
 cargo metadata --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked --format-version 1
 cargo audit --file apps/client-tauri/src-tauri/Cargo.lock
+cargo check --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked
+cargo test --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked
 ```
 
 This audits the checked-in Rust lockfiles for the root workspace and the Tauri
@@ -100,7 +102,8 @@ of bypassing the CI failure.
 
 The root Rust workspace excludes the Tauri Rust crate at
 `apps/client-tauri/src-tauri`, so CI covers that crate with locked manifest
-commands:
+commands, and the dependency audit evidence manifest must capture their result
+for `apps/client-tauri/src-tauri/Cargo.toml`:
 
 ```sh
 cargo check --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked
@@ -152,10 +155,11 @@ For each beta candidate, capture evidence with the exact commit SHA and date:
    findings. If that statement cannot be made, the beta release is blocked.
 
 The manifest checker enforces required release fields, expected audit commands
-and lockfile paths, audit result enums, tool/version or run evidence, and the
-unresolved production high/critical advisory decision. It does not run advisory
-tools, remediate dependencies, sign release artifacts, or replace the beta
-readiness checklist.
+and lockfile paths, Tauri Rust locked check/test evidence for
+`apps/client-tauri/src-tauri/Cargo.toml`, audit result enums, tool/version or run
+evidence, and the unresolved production high/critical advisory decision. It does
+not run advisory tools, remediate dependencies, sign release artifacts, or
+replace the beta readiness checklist.
 
 Evidence must not include auth tokens, signing material, private registry
 credentials, or unpublished security exploit details beyond advisory ids and

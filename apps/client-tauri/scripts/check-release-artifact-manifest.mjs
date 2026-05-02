@@ -44,6 +44,20 @@ const expectPattern = (value, path, pattern, message) => {
   }
 };
 
+const isRealDate = (value) => {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+};
+
 if (!existsSync(manifestPath)) {
   fail(`release artifact manifest is missing: ${manifestPath}`);
 }
@@ -86,6 +100,21 @@ expectPattern(
   "release.buildDate",
   /^\d{4}-\d{2}-\d{2}$/,
   "must use YYYY-MM-DD",
+);
+if (
+  !isTemplatePlaceholder(manifest.release?.buildDate) &&
+  !isRealDate(manifest.release?.buildDate)
+) {
+  fail("release.buildDate must be a real calendar date");
+}
+
+const releaseEvidence =
+  /\b(?:https?:\/\/|github\.com\/.+\/actions\/runs\/|CI run|CI artifact|build record|release-runner(?:\s+|-)build record|release-runner(?:\s+|-)record|command output)\b/i;
+expectPattern(
+  manifest.release?.ciRunUrl,
+  "release.ciRunUrl",
+  releaseEvidence,
+  "must include a CI URL, CI artifact, command output, or release-runner build record",
 );
 
 if (!Array.isArray(manifest.artifacts) || manifest.artifacts.length === 0) {

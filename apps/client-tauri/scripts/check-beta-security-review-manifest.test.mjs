@@ -78,6 +78,9 @@ const baseManifest = (overrides = {}) => ({
       "docs/dependency-audit-evidence-manifest.json",
     ),
     artifactManifest: manifestDecision("docs/release-artifact-manifest.json"),
+    lifecycleEvidenceManifest: manifestDecision(
+      "docs/lifecycle-evidence-manifest.json",
+    ),
     betaReleaseNotes: manifestDecision("docs/beta-release-notes.md"),
   },
   publicBetaBlockers: blockerNames.map((name) => ({
@@ -130,8 +133,8 @@ describe("beta security review manifest checker", () => {
     expectPass(runChecker(writeManifest(baseManifest())));
   });
 
-  it("accepts a public-beta claim only when every blocker is closed or scoped out", () => {
-    expectPass(
+  it("rejects public-beta claims even when every blocker is closed or scoped out", () => {
+    expectFail(
       runChecker(
         writeManifest(
           baseManifest({
@@ -143,6 +146,23 @@ describe("beta security review manifest checker", () => {
           }),
         ),
       ),
+      /finalPublicBetaReadinessClaim\.status must remain not-claimed/,
+    );
+  });
+
+  it("rejects scoped-out public-beta readiness claims", () => {
+    expectFail(
+      runChecker(
+        writeManifest(
+          baseManifest({
+            finalPublicBetaReadinessClaim: {
+              status: "scoped-out",
+              rationale: "Public beta readiness is scoped out.",
+            },
+          }),
+        ),
+      ),
+      /finalPublicBetaReadinessClaim\.status must remain not-claimed/,
     );
   });
 
@@ -271,12 +291,12 @@ describe("beta security review manifest checker", () => {
           }),
         ),
       ),
-      /finalPublicBetaReadinessClaim\.status must be not-claimed when any review decision is blocked or any supporting manifest result is failed, blocked, or not-run/,
+      /finalPublicBetaReadinessClaim\.status must remain not-claimed/,
     );
   });
 
   it.each(["failed", "blocked", "not-run"])(
-    "rejects public-beta readiness claims when a supporting manifest result is %s",
+    "rejects public-beta readiness claims when lifecycle supporting manifest result is %s",
     (result) => {
       expectFail(
         runChecker(
@@ -285,8 +305,8 @@ describe("beta security review manifest checker", () => {
               publicBetaBlockers: closedOrScopedOutBlockers(),
               reviewDecisions: {
                 ...baseManifest().reviewDecisions,
-                dependencyAuditEvidenceManifest: manifestDecision(
-                  "docs/dependency-audit-evidence-manifest.json",
+                lifecycleEvidenceManifest: manifestDecision(
+                  "docs/lifecycle-evidence-manifest.json",
                   {
                     decision: "blocked",
                     result,
@@ -300,7 +320,7 @@ describe("beta security review manifest checker", () => {
             }),
           ),
         ),
-        /finalPublicBetaReadinessClaim\.status must be not-claimed when any review decision is blocked or any supporting manifest result is failed, blocked, or not-run/,
+        /finalPublicBetaReadinessClaim\.status must remain not-claimed/,
       );
     },
   );
@@ -323,6 +343,12 @@ describe("beta security review manifest checker", () => {
       "betaReleaseNotes",
       "docs/dependency-audit-evidence-manifest.json",
       /reviewDecisions\.betaReleaseNotes\.manifestPath must be a \.md path named for beta-release-notes or release-notes/,
+    ],
+    [
+      "lifecycle evidence manifest",
+      "lifecycleEvidenceManifest",
+      "docs/release-artifact-manifest.json",
+      /reviewDecisions\.lifecycleEvidenceManifest\.manifestPath must be a \.json path named for lifecycle-evidence/,
     ],
   ])("rejects swapped or wrong %s paths", (_label, key, manifestPath, message) => {
     expectFail(
@@ -352,7 +378,7 @@ describe("beta security review manifest checker", () => {
           }),
         ),
       ),
-      /finalPublicBetaReadinessClaim\.status must be not-claimed unless every public beta blocker is closed or scoped-out/,
+      /finalPublicBetaReadinessClaim\.status must remain not-claimed/,
     );
   });
 

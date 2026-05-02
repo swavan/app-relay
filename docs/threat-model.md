@@ -188,8 +188,10 @@ Out of scope for this document:
 - Dependency audit policy is documented in
   [dependency-audit-policy.md](dependency-audit-policy.md). Current CI runs the
   Node beta dependency audit and pinned `cargo-audit` checks for both Rust
-  lockfiles; final release evidence must still record the CI run date, commit
-  SHA, advisory tool output, and triage notes.
+  lockfiles, plus locked `cargo check` and `cargo test` for
+  `apps/client-tauri/src-tauri/Cargo.toml`; final release evidence must still
+  record the CI run date, commit SHA, advisory tool output, locked check/test
+  output, and triage notes.
 - Real native media and input backends remain partial or planned on several
   platforms; unsupported states must continue to be visible and typed.
 - The threat model assumes local OS accounts protect config, profile, log, and
@@ -204,9 +206,10 @@ Use the deterministic
 [beta security review manifest template](beta-security-review-manifest.template.json)
 for release-runner evidence. A filled manifest must identify the exact commit,
 review date, reviewer identity and role, included platforms, CI/run URL, each
-review decision and evidence source, and the dependency audit, artifact, and
-release-notes manifest path/results. The manifest records limited-beta
-security review evidence only; it does not claim public beta readiness.
+review decision and evidence source, and the dependency audit, artifact,
+lifecycle evidence, and release-notes manifest path/results. The manifest
+records limited-beta security review evidence only; its final public beta
+readiness claim status must remain `not-claimed`.
 
 - Confirm the pairing flow requires explicit user action and denies unknown
   clients by default.

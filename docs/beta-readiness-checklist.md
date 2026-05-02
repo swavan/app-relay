@@ -21,11 +21,11 @@ packages, automatic telemetry, production support, or implemented native media.
 
 | Phase 8 acceptance criterion | Current status | Evidence | Blockers and gaps |
 | --- | --- | --- | --- |
-| Threat model is documented and reviewed | `release-runner/manual boundary` | [`threat-model.md`](threat-model.md) documents assets, actors, trust boundaries, entry points, mitigations, gaps, and a beta review checklist. [`network-tunnel-guidance.md`](network-tunnel-guidance.md), [`dependency-audit-policy.md`](dependency-audit-policy.md), [`signed-release-artifact-policy.md`](signed-release-artifact-policy.md), and [`beta-feedback-process.md`](beta-feedback-process.md) cover the related Phase 8 policy boundaries. [`beta-security-review-manifest.template.json`](beta-security-review-manifest.template.json) provides the deterministic release-runner evidence record shape checked by `npm run beta-security-review:check`. | A beta candidate still needs a filled release-runner review record that signs off the checklist for the exact commit, review date, reviewer, included platforms, CI/run URL, and supporting manifest results. This is not an external security audit, penetration test, production approval, or public beta readiness claim. Final public beta review remains blocked by pairing UI/device verification, signed artifacts, production transport hardening, and production retention/support decisions unless those blockers are later reviewed as closed or scoped out. |
+| Threat model is documented and reviewed | `release-runner/manual boundary` | [`threat-model.md`](threat-model.md) documents assets, actors, trust boundaries, entry points, mitigations, gaps, and a beta review checklist. [`network-tunnel-guidance.md`](network-tunnel-guidance.md), [`dependency-audit-policy.md`](dependency-audit-policy.md), [`signed-release-artifact-policy.md`](signed-release-artifact-policy.md), and [`beta-feedback-process.md`](beta-feedback-process.md) cover the related Phase 8 policy boundaries. [`beta-security-review-manifest.template.json`](beta-security-review-manifest.template.json) provides the deterministic release-runner evidence record shape checked by `npm run beta-security-review:check`. | A beta candidate still needs a filled release-runner review record that signs off the checklist for the exact commit, review date, reviewer, included platforms, CI/run URL, and supporting dependency, artifact, lifecycle, and release-notes manifest results. This is not an external security audit, penetration test, production approval, or public beta readiness claim. For this limited-beta line, the final public beta readiness claim must remain `not-claimed`; public beta review remains blocked by pairing UI/device verification, signed artifacts, production transport hardening, and production retention/support decisions. |
 | Pairing requires explicit user action | `release-runner/manual boundary` | [`control-plane.md`](control-plane.md) describes pending pairing requests and local/admin approval as the explicit user-action boundary. [`threat-model.md`](threat-model.md) records that final pairing UI, QR-code, nearby-device, and native device-verification flows are not implemented. | Blocked for public beta until the final pairing UI and device-verification path exist and are manually verified on included platforms. The foreground parser's caller-supplied client id exercises policy but is not authenticated device proof. |
 | Server denies unknown clients by default | `satisfied for source/local limited beta` | [`control-plane.md`](control-plane.md) states that sensitive session, stream, and input service methods require a paired client identity and deny unknown or missing ids. It also documents shared-token foreground client revocation for source/local limited beta use, including active session teardown for sessions owned by the revoked client, runtime authorized-client persistence when a file-backed server config repository is configured, and persisted server-side per-client application grants enforced during session creation. [`network-tunnel-guidance.md`](network-tunnel-guidance.md) includes a release-runner check that session creation fails for an unknown paired-client id. [`threat-model.md`](threat-model.md) lists this as a current mitigation. | Stronger device verification, richer device labels, grant-management UX, and least-privilege client capabilities remain future hardening. |
 | Audit logs capture connection and session events | `release-runner/manual boundary` | [`audit-logging.md`](audit-logging.md) covers foreground start/stop, TCP connection accept/close, authorized and rejected foreground requests, pairing request success/failure after valid auth, local/admin pairing approval success/failure, session create/resize/close, direct video/audio stream lifecycle successes, direct input focus/blur successes, SSH tunnel lifecycle, and config load/save with token/media/input redaction. [`control-plane.md`](control-plane.md) summarizes the event contract. | The roadmap connection/session criterion has current source coverage, but the broader threat-model beta checklist still requires release-runner confirmation for authorization audit coverage and final pairing UI/device-verification audit review. Production retention, rotation, signing, centralized collection, SIEM mappings, and final audit review remain incomplete. |
-| Dependency audit has no unresolved production-critical issues | `release-runner/manual boundary` | [`dependency-audit-policy.md`](dependency-audit-policy.md) defines high/critical production advisories as beta blockers. The current Node CI command is `cd apps/client-tauri && npm run audit:beta`; CI runs pinned `cargo-audit` against `Cargo.lock` and `apps/client-tauri/src-tauri/Cargo.lock`; CI also runs locked `cargo check` and `cargo test` for the Tauri Rust crate. | Public beta is blocked if release evidence cannot state there are no unresolved production `critical` or `high` findings. Rust and npm advisory checks rely on advisory data available at run time, so release evidence still needs the CI run date, commit SHA, tool output, and any triage notes. |
+| Dependency audit has no unresolved production-critical issues | `release-runner/manual boundary` | [`dependency-audit-policy.md`](dependency-audit-policy.md) defines high/critical production advisories as beta blockers. The current Node CI command is `cd apps/client-tauri && npm run audit:beta`; CI runs pinned `cargo-audit` against `Cargo.lock` and `apps/client-tauri/src-tauri/Cargo.lock`; CI also runs locked `cargo check` and `cargo test` for `apps/client-tauri/src-tauri/Cargo.toml`, and the dependency audit evidence manifest records that check/test result. | Public beta is blocked if release evidence cannot state there are no unresolved production `critical` or `high` findings. Rust and npm advisory checks rely on advisory data available at run time, so release evidence still needs the CI run date, commit SHA, tool output, locked Tauri Rust check/test output, and any triage notes. |
 | Beta release notes include known limitations | `release-runner/manual boundary` | [`beta-feedback-process.md`](beta-feedback-process.md) defines the release-notes known-limitations gate. [`beta-release-notes-template.md`](beta-release-notes-template.md) provides the checked template, and CI runs `npm run release-notes:check` to keep required known-limitations fields present. | Each beta candidate still needs a filled release-specific note. Known limitations must explicitly exclude or mark unsupported Windows desktop-server workflows until a separate Windows application discovery/launch implementation and evidence gate exists. Known limitations cannot waive blockers from the threat model, dependency audit policy, signed artifact policy, or local network guidance. |
 | Install, upgrade, uninstall, and rollback evidence is recorded for included packages | `release-runner/manual boundary` | [`install-upgrade-rollback-runbook.md`](install-upgrade-rollback-runbook.md) defines the manual native lifecycle boundary. [`lifecycle-evidence-manifest.template.json`](lifecycle-evidence-manifest.template.json) provides the checked release-runner evidence shape for exact commit, test date, runner, included platforms, package identifiers, server lifecycle evidence, client package lifecycle evidence, rollback, and final lifecycle decision. | Native package managers and service managers still run outside CI. Any failed, blocked, or not-run lifecycle result must block the lifecycle evidence decision for that beta candidate. This does not claim public beta readiness. |
 
@@ -44,6 +44,7 @@ cargo test --workspace --locked
 ```sh
 cd apps/client-tauri
 npm ci
+npm run mobile-contract:test
 npm test
 npm run build
 npm run audit:beta
@@ -71,6 +72,9 @@ crate separately with locked `cargo check` and `cargo test` against that
 manifest. Release runners should capture the CI job URL or equivalent local
 output as evidence. Native package builds, platform signing, mobile launch, and
 package-manager execution remain release-runner/manual boundaries.
+`npm run mobile-contract:test` covers the shared Android/iOS client service
+contract only; it is not native device, simulator, package signing, store, or
+TestFlight evidence.
 
 Additional evidence references:
 
@@ -95,9 +99,9 @@ Additional evidence references:
   provides the deterministic security review evidence shape for the
   release-runner/manual boundary. The filled manifest records the exact commit,
   review date, reviewer identity/role, included platforms, CI/run URL, boundary
-  decisions, dependency/artifact/release-notes manifest path/results, and a
-  final public-beta readiness claim status that remains `not-claimed` unless
-  all public-beta blockers are explicitly reviewed as closed or scoped out.
+  decisions, dependency/artifact/lifecycle/release-notes manifest path/results,
+  and a final public-beta readiness claim status that must remain
+  `not-claimed` for this limited-beta line.
 - [`install-upgrade-rollback-runbook.md`](install-upgrade-rollback-runbook.md)
   defines the manual service/package install, upgrade, uninstall, and rollback
   evidence boundary.
@@ -105,6 +109,9 @@ Additional evidence references:
   deterministic client package configuration check.
 - [`network-tunnel-guidance.md`](network-tunnel-guidance.md) lists manual bind,
   tunnel, bad-token, and unknown-client checks.
+- [`mobile-client-test-server.md`](mobile-client-test-server.md) defines the
+  deterministic Android/iOS shared-client contract and the native mobile
+  release-runner boundary.
 
 ## Current Limited-Beta Boundary
 
@@ -123,7 +130,9 @@ when all of these are true:
 - filled release notes explicitly exclude or mark unsupported Windows
   desktop-server workflows
 - the dependency audit record includes the Node beta audit result, Rust
-  advisory CI result for both lockfiles, and Tauri Rust crate CI coverage
+  advisory CI result for both lockfiles, and locked Tauri Rust crate
+  `cargo check`/`cargo test` coverage for
+  `apps/client-tauri/src-tauri/Cargo.toml`
 - any distributed artifact has checksum/signature status recorded and is not
   presented as a signed native package unless signing tool/status and
   verification command output evidence exists
