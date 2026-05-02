@@ -22,7 +22,7 @@ jobs:
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
       - name: Restore workspace ownership
         if: always()
         run: |
@@ -53,6 +53,34 @@ jobs:
         run: cargo check --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked
       - name: Test
         run: cargo test --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked
+      - name: Restore workspace ownership
+        if: always()
+        run: |
+          if [ -n "$WORKSPACE_OWNER" ]; then
+            chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+          fi
+
+  rust-advisories:
+    name: Rust Advisories
+    runs-on: [self-hosted, linux, docker]
+    container: rust:1.86-bookworm
+    env:
+      CARGO_AUDIT_VERSION: "0.21.2"
+    steps:
+      - name: Capture workspace owner
+        run: echo "WORKSPACE_OWNER=$(stat -c '%u:%g' "$GITHUB_WORKSPACE")" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.86.0
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+      - name: Verify workspace lockfile
+        run: cargo metadata --locked --format-version 1 > /dev/null
+      - name: Audit workspace lockfile
+        run: cargo audit --file Cargo.lock
+      - name: Verify Tauri lockfile
+        run: cargo metadata --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked --format-version 1 > /dev/null
+      - name: Audit Tauri lockfile
+        run: cargo audit --file apps/client-tauri/src-tauri/Cargo.lock
       - name: Restore workspace ownership
         if: always()
         run: |

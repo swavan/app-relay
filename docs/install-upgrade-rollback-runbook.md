@@ -15,7 +15,7 @@ available, and what remains covered by deterministic checks before that point.
 Run the server checks from the repository root:
 
 ```sh
-cargo test --workspace
+cargo test --workspace --locked
 ```
 
 For every server platform included in the release, capture the generated
