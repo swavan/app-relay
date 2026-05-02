@@ -204,11 +204,12 @@ Tests assert these generated artifacts without crashing installed services.
 
 The server emits structured events for control-plane start and stop, foreground
 TCP connection accept and close, authorized requests, rejected requests,
-pairing request success, local/admin pairing approval success, client
-revocation success/failure, session creation, session resize, session close,
-direct video stream start/stop/reconnect success, direct audio stream
-start/stop/update success, direct input focus enable/disable success, SSH tunnel
-lifecycle, and config persistence operations. Tests can use `InMemoryEventSink`;
+pairing request success and post-auth foreground failure, local/admin pairing
+approval success/failure, client revocation success/failure, session creation,
+session resize, session close, direct video stream start/stop/reconnect success,
+direct audio stream start/stop/update success, direct input focus enable/disable
+success, SSH tunnel lifecycle, and config persistence operations. Tests can use
+`InMemoryEventSink`;
 foreground and service runners can use `FileEventSink` to append line-oriented
 structured events to a log file. The Tauri client command wrappers use the same
 file sink for direct stream and input lifecycle events in `client-events.log`
