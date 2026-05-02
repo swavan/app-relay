@@ -27,6 +27,7 @@ packages, automatic telemetry, production support, or implemented native media.
 | Audit logs capture connection and session events | `release-runner/manual boundary` | [`audit-logging.md`](audit-logging.md) covers foreground start/stop, TCP connection accept/close, authorized and rejected foreground requests, pairing request success/failure after valid auth, local/admin pairing approval success/failure, session create/resize/close, direct video/audio stream lifecycle successes, direct input focus/blur successes, SSH tunnel lifecycle, and config load/save with token/media/input redaction. [`control-plane.md`](control-plane.md) summarizes the event contract. | The roadmap connection/session criterion has current source coverage, but the broader threat-model beta checklist still requires release-runner confirmation for authorization audit coverage and final pairing UI/device-verification audit review. Production retention, rotation, signing, centralized collection, SIEM mappings, and final audit review remain incomplete. |
 | Dependency audit has no unresolved production-critical issues | `release-runner/manual boundary` | [`dependency-audit-policy.md`](dependency-audit-policy.md) defines high/critical production advisories as beta blockers. The current Node CI command is `cd apps/client-tauri && npm run audit:beta`; CI runs pinned `cargo-audit` against `Cargo.lock` and `apps/client-tauri/src-tauri/Cargo.lock`; CI also runs locked `cargo check` and `cargo test` for the Tauri Rust crate. | Public beta is blocked if release evidence cannot state there are no unresolved production `critical` or `high` findings. Rust and npm advisory checks rely on advisory data available at run time, so release evidence still needs the CI run date, commit SHA, tool output, and any triage notes. |
 | Beta release notes include known limitations | `release-runner/manual boundary` | [`beta-feedback-process.md`](beta-feedback-process.md) defines the release-notes known-limitations gate. [`beta-release-notes-template.md`](beta-release-notes-template.md) provides the checked template, and CI runs `npm run release-notes:check` to keep required known-limitations fields present. | Each beta candidate still needs a filled release-specific note. Known limitations cannot waive blockers from the threat model, dependency audit policy, signed artifact policy, or local network guidance. |
+| Install, upgrade, uninstall, and rollback evidence is recorded for included packages | `release-runner/manual boundary` | [`install-upgrade-rollback-runbook.md`](install-upgrade-rollback-runbook.md) defines the manual native lifecycle boundary. [`lifecycle-evidence-manifest.template.json`](lifecycle-evidence-manifest.template.json) provides the checked release-runner evidence shape for exact commit, test date, runner, included platforms, package identifiers, server lifecycle evidence, client package lifecycle evidence, rollback, and final lifecycle decision. | Native package managers and service managers still run outside CI. Any failed, blocked, or not-run lifecycle result must block the lifecycle evidence decision for that beta candidate. This does not claim public beta readiness. |
 
 ## Pre-Test Evidence Commands
 
@@ -47,11 +48,13 @@ npm test
 npm run build
 npm run audit:beta
 npm run dependency-audit-evidence:check
+npm run lifecycle-evidence:check
 npm run package:check
 npm run release-artifacts:check
 npm run release-notes:check
 npm run beta-security-review:check
 node scripts/check-dependency-audit-evidence-manifest.mjs ../../path/to/dependency-audit-evidence-manifest.json
+node scripts/check-lifecycle-evidence-manifest.mjs ../../path/to/lifecycle-evidence-manifest.json
 node scripts/check-release-artifact-manifest.mjs ../../path/to/release-artifact-manifest.json
 node scripts/check-beta-release-notes.mjs ../../path/to/release-notes.md
 node scripts/check-beta-security-review-manifest.mjs ../../path/to/beta-security-review-manifest.json
@@ -80,6 +83,14 @@ Additional evidence references:
 - [`dependency-audit-evidence-manifest.template.json`](dependency-audit-evidence-manifest.template.json)
   provides the deterministic dependency audit evidence shape checked by
   `npm run dependency-audit-evidence:check`.
+- [`lifecycle-evidence-manifest.template.json`](lifecycle-evidence-manifest.template.json)
+  provides the deterministic lifecycle evidence shape checked by
+  `npm run lifecycle-evidence:check`. The filled manifest records the exact
+  commit, test date, runner, included platforms, artifact/package identifiers,
+  CI or build record, explicit package-manager/manual-runner boundary, server
+  service lifecycle evidence, client package lifecycle evidence, rollback
+  result, and final lifecycle decision without claiming native lifecycle
+  execution in CI.
 - [`beta-security-review-manifest.template.json`](beta-security-review-manifest.template.json)
   provides the deterministic security review evidence shape for the
   release-runner/manual boundary. The filled manifest records the exact commit,
@@ -114,6 +125,9 @@ when all of these are true:
 - any distributed artifact has checksum/signature status recorded and is not
   presented as a signed native package unless signing tool/status and
   verification command output evidence exists
+- install, upgrade, uninstall, and rollback lifecycle results are recorded for
+  each included native server or client package platform, with the final
+  lifecycle evidence decision blocked for any failed, blocked, or not-run result
 
 ## Public Beta Blockers
 

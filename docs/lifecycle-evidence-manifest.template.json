@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "policyStatement": "Lifecycle evidence manifests record release-runner evidence only; this template does not claim public beta readiness and does not claim native lifecycle execution in CI.",
+  "release": {
+    "commitSha": "<required: tested 40-character lowercase git commit sha>",
+    "testDate": "<required: YYYY-MM-DD lifecycle test date>",
+    "ciRunUrl": "<required: CI run URL, release-runner run URL, command output, or build record>",
+    "includedPlatforms": [
+      {
+        "platform": "<required: linux, macos, windows, android, or ios>",
+        "role": "<required: desktop-server or client-package>"
+      }
+    ]
+  },
+  "runner": {
+    "identity": "<required: lifecycle runner name or handle>",
+    "role": "<required: release-runner, reviewer, or maintainer>"
+  },
+  "packageManagerManualRunnerBoundary": {
+    "decision": "<required: acknowledged or blocked>",
+    "evidence": "<required: command output, build record, release-runner record, or URL showing native install/upgrade/uninstall/rollback stayed manual>"
+  },
+  "serverLifecycleEvidence": [
+    {
+      "platform": "<required: linux, macos, or windows>",
+      "role": "<required: desktop-server>",
+      "artifactOrPackageIdentifier": "<required: exact server binary/package identifier, file name, version, or package id>",
+      "servicePlanEvidence": "<required: service-plan command output, build record, release-runner record, or URL>",
+      "installArtifactEvidence": "<required: install-service artifact path plus command output, build record, release-runner record, or URL>",
+      "uninstallArtifactEvidence": "<required: uninstall-service artifact path plus command output, build record, release-runner record, or URL>",
+      "installResult": "<required: passed, failed, blocked, or not-run>",
+      "upgradeResult": "<required: passed, failed, blocked, or not-run>",
+      "uninstallResult": "<required: passed, failed, blocked, or not-run>",
+      "startResult": "<required: passed, failed, blocked, or not-run>",
+      "startEvidence": "<required: release-runner service start command output, build record, release-runner record, or URL>",
+      "stopResult": "<required: passed, failed, blocked, or not-run>",
+      "stopEvidence": "<required: release-runner service stop command output, build record, release-runner record, or URL>",
+      "healthResult": "<required: passed, failed, blocked, or not-run>",
+      "healthEvidence": "<required: release-runner health/status command output, build record, release-runner record, or URL>",
+      "rollbackResult": "<required: passed, failed, blocked, or not-run>",
+      "rollbackEvidence": "<required: release-runner rollback command output, build record, release-runner record, or URL>"
+    }
+  ],
+  "clientPackageLifecycleEvidence": [
+    {
+      "platform": "<required: linux, macos, windows, android, or ios>",
+      "role": "<required: client-package>",
+      "artifactOrPackageIdentifier": "<required: exact package/artifact identifier, file name, version, or package id>",
+      "installResult": "<required: passed, failed, blocked, or not-run>",
+      "installEvidence": "<required: release-runner package-manager command output, build record, release-runner record, or URL>",
+      "launchResult": "<required: passed, failed, blocked, or not-run>",
+      "launchEvidence": "<required: release-runner launch command output, build record, release-runner record, or URL>",
+      "profileResult": "<required: passed, failed, blocked, or not-run>",
+      "profileEvidence": "<required: release-runner connection profile evidence, command output, build record, release-runner record, or URL>",
+      "upgradeResult": "<required: passed, failed, blocked, or not-run>",
+      "upgradeEvidence": "<required: release-runner package-manager upgrade command output, build record, release-runner record, or URL>",
+      "dataRetentionResult": "<required: passed, failed, blocked, or not-run>",
+      "dataRetentionEvidence": "<required: release-runner retained profile/data evidence, command output, build record, release-runner record, or URL>",
+      "uninstallResult": "<required: passed, failed, blocked, or not-run>",
+      "uninstallEvidence": "<required: release-runner package-manager uninstall command output, build record, release-runner record, or URL>",
+      "rollbackResult": "<required: passed, failed, blocked, or not-run>",
+      "rollbackEvidence": "<required: release-runner rollback command output, build record, release-runner record, or URL>"
+    }
+  ],
+  "finalLifecycleEvidenceDecision": {
+    "decision": "<required: passed, manual-boundary-retained, or blocked>",
+    "rationale": "<required: lifecycle evidence decision rationale; blocked when any lifecycle result is failed, blocked, or not-run>"
+  }
+}
