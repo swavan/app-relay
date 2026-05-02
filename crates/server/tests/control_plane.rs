@@ -1,4 +1,4 @@
-use apprelay_core::{FakeMacosWindowCaptureRuntime, ServerConfig};
+use apprelay_core::{FakeMacosWindowCaptureRuntime, InMemoryEventSink, ServerConfig, ServerEvent};
 use apprelay_protocol::{
     ActiveInputFocus, AppRelayError, AudioBackendFailureKind, AudioBackendKind, AudioBackendLeg,
     AudioBackendMediaStats, AudioBackendReadiness, AudioStreamSession, AudioStreamState,
@@ -797,6 +797,79 @@ fn control_plane_authorizes_and_forwards_input_to_session() {
 }
 
 #[test]
+fn control_plane_audits_input_focus_and_blur_without_payload_details() {
+    let mut control_plane = ServerControlPlane::new(
+        server_services_for_platform(Platform::Linux, "integration-test"),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let mut events = InMemoryEventSink::default();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1920, 1080),
+            },
+        )
+        .expect("create session");
+
+    let focused = control_plane
+        .forward_input_with_audit(
+            &auth,
+            ForwardInputRequest {
+                session_id: session.id.clone(),
+                client_viewport: ViewportSize::new(960, 540),
+                event: InputEvent::Focus,
+            },
+            &mut events,
+        )
+        .expect("focus input");
+    control_plane
+        .forward_input_with_audit(
+            &auth,
+            ForwardInputRequest {
+                session_id: session.id.clone(),
+                client_viewport: ViewportSize::new(960, 540),
+                event: InputEvent::KeyboardText {
+                    text: "secret text".to_string(),
+                },
+            },
+            &mut events,
+        )
+        .expect("forward keyboard text");
+    let blurred = control_plane
+        .forward_input_with_audit(
+            &auth,
+            ForwardInputRequest {
+                session_id: session.id.clone(),
+                client_viewport: ViewportSize::new(960, 540),
+                event: InputEvent::Blur,
+            },
+            &mut events,
+        )
+        .expect("blur input");
+
+    assert_eq!(focused.status, InputDeliveryStatus::Focused);
+    assert_eq!(blurred.status, InputDeliveryStatus::Blurred);
+    assert_eq!(
+        events.events(),
+        &[
+            ServerEvent::InputFocusEnabled {
+                session_id: session.id.clone(),
+                client_id: "test-client".to_string(),
+                selected_window_id: session.selected_window.id.clone(),
+            },
+            ServerEvent::InputFocusDisabled {
+                session_id: session.id,
+                client_id: "test-client".to_string(),
+                selected_window_id: session.selected_window.id,
+            },
+        ]
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn control_plane_forwards_macos_keyboard_input_to_native_backend() {
     let root = unique_test_dir("control-plane-macos-keyboard");
@@ -1529,6 +1602,77 @@ fn control_plane_reconnects_and_resizes_video_stream() {
 }
 
 #[test]
+fn control_plane_audits_video_stream_lifecycle_successes() {
+    let mut control_plane = ServerControlPlane::new(
+        server_services_for_platform(Platform::Linux, "integration-test"),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let mut events = InMemoryEventSink::default();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+
+    let stream = control_plane
+        .start_video_stream_with_audit(
+            &auth,
+            StartVideoStreamRequest {
+                session_id: session.id.clone(),
+            },
+            &mut events,
+        )
+        .expect("start video stream");
+    control_plane
+        .reconnect_video_stream_with_audit(
+            &auth,
+            ReconnectVideoStreamRequest {
+                stream_id: stream.id.clone(),
+            },
+            &mut events,
+        )
+        .expect("reconnect video stream");
+    control_plane
+        .stop_video_stream_with_audit(
+            &auth,
+            StopVideoStreamRequest {
+                stream_id: stream.id.clone(),
+            },
+            &mut events,
+        )
+        .expect("stop video stream");
+
+    assert_eq!(
+        events.events(),
+        &[
+            ServerEvent::VideoStreamStarted {
+                stream_id: stream.id.clone(),
+                session_id: session.id.clone(),
+                client_id: "test-client".to_string(),
+                selected_window_id: stream.selected_window_id.clone(),
+            },
+            ServerEvent::VideoStreamReconnected {
+                stream_id: stream.id.clone(),
+                session_id: session.id.clone(),
+                client_id: "test-client".to_string(),
+                selected_window_id: stream.selected_window_id.clone(),
+            },
+            ServerEvent::VideoStreamStopped {
+                stream_id: stream.id,
+                session_id: session.id,
+                client_id: "test-client".to_string(),
+                selected_window_id: stream.selected_window_id,
+            },
+        ]
+    );
+}
+
+#[test]
 fn control_plane_keeps_negotiated_video_encoding_coherent_after_resize() {
     let mut control_plane = ServerControlPlane::new(
         server_services_for_platform(Platform::Linux, "integration-test"),
@@ -2175,6 +2319,87 @@ fn control_plane_updates_audio_mute_and_devices() {
     assert_eq!(
         control_plane.audio_stream_status(&auth, &audio.id),
         Ok(updated)
+    );
+}
+
+#[test]
+fn control_plane_audits_audio_stream_lifecycle_successes_without_device_ids() {
+    let mut control_plane = ServerControlPlane::new(
+        server_services_for_platform(Platform::Linux, "integration-test"),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let mut events = InMemoryEventSink::default();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let audio = control_plane
+        .start_audio_stream_with_audit(
+            &auth,
+            StartAudioStreamRequest {
+                session_id: session.id.clone(),
+                microphone: MicrophoneMode::Disabled,
+                system_audio_muted: false,
+                microphone_muted: true,
+                output_device_id: Some("speakers".to_string()),
+                input_device_id: Some("mic".to_string()),
+            },
+            &mut events,
+        )
+        .expect("start audio stream");
+    let updated = control_plane
+        .update_audio_stream_with_audit(
+            &auth,
+            UpdateAudioStreamRequest {
+                stream_id: audio.id.clone(),
+                system_audio_muted: true,
+                microphone_muted: false,
+                output_device_id: Some("headphones".to_string()),
+                input_device_id: Some("better-mic".to_string()),
+            },
+            &mut events,
+        )
+        .expect("update audio stream");
+    control_plane
+        .stop_audio_stream_with_audit(
+            &auth,
+            StopAudioStreamRequest {
+                stream_id: audio.id.clone(),
+            },
+            &mut events,
+        )
+        .expect("stop audio stream");
+
+    assert_eq!(
+        events.events(),
+        &[
+            ServerEvent::AudioStreamStarted {
+                stream_id: audio.id.clone(),
+                session_id: session.id.clone(),
+                client_id: "test-client".to_string(),
+                selected_window_id: audio.selected_window_id.clone(),
+            },
+            ServerEvent::AudioStreamUpdated {
+                stream_id: audio.id.clone(),
+                session_id: session.id.clone(),
+                client_id: "test-client".to_string(),
+                selected_window_id: audio.selected_window_id.clone(),
+                system_audio_muted: true,
+                microphone_muted: false,
+            },
+            ServerEvent::AudioStreamStopped {
+                stream_id: audio.id,
+                session_id: session.id,
+                client_id: "test-client".to_string(),
+                selected_window_id: updated.selected_window_id,
+            },
+        ]
     );
 }
 

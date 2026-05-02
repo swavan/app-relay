@@ -594,7 +594,7 @@ pub trait ApplicationPermissionRepository {
     fn remove(&self, application_id: &str) -> Result<(), PermissionStoreError>;
 }
 
-pub trait ServerConfigRepository {
+pub trait ServerConfigRepository: Send + Sync {
     fn load(&self) -> Result<ServerConfig, ConfigStoreError>;
     fn save(&self, config: &ServerConfig) -> Result<(), ConfigStoreError>;
 }
@@ -1356,6 +1356,54 @@ pub enum ServerEvent {
         application_id: String,
         client_id: String,
     },
+    VideoStreamStarted {
+        stream_id: String,
+        session_id: String,
+        client_id: String,
+        selected_window_id: String,
+    },
+    VideoStreamStopped {
+        stream_id: String,
+        session_id: String,
+        client_id: String,
+        selected_window_id: String,
+    },
+    VideoStreamReconnected {
+        stream_id: String,
+        session_id: String,
+        client_id: String,
+        selected_window_id: String,
+    },
+    AudioStreamStarted {
+        stream_id: String,
+        session_id: String,
+        client_id: String,
+        selected_window_id: String,
+    },
+    AudioStreamStopped {
+        stream_id: String,
+        session_id: String,
+        client_id: String,
+        selected_window_id: String,
+    },
+    AudioStreamUpdated {
+        stream_id: String,
+        session_id: String,
+        client_id: String,
+        selected_window_id: String,
+        system_audio_muted: bool,
+        microphone_muted: bool,
+    },
+    InputFocusEnabled {
+        session_id: String,
+        client_id: String,
+        selected_window_id: String,
+    },
+    InputFocusDisabled {
+        session_id: String,
+        client_id: String,
+        selected_window_id: String,
+    },
     ConfigLoaded {
         path: PathBuf,
     },
@@ -1524,6 +1572,116 @@ fn format_event(event: &ServerEvent) -> String {
                 event_field_value(session_id),
                 event_field_value(application_id),
                 event_field_value(client_id),
+            )
+        }
+        ServerEvent::VideoStreamStarted {
+            stream_id,
+            session_id,
+            client_id,
+            selected_window_id,
+        } => {
+            format!(
+                "event=video_stream_started stream_id={} session_id={} client_id={} selected_window_id={}",
+                event_field_value(stream_id),
+                event_field_value(session_id),
+                event_field_value(client_id),
+                event_field_value(selected_window_id),
+            )
+        }
+        ServerEvent::VideoStreamStopped {
+            stream_id,
+            session_id,
+            client_id,
+            selected_window_id,
+        } => {
+            format!(
+                "event=video_stream_stopped stream_id={} session_id={} client_id={} selected_window_id={}",
+                event_field_value(stream_id),
+                event_field_value(session_id),
+                event_field_value(client_id),
+                event_field_value(selected_window_id),
+            )
+        }
+        ServerEvent::VideoStreamReconnected {
+            stream_id,
+            session_id,
+            client_id,
+            selected_window_id,
+        } => {
+            format!(
+                "event=video_stream_reconnected stream_id={} session_id={} client_id={} selected_window_id={}",
+                event_field_value(stream_id),
+                event_field_value(session_id),
+                event_field_value(client_id),
+                event_field_value(selected_window_id),
+            )
+        }
+        ServerEvent::AudioStreamStarted {
+            stream_id,
+            session_id,
+            client_id,
+            selected_window_id,
+        } => {
+            format!(
+                "event=audio_stream_started stream_id={} session_id={} client_id={} selected_window_id={}",
+                event_field_value(stream_id),
+                event_field_value(session_id),
+                event_field_value(client_id),
+                event_field_value(selected_window_id),
+            )
+        }
+        ServerEvent::AudioStreamStopped {
+            stream_id,
+            session_id,
+            client_id,
+            selected_window_id,
+        } => {
+            format!(
+                "event=audio_stream_stopped stream_id={} session_id={} client_id={} selected_window_id={}",
+                event_field_value(stream_id),
+                event_field_value(session_id),
+                event_field_value(client_id),
+                event_field_value(selected_window_id),
+            )
+        }
+        ServerEvent::AudioStreamUpdated {
+            stream_id,
+            session_id,
+            client_id,
+            selected_window_id,
+            system_audio_muted,
+            microphone_muted,
+        } => {
+            format!(
+                "event=audio_stream_updated stream_id={} session_id={} client_id={} selected_window_id={} system_audio_muted={system_audio_muted} microphone_muted={microphone_muted}",
+                event_field_value(stream_id),
+                event_field_value(session_id),
+                event_field_value(client_id),
+                event_field_value(selected_window_id),
+            )
+        }
+        ServerEvent::InputFocusEnabled {
+            session_id,
+            client_id,
+            selected_window_id,
+        } => {
+            format!(
+                "event=input_focus_enabled session_id={} client_id={} selected_window_id={}",
+                event_field_value(session_id),
+                event_field_value(client_id),
+                event_field_value(selected_window_id),
+            )
+        }
+        ServerEvent::InputFocusDisabled {
+            session_id,
+            client_id,
+            selected_window_id,
+        } => {
+            format!(
+                "event=input_focus_disabled session_id={} client_id={} selected_window_id={}",
+                event_field_value(session_id),
+                event_field_value(client_id),
+                event_field_value(selected_window_id),
             )
         }
         ServerEvent::ConfigLoaded { path } => {
@@ -3582,6 +3740,25 @@ mod tests {
             viewport_width: 1280,
             viewport_height: 720,
         });
+        sink.record(ServerEvent::VideoStreamStarted {
+            stream_id: "video 1".to_string(),
+            session_id: "session 1".to_string(),
+            client_id: "client-1".to_string(),
+            selected_window_id: "window 1".to_string(),
+        });
+        sink.record(ServerEvent::AudioStreamUpdated {
+            stream_id: "audio 1".to_string(),
+            session_id: "session 1".to_string(),
+            client_id: "client-1".to_string(),
+            selected_window_id: "window 1".to_string(),
+            system_audio_muted: true,
+            microphone_muted: false,
+        });
+        sink.record(ServerEvent::InputFocusEnabled {
+            session_id: "session 1".to_string(),
+            client_id: "client-1".to_string(),
+            selected_window_id: "window 1".to_string(),
+        });
 
         let contents = fs::read_to_string(&path).expect("read event log");
         assert_eq!(
@@ -3591,7 +3768,10 @@ event=request_authorized operation=health\n\
 event=client_revoked client_id=client%201\n\
 event=pairing_requested request_id=pairing%201 client_id=client%201\n\
 event=pairing_approved request_id=pairing%201 client_id=client%201\n\
-event=session_created session_id=session%201 application_id=terminal client_id=client-1 viewport_width=1280 viewport_height=720\n"
+event=session_created session_id=session%201 application_id=terminal client_id=client-1 viewport_width=1280 viewport_height=720\n\
+event=video_stream_started stream_id=video%201 session_id=session%201 client_id=client-1 selected_window_id=window%201\n\
+event=audio_stream_updated stream_id=audio%201 session_id=session%201 client_id=client-1 selected_window_id=window%201 system_audio_muted=true microphone_muted=false\n\
+event=input_focus_enabled session_id=session%201 client_id=client-1 selected_window_id=window%201\n"
         );
 
         let _ = fs::remove_dir_all(root);

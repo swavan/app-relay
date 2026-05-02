@@ -206,9 +206,14 @@ The server emits structured events for control-plane start and stop, foreground
 TCP connection accept and close, authorized requests, rejected requests,
 pairing request success, local/admin pairing approval success, client
 revocation success/failure, session creation, session resize, session close,
-SSH tunnel lifecycle, and config persistence operations. Tests can use
-`InMemoryEventSink`; foreground and service runners can use `FileEventSink` to
-append line-oriented structured events to a log file.
+direct video stream start/stop/reconnect success, direct audio stream
+start/stop/update success, direct input focus enable/disable success, SSH tunnel
+lifecycle, and config persistence operations. Tests can use `InMemoryEventSink`;
+foreground and service runners can use `FileEventSink` to append line-oriented
+structured events to a log file. The Tauri client command wrappers use the same
+file sink for direct stream and input lifecycle events in `client-events.log`
+under `APPRELAY_DATA_DIR`, or the OS temp directory's `apprelay` folder when
+`APPRELAY_DATA_DIR` is unset.
 
 The current audit logging contract is documented in
 [audit-logging.md](audit-logging.md). It explicitly excludes auth tokens, media
