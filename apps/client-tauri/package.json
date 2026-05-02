@@ -17,6 +17,7 @@
     "release-artifacts:check": "node scripts/check-release-artifact-manifest.mjs --template ../../docs/release-artifact-manifest.template.json",
     "release-artifacts:test": "vitest run scripts/check-release-artifact-manifest.test.mjs",
     "release-notes:check": "node scripts/check-beta-release-notes.mjs --template ../../docs/beta-release-notes-template.md",
+    "release-notes:test": "vitest run scripts/check-beta-release-notes.test.mjs",
     "preview": "vite preview",
     "test": "vitest run"
   },
