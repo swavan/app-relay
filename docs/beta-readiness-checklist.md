@@ -120,6 +120,8 @@ when all of these are true:
 - diagnostics and crash evidence are collected manually and redacted
 - release notes state that native media support remains partial or planned, and
   unsupported paths return typed errors
+- filled release notes explicitly exclude or mark unsupported Windows
+  desktop-server workflows
 - the dependency audit record includes the Node beta audit result, Rust
   advisory CI result for both lockfiles, and Tauri Rust crate CI coverage
 - any distributed artifact has checksum/signature status recorded and is not
