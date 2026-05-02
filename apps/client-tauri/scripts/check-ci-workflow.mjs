@@ -24,7 +24,8 @@ const requiredRunCommandsByJob = {
   client: [
     "npm ci",
     "npm run audit:beta",
-    "npm test",
+    "npm run mobile-contract:test",
+    "npm run test:ci",
     "npm run build",
     "npm run package:check",
     "npm run release-artifacts:check",

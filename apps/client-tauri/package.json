@@ -22,7 +22,8 @@
     "release-notes:check": "node scripts/check-beta-release-notes.mjs --template ../../docs/beta-release-notes-template.md",
     "release-notes:test": "vitest run scripts/check-beta-release-notes.test.mjs",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:ci": "vitest run --exclude src/mobileConnection.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

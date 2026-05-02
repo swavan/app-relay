@@ -71,8 +71,10 @@ jobs:
         run: npm ci
       - name: Audit beta dependencies
         run: npm run audit:beta
+      - name: Test mobile contract
+        run: npm run mobile-contract:test
       - name: Test
-        run: npm test
+        run: npm run test:ci
       - name: Build
         run: npm run build
       - name: Check packaging config
@@ -195,6 +197,19 @@ describe("ci workflow checker", () => {
       ),
     ).toThrow(
       /job client is missing required run command: npm run beta-security-review:check/,
+    );
+  });
+
+  it("rejects client jobs missing the mobile contract test gate", () => {
+    expect(() =>
+      validateCiWorkflow(
+        validWorkflow.replace(
+          "      - name: Test mobile contract\n        run: npm run mobile-contract:test\n",
+          "",
+        ),
+      ),
+    ).toThrow(
+      /job client is missing required run command: npm run mobile-contract:test/,
     );
   });
 

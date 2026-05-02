@@ -122,8 +122,10 @@ jobs:
         run: npm ci
       - name: Audit beta dependencies
         run: npm run audit:beta
+      - name: Test mobile contract
+        run: npm run mobile-contract:test
       - name: Test
-        run: npm test
+        run: npm run test:ci
       - name: Build
         run: npm run build
       - name: Check packaging config
