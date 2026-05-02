@@ -115,6 +115,8 @@ jobs:
         run: npm run build
       - name: Check packaging config
         run: npm run package:check
+      - name: Check beta release notes template
+        run: npm run release-notes:check
       - name: Restore workspace ownership
         if: always()
         working-directory: .

@@ -8,6 +8,7 @@
     "build": "vite build",
     "audit:beta": "npm audit --audit-level=high",
     "package:check": "node scripts/check-tauri-package.mjs",
+    "release-notes:check": "node scripts/check-beta-release-notes.mjs --template ../../docs/beta-release-notes-template.md",
     "preview": "vite preview",
     "test": "vitest run"
   },

@@ -131,8 +131,18 @@ the failure shape.
 
 Before sharing any beta artifact or source-built beta instructions, the release
 runner must add a known-limitations section to the beta release notes and check
-each item below. A missing answer blocks the release notes, even when the
-artifact itself is an internal manual-runner build.
+each item below. Start from
+[`beta-release-notes-template.md`](beta-release-notes-template.md), which CI
+validates with `npm run release-notes:check`. A release runner can validate a
+filled release note by running:
+
+```sh
+cd apps/client-tauri
+node scripts/check-beta-release-notes.mjs ../../path/to/release-notes.md
+```
+
+A missing answer blocks the release notes, even when the artifact itself is an
+internal manual-runner build.
 
 Template:
 
@@ -167,8 +177,8 @@ Checklist:
   artifacts must follow
   [`signed-release-artifact-policy.md`](signed-release-artifact-policy.md).
 - `Dependency audit status`: include the Node beta audit result and Rust
-  advisory boundary. Do not release with unresolved production `critical` or
-  `high` findings.
+  Advisories CI result for both Rust lockfiles. Do not release with unresolved
+  production `critical` or `high` findings.
 - `Install, upgrade, uninstall, and rollback status`: say whether native
   package managers were exercised or whether the beta relies on deterministic
   generated plans plus manual release-runner execution.
