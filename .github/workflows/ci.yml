@@ -121,6 +121,8 @@ jobs:
         run: npm run dependency-audit-evidence:check
       - name: Check beta release notes template
         run: npm run release-notes:check
+      - name: Check beta security review manifest template
+        run: npm run beta-security-review:check
       - name: Restore workspace ownership
         if: always()
         working-directory: .

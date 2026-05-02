@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "policyStatement": "Beta security review manifests record release-runner evidence only; this template does not claim public beta readiness.",
+  "release": {
+    "commitSha": "<required: reviewed 40-character lowercase git commit sha>",
+    "reviewDate": "<required: YYYY-MM-DD security review date>",
+    "ciRunUrl": "<required: CI run URL, release-runner run URL, or build record>",
+    "includedPlatforms": [
+      "<required: included beta platform>"
+    ]
+  },
+  "reviewer": {
+    "identity": "<required: reviewer name or handle>",
+    "role": "<required: reviewer role>"
+  },
+  "reviewDecisions": {
+    "threatModelReviewed": {
+      "decision": "<required: reviewed, blocked, or not-applicable>",
+      "evidence": "<required: docs/threat-model.md review evidence, CI/run URL, command output, or build record>"
+    },
+    "pairingExplicitUserActionBoundaryAcknowledged": {
+      "decision": "<required: reviewed, blocked, or not-applicable>",
+      "evidence": "<required: explicit user action boundary evidence from docs/control-plane.md, docs/threat-model.md, CI/run URL, command output, or build record>"
+    },
+    "unknownClientDenialEvidence": {
+      "decision": "<required: reviewed, blocked, or not-applicable>",
+      "evidence": "<required: unknown-client denial test evidence, CI/run URL, command output, or build record>"
+    },
+    "networkExposureTunnelBoundary": {
+      "decision": "<required: reviewed, blocked, or not-applicable>",
+      "evidence": "<required: loopback/trusted-LAN/SSH tunnel boundary evidence, CI/run URL, command output, or build record>"
+    },
+    "auditLoggingCoverageRedactionEvidence": {
+      "decision": "<required: reviewed, blocked, or not-applicable>",
+      "evidence": "<required: audit logging coverage and redaction evidence, CI/run URL, command output, or build record>"
+    },
+    "diagnosticsTelemetryFreeRedactionEvidence": {
+      "decision": "<required: reviewed, blocked, or not-applicable>",
+      "evidence": "<required: diagnostics telemetry-free and redaction evidence, CI/run URL, command output, or build record>"
+    },
+    "unsupportedFeatureTypedErrorEvidence": {
+      "decision": "<required: reviewed, blocked, or not-applicable>",
+      "evidence": "<required: unsupported feature typed-error evidence, CI/run URL, command output, or build record>"
+    },
+    "packagePermissionEntitlementEvidence": {
+      "decision": "<required: reviewed, blocked, or not-applicable>",
+      "evidence": "<required: package permission/entitlement evidence, CI/run URL, command output, or build record>"
+    },
+    "dependencyAuditEvidenceManifest": {
+      "decision": "<required: reviewed, blocked, or not-applicable>",
+      "manifestPath": "<required: path to filled dependency audit evidence manifest>",
+      "result": "<required: passed, failed, blocked, or not-run>",
+      "evidence": "<required: dependency audit manifest checker output, CI/run URL, command output, or build record>"
+    },
+    "artifactManifest": {
+      "decision": "<required: reviewed, blocked, or not-applicable>",
+      "manifestPath": "<required: path to filled release artifact manifest>",
+      "result": "<required: passed, failed, blocked, or not-run>",
+      "evidence": "<required: release artifact manifest checker output, CI/run URL, command output, or build record>"
+    },
+    "betaReleaseNotes": {
+      "decision": "<required: reviewed, blocked, or not-applicable>",
+      "manifestPath": "<required: path to filled beta release notes>",
+      "result": "<required: passed, failed, blocked, or not-run>",
+      "evidence": "<required: beta release notes checker output, CI/run URL, command output, or build record>"
+    }
+  },
+  "publicBetaBlockers": [
+    {
+      "name": "final pairing UI and device verification on included platforms",
+      "status": "<required: open, closed, or scoped-out>",
+      "evidence": "<required: blocker review evidence, CI/run URL, command output, or build record>"
+    },
+    {
+      "name": "signed native desktop/mobile artifacts or reviewed unsigned distribution decision",
+      "status": "<required: open, closed, or scoped-out>",
+      "evidence": "<required: blocker review evidence, CI/run URL, command output, or build record>"
+    },
+    {
+      "name": "release evidence satisfying dependency policy for Node and both Rust lockfiles",
+      "status": "<required: open, closed, or scoped-out>",
+      "evidence": "<required: blocker review evidence, CI/run URL, command output, or build record>"
+    },
+    {
+      "name": "native package lifecycle and rollback evidence for each included platform",
+      "status": "<required: open, closed, or scoped-out>",
+      "evidence": "<required: blocker review evidence, CI/run URL, command output, or build record>"
+    },
+    {
+      "name": "Windows desktop-server workflows supported or excluded in release notes",
+      "status": "<required: open, closed, or scoped-out>",
+      "evidence": "<required: blocker review evidence, CI/run URL, command output, or build record>"
+    },
+    {
+      "name": "production transport hardening beyond foreground TCP listener and manual tunnel boundary",
+      "status": "<required: open, closed, or scoped-out>",
+      "evidence": "<required: blocker review evidence, CI/run URL, command output, or build record>"
+    },
+    {
+      "name": "production audit retention, review, support, and troubleshooting process",
+      "status": "<required: open, closed, or scoped-out>",
+      "evidence": "<required: blocker review evidence, CI/run URL, command output, or build record>"
+    },
+    {
+      "name": "stronger device verification, grant-management/revocation UX, and secret storage",
+      "status": "<required: open, closed, or scoped-out>",
+      "evidence": "<required: blocker review evidence, CI/run URL, command output, or build record>"
+    }
+  ],
+  "finalPublicBetaReadinessClaim": {
+    "status": "not-claimed",
+    "rationale": "<required: state that public beta readiness is not claimed, or cite closed/scoped-out blocker evidence>"
+  }
+}
