@@ -1322,6 +1322,14 @@ pub enum ServerEvent {
     RequestRejected {
         operation: String,
     },
+    PairingRequested {
+        request_id: String,
+        client_id: String,
+    },
+    PairingApproved {
+        request_id: String,
+        client_id: String,
+    },
     ClientRevoked {
         client_id: String,
     },
@@ -1443,6 +1451,26 @@ fn format_event(event: &ServerEvent) -> String {
             format!(
                 "event=request_rejected operation={}",
                 event_field_value(operation)
+            )
+        }
+        ServerEvent::PairingRequested {
+            request_id,
+            client_id,
+        } => {
+            format!(
+                "event=pairing_requested request_id={} client_id={}",
+                event_field_value(request_id),
+                event_field_value(client_id)
+            )
+        }
+        ServerEvent::PairingApproved {
+            request_id,
+            client_id,
+        } => {
+            format!(
+                "event=pairing_approved request_id={} client_id={}",
+                event_field_value(request_id),
+                event_field_value(client_id)
             )
         }
         ServerEvent::ClientRevoked { client_id } => {
@@ -3539,6 +3567,14 @@ mod tests {
         sink.record(ServerEvent::ClientRevoked {
             client_id: "client 1".to_string(),
         });
+        sink.record(ServerEvent::PairingRequested {
+            request_id: "pairing 1".to_string(),
+            client_id: "client 1".to_string(),
+        });
+        sink.record(ServerEvent::PairingApproved {
+            request_id: "pairing 1".to_string(),
+            client_id: "client 1".to_string(),
+        });
         sink.record(ServerEvent::SessionCreated {
             session_id: "session 1".to_string(),
             application_id: "terminal".to_string(),
@@ -3553,6 +3589,8 @@ mod tests {
             "event=control_plane_started bind_address=127.0.0.1 port=7676\n\
 event=request_authorized operation=health\n\
 event=client_revoked client_id=client%201\n\
+event=pairing_requested request_id=pairing%201 client_id=client%201\n\
+event=pairing_approved request_id=pairing%201 client_id=client%201\n\
 event=session_created session_id=session%201 application_id=terminal client_id=client-1 viewport_width=1280 viewport_height=720\n"
         );
 

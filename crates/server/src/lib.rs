@@ -551,7 +551,21 @@ impl ServerControlPlane {
             .map_err(Into::into)
     }
 
-    pub fn locally_approve_pairing(
+    pub fn locally_approve_pairing_with_audit(
+        &mut self,
+        request: ApprovePairingRequest,
+        events: &mut impl EventSink,
+    ) -> ControlResult<apprelay_core::AuthorizedClient> {
+        let request_id = request.request_id.clone();
+        let client = self.locally_approve_pairing_inner(request)?;
+        events.record(ServerEvent::PairingApproved {
+            request_id,
+            client_id: client.id.clone(),
+        });
+        Ok(client)
+    }
+
+    fn locally_approve_pairing_inner(
         &mut self,
         request: ApprovePairingRequest,
     ) -> ControlResult<apprelay_core::AuthorizedClient> {
@@ -1079,7 +1093,10 @@ impl ForegroundControlServer {
                             label: label.replace("%20", " "),
                         },
                     )
-                    .map(|pending| response_only(format_pairing_request_response(pending)))
+                    .map(|pending| {
+                        let event = pairing_requested_event(&pending);
+                        (format_pairing_request_response(pending), vec![event])
+                    })
             }
             "pairing-revoke" => {
                 let Some(client_id) = args.next() else {
@@ -1319,6 +1336,13 @@ fn format_pairing_request_response(pending: PendingPairing) -> String {
         line_token(&pending.client.label),
         pending.status
     )
+}
+
+fn pairing_requested_event(pending: &PendingPairing) -> ServerEvent {
+    ServerEvent::PairingRequested {
+        request_id: pending.request_id.clone(),
+        client_id: pending.client.id.clone(),
+    }
 }
 
 fn format_pairing_revoke_response(client: apprelay_core::AuthorizedClient) -> String {
@@ -2285,10 +2309,14 @@ mod tests {
             )))
         );
 
+        let mut events = InMemoryEventSink::default();
         let approved = control_plane
-            .locally_approve_pairing(ApprovePairingRequest {
-                request_id: pending.request_id,
-            })
+            .locally_approve_pairing_with_audit(
+                ApprovePairingRequest {
+                    request_id: pending.request_id,
+                },
+                &mut events,
+            )
             .expect("approve pairing");
         assert_eq!(approved.id, "client-1");
 
@@ -2326,10 +2354,14 @@ mod tests {
             )
             .expect("request pairing");
 
+        let mut events = InMemoryEventSink::default();
         control_plane
-            .locally_approve_pairing(ApprovePairingRequest {
-                request_id: pending.request_id,
-            })
+            .locally_approve_pairing_with_audit(
+                ApprovePairingRequest {
+                    request_id: pending.request_id,
+                },
+                &mut events,
+            )
             .expect("approve pairing");
 
         assert_eq!(
@@ -2968,8 +3000,50 @@ mod tests {
         );
         assert_eq!(
             events.events(),
-            &[ServerEvent::RequestAuthorized {
-                operation: "pairing-request".to_string(),
+            &[
+                ServerEvent::RequestAuthorized {
+                    operation: "pairing-request".to_string(),
+                },
+                ServerEvent::PairingRequested {
+                    request_id: "pairing-1".to_string(),
+                    client_id: "client-1".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn control_plane_records_pairing_approval_success() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            ServerConfig::local("correct-token"),
+        );
+        let pending = control_plane
+            .request_pairing(
+                &ControlAuth::new("correct-token"),
+                ControlClientIdentity {
+                    id: "client-1".to_string(),
+                    label: "Laptop".to_string(),
+                },
+            )
+            .expect("request pairing");
+        let mut events = InMemoryEventSink::default();
+
+        let approved = control_plane
+            .locally_approve_pairing_with_audit(
+                ApprovePairingRequest {
+                    request_id: pending.request_id,
+                },
+                &mut events,
+            )
+            .expect("approve pairing");
+
+        assert_eq!(approved.id, "client-1");
+        assert_eq!(
+            events.events(),
+            &[ServerEvent::PairingApproved {
+                request_id: "pairing-1".to_string(),
+                client_id: "client-1".to_string(),
             }]
         );
     }
@@ -3036,9 +3110,12 @@ mod tests {
         let approved = server
             .control_plane
             .borrow_mut()
-            .locally_approve_pairing(ApprovePairingRequest {
-                request_id: "pairing-1".to_string(),
-            })
+            .locally_approve_pairing_with_audit(
+                ApprovePairingRequest {
+                    request_id: "pairing-1".to_string(),
+                },
+                &mut events,
+            )
             .expect("local approve pairing");
         assert_eq!(approved.id, "client-1");
 
