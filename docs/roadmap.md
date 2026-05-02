@@ -519,6 +519,16 @@ Completed:
   acceptance criteria to current evidence, release-runner/manual boundaries,
   public beta blockers, and Phase 9 carry-forward work without marking Phase 8
   or production/public beta readiness complete
+- completed deterministic release evidence slice: checked templates and scripts
+  now define and validate beta release artifact checksum evidence, dependency
+  audit evidence, lifecycle evidence, beta security review evidence, and beta
+  release notes without claiming public beta or production readiness
+- completed beta release-notes exclusion slice: Windows desktop-server support
+  is explicitly excluded from beta release notes evidence until Windows
+  application discovery and launch support is implemented and reviewed
+- completed CI release coverage slice: push-to-master coverage now validates
+  self-hosted Linux Docker-runner checks alongside the existing beta evidence
+  gates without treating CI coverage as production release approval
 
 ## Phase 9: Production Release
 
