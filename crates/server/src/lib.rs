@@ -26,11 +26,11 @@ use apprelay_protocol::{
     ActiveInputFocus, AppRelayError, ApplicationLaunch, ApplicationSession, ApplicationSummary,
     ApprovePairingRequest, AudioStreamSession, ControlAuth, ControlClientIdentity, ControlError,
     ControlResult, CreateSessionRequest, DiagnosticsBundle, Feature, ForwardInputRequest,
-    HealthStatus, HeartbeatStatus, InputDelivery, LaunchIntentStatus, NegotiateVideoStreamRequest,
-    PairingRequest, PendingPairing, Platform, PlatformCapability, ReconnectVideoStreamRequest,
-    ResizeSessionRequest, RevokeClientRequest, ServerVersion, StartAudioStreamRequest,
-    StartVideoStreamRequest, StopAudioStreamRequest, StopVideoStreamRequest,
-    UpdateAudioStreamRequest, VideoStreamSession, ViewportSize,
+    HealthStatus, HeartbeatStatus, InputDelivery, InputDeliveryStatus, InputEvent,
+    LaunchIntentStatus, NegotiateVideoStreamRequest, PairingRequest, PendingPairing, Platform,
+    PlatformCapability, ReconnectVideoStreamRequest, ResizeSessionRequest, RevokeClientRequest,
+    ServerVersion, StartAudioStreamRequest, StartVideoStreamRequest, StopAudioStreamRequest,
+    StopVideoStreamRequest, UpdateAudioStreamRequest, VideoStreamSession, ViewportSize,
 };
 
 use crate::audio_stream::AudioStreamControl;
@@ -692,8 +692,36 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: ForwardInputRequest,
     ) -> ControlResult<InputDelivery> {
-        self.authorize_session_owner(auth, &request.session_id)?;
-        self.services.forward_input(request).map_err(Into::into)
+        self.forward_input_inner(auth, request)
+            .map(|(delivery, _)| delivery)
+    }
+
+    pub fn forward_input_with_audit(
+        &mut self,
+        auth: &ControlAuth,
+        request: ForwardInputRequest,
+        events: &mut impl EventSink,
+    ) -> ControlResult<InputDelivery> {
+        let (delivery, event) = self.forward_input_inner(auth, request)?;
+        if let Some(event) = event {
+            events.record(event);
+        }
+        Ok(delivery)
+    }
+
+    fn forward_input_inner(
+        &mut self,
+        auth: &ControlAuth,
+        request: ForwardInputRequest,
+    ) -> ControlResult<(InputDelivery, Option<ServerEvent>)> {
+        let client = self.authorize_session_owner(auth, &request.session_id)?;
+        let requested_event = request.event.clone();
+        let delivery = self
+            .services
+            .forward_input(request)
+            .map_err(ControlError::from)?;
+        let audit_event = input_focus_event(&client.id, &delivery, &requested_event);
+        Ok((delivery, audit_event))
     }
 
     pub fn active_input_focus(
@@ -712,10 +740,33 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StartVideoStreamRequest,
     ) -> ControlResult<VideoStreamSession> {
-        self.authorize_session_owner(auth, &request.session_id)?;
-        self.services
+        self.start_video_stream_inner(auth, request)
+            .map(|(stream, _)| stream)
+    }
+
+    pub fn start_video_stream_with_audit(
+        &mut self,
+        auth: &ControlAuth,
+        request: StartVideoStreamRequest,
+        events: &mut impl EventSink,
+    ) -> ControlResult<VideoStreamSession> {
+        let (stream, event) = self.start_video_stream_inner(auth, request)?;
+        events.record(event);
+        Ok(stream)
+    }
+
+    fn start_video_stream_inner(
+        &mut self,
+        auth: &ControlAuth,
+        request: StartVideoStreamRequest,
+    ) -> ControlResult<(VideoStreamSession, ServerEvent)> {
+        let client = self.authorize_session_owner(auth, &request.session_id)?;
+        let stream = self
+            .services
             .start_video_stream(request)
-            .map_err(Into::into)
+            .map_err(ControlError::from)?;
+        let event = video_stream_started_event(&client.id, &stream);
+        Ok((stream, event))
     }
 
     pub fn stop_video_stream(
@@ -723,8 +774,33 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StopVideoStreamRequest,
     ) -> ControlResult<VideoStreamSession> {
-        self.authorize_video_stream_owner(auth, &request.stream_id)?;
-        self.services.stop_video_stream(request).map_err(Into::into)
+        self.stop_video_stream_inner(auth, request)
+            .map(|(stream, _)| stream)
+    }
+
+    pub fn stop_video_stream_with_audit(
+        &mut self,
+        auth: &ControlAuth,
+        request: StopVideoStreamRequest,
+        events: &mut impl EventSink,
+    ) -> ControlResult<VideoStreamSession> {
+        let (stream, event) = self.stop_video_stream_inner(auth, request)?;
+        events.record(event);
+        Ok(stream)
+    }
+
+    fn stop_video_stream_inner(
+        &mut self,
+        auth: &ControlAuth,
+        request: StopVideoStreamRequest,
+    ) -> ControlResult<(VideoStreamSession, ServerEvent)> {
+        let client = self.authorize_video_stream_owner(auth, &request.stream_id)?;
+        let stream = self
+            .services
+            .stop_video_stream(request)
+            .map_err(ControlError::from)?;
+        let event = video_stream_stopped_event(&client.id, &stream);
+        Ok((stream, event))
     }
 
     pub fn reconnect_video_stream(
@@ -732,10 +808,33 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: ReconnectVideoStreamRequest,
     ) -> ControlResult<VideoStreamSession> {
-        self.authorize_video_stream_owner(auth, &request.stream_id)?;
-        self.services
+        self.reconnect_video_stream_inner(auth, request)
+            .map(|(stream, _)| stream)
+    }
+
+    pub fn reconnect_video_stream_with_audit(
+        &mut self,
+        auth: &ControlAuth,
+        request: ReconnectVideoStreamRequest,
+        events: &mut impl EventSink,
+    ) -> ControlResult<VideoStreamSession> {
+        let (stream, event) = self.reconnect_video_stream_inner(auth, request)?;
+        events.record(event);
+        Ok(stream)
+    }
+
+    fn reconnect_video_stream_inner(
+        &mut self,
+        auth: &ControlAuth,
+        request: ReconnectVideoStreamRequest,
+    ) -> ControlResult<(VideoStreamSession, ServerEvent)> {
+        let client = self.authorize_video_stream_owner(auth, &request.stream_id)?;
+        let stream = self
+            .services
             .reconnect_video_stream(request)
-            .map_err(Into::into)
+            .map_err(ControlError::from)?;
+        let event = video_stream_reconnected_event(&client.id, &stream);
+        Ok((stream, event))
     }
 
     pub fn negotiate_video_stream(
@@ -778,10 +877,33 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StartAudioStreamRequest,
     ) -> ControlResult<AudioStreamSession> {
-        self.authorize_session_owner(auth, &request.session_id)?;
-        self.services
+        self.start_audio_stream_inner(auth, request)
+            .map(|(stream, _)| stream)
+    }
+
+    pub fn start_audio_stream_with_audit(
+        &mut self,
+        auth: &ControlAuth,
+        request: StartAudioStreamRequest,
+        events: &mut impl EventSink,
+    ) -> ControlResult<AudioStreamSession> {
+        let (stream, event) = self.start_audio_stream_inner(auth, request)?;
+        events.record(event);
+        Ok(stream)
+    }
+
+    fn start_audio_stream_inner(
+        &mut self,
+        auth: &ControlAuth,
+        request: StartAudioStreamRequest,
+    ) -> ControlResult<(AudioStreamSession, ServerEvent)> {
+        let client = self.authorize_session_owner(auth, &request.session_id)?;
+        let stream = self
+            .services
             .start_audio_stream(request)
-            .map_err(Into::into)
+            .map_err(ControlError::from)?;
+        let event = audio_stream_started_event(&client.id, &stream);
+        Ok((stream, event))
     }
 
     pub fn stop_audio_stream(
@@ -789,8 +911,33 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StopAudioStreamRequest,
     ) -> ControlResult<AudioStreamSession> {
-        self.authorize_audio_stream_owner(auth, &request.stream_id)?;
-        self.services.stop_audio_stream(request).map_err(Into::into)
+        self.stop_audio_stream_inner(auth, request)
+            .map(|(stream, _)| stream)
+    }
+
+    pub fn stop_audio_stream_with_audit(
+        &mut self,
+        auth: &ControlAuth,
+        request: StopAudioStreamRequest,
+        events: &mut impl EventSink,
+    ) -> ControlResult<AudioStreamSession> {
+        let (stream, event) = self.stop_audio_stream_inner(auth, request)?;
+        events.record(event);
+        Ok(stream)
+    }
+
+    fn stop_audio_stream_inner(
+        &mut self,
+        auth: &ControlAuth,
+        request: StopAudioStreamRequest,
+    ) -> ControlResult<(AudioStreamSession, ServerEvent)> {
+        let client = self.authorize_audio_stream_owner(auth, &request.stream_id)?;
+        let stream = self
+            .services
+            .stop_audio_stream(request)
+            .map_err(ControlError::from)?;
+        let event = audio_stream_stopped_event(&client.id, &stream);
+        Ok((stream, event))
     }
 
     pub fn update_audio_stream(
@@ -798,10 +945,33 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: UpdateAudioStreamRequest,
     ) -> ControlResult<AudioStreamSession> {
-        self.authorize_audio_stream_owner(auth, &request.stream_id)?;
-        self.services
+        self.update_audio_stream_inner(auth, request)
+            .map(|(stream, _)| stream)
+    }
+
+    pub fn update_audio_stream_with_audit(
+        &mut self,
+        auth: &ControlAuth,
+        request: UpdateAudioStreamRequest,
+        events: &mut impl EventSink,
+    ) -> ControlResult<AudioStreamSession> {
+        let (stream, event) = self.update_audio_stream_inner(auth, request)?;
+        events.record(event);
+        Ok(stream)
+    }
+
+    fn update_audio_stream_inner(
+        &mut self,
+        auth: &ControlAuth,
+        request: UpdateAudioStreamRequest,
+    ) -> ControlResult<(AudioStreamSession, ServerEvent)> {
+        let client = self.authorize_audio_stream_owner(auth, &request.stream_id)?;
+        let stream = self
+            .services
             .update_audio_stream(request)
-            .map_err(Into::into)
+            .map_err(ControlError::from)?;
+        let event = audio_stream_updated_event(&client.id, &stream);
+        Ok((stream, event))
     }
 
     pub fn audio_stream_status(
@@ -1411,6 +1581,82 @@ fn session_closed_event(client_id: &str, session: &ApplicationSession) -> Server
         session_id: session.id.clone(),
         application_id: session.application_id.clone(),
         client_id: client_id.to_string(),
+    }
+}
+
+fn video_stream_started_event(client_id: &str, stream: &VideoStreamSession) -> ServerEvent {
+    ServerEvent::VideoStreamStarted {
+        stream_id: stream.id.clone(),
+        session_id: stream.session_id.clone(),
+        client_id: client_id.to_string(),
+        selected_window_id: stream.selected_window_id.clone(),
+    }
+}
+
+fn video_stream_stopped_event(client_id: &str, stream: &VideoStreamSession) -> ServerEvent {
+    ServerEvent::VideoStreamStopped {
+        stream_id: stream.id.clone(),
+        session_id: stream.session_id.clone(),
+        client_id: client_id.to_string(),
+        selected_window_id: stream.selected_window_id.clone(),
+    }
+}
+
+fn video_stream_reconnected_event(client_id: &str, stream: &VideoStreamSession) -> ServerEvent {
+    ServerEvent::VideoStreamReconnected {
+        stream_id: stream.id.clone(),
+        session_id: stream.session_id.clone(),
+        client_id: client_id.to_string(),
+        selected_window_id: stream.selected_window_id.clone(),
+    }
+}
+
+fn audio_stream_started_event(client_id: &str, stream: &AudioStreamSession) -> ServerEvent {
+    ServerEvent::AudioStreamStarted {
+        stream_id: stream.id.clone(),
+        session_id: stream.session_id.clone(),
+        client_id: client_id.to_string(),
+        selected_window_id: stream.selected_window_id.clone(),
+    }
+}
+
+fn audio_stream_stopped_event(client_id: &str, stream: &AudioStreamSession) -> ServerEvent {
+    ServerEvent::AudioStreamStopped {
+        stream_id: stream.id.clone(),
+        session_id: stream.session_id.clone(),
+        client_id: client_id.to_string(),
+        selected_window_id: stream.selected_window_id.clone(),
+    }
+}
+
+fn audio_stream_updated_event(client_id: &str, stream: &AudioStreamSession) -> ServerEvent {
+    ServerEvent::AudioStreamUpdated {
+        stream_id: stream.id.clone(),
+        session_id: stream.session_id.clone(),
+        client_id: client_id.to_string(),
+        selected_window_id: stream.selected_window_id.clone(),
+        system_audio_muted: stream.mute.system_audio_muted,
+        microphone_muted: stream.mute.microphone_muted,
+    }
+}
+
+fn input_focus_event(
+    client_id: &str,
+    delivery: &InputDelivery,
+    requested_event: &InputEvent,
+) -> Option<ServerEvent> {
+    match (requested_event, delivery.status) {
+        (InputEvent::Focus, InputDeliveryStatus::Focused) => Some(ServerEvent::InputFocusEnabled {
+            session_id: delivery.session_id.clone(),
+            client_id: client_id.to_string(),
+            selected_window_id: delivery.selected_window_id.clone(),
+        }),
+        (InputEvent::Blur, InputDeliveryStatus::Blurred) => Some(ServerEvent::InputFocusDisabled {
+            session_id: delivery.session_id.clone(),
+            client_id: client_id.to_string(),
+            selected_window_id: delivery.selected_window_id.clone(),
+        }),
+        _ => None,
     }
 }
 

@@ -7,7 +7,7 @@ mod video_stream;
 use apprelay_core::{
     ApplicationPermission, ApplicationPermissionRepository, AuthorizedClient, ConnectionProfile,
     ConnectionProfileRepository, FileApplicationPermissionRepository,
-    FileConnectionProfileRepository, ServerConfig,
+    FileConnectionProfileRepository, FileEventSink, ServerConfig,
 };
 use apprelay_protocol::{
     ActiveInputFocus, AppIcon, AppRelayError, ApplicationLaunch, ApplicationLaunchIntent,
@@ -270,8 +270,8 @@ fn forward_input(
     client_id: String,
     request: ForwardInputRequest,
 ) -> Result<InputDelivery, String> {
-    with_control_plane(|control_plane| {
-        control_plane.forward_input(&paired_auth(auth_token, client_id), request)
+    with_control_plane_events(|control_plane, events| {
+        control_plane.forward_input_with_audit(&paired_auth(auth_token, client_id), request, events)
     })
 }
 
@@ -319,6 +319,20 @@ pub(crate) fn with_control_plane<T>(
         .map_err(|_| "control plane lock poisoned".to_string())?;
 
     action(&mut control_plane).map_err(|error| format!("{error:?}"))
+}
+
+pub(crate) fn with_control_plane_events<T>(
+    action: impl FnOnce(
+        &mut ServerControlPlane,
+        &mut FileEventSink,
+    ) -> apprelay_protocol::ControlResult<T>,
+) -> Result<T, String> {
+    let mut control_plane = control_plane()
+        .lock()
+        .map_err(|_| "control plane lock poisoned".to_string())?;
+    let mut events = FileEventSink::new(data_dir().join("client-events.log"));
+
+    action(&mut control_plane, &mut events).map_err(|error| format!("{error:?}"))
 }
 
 fn control_plane() -> &'static Mutex<ServerControlPlane> {

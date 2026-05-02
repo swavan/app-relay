@@ -3,7 +3,7 @@ use apprelay_protocol::{
     StopVideoStreamRequest, VideoStreamSession,
 };
 
-use crate::with_control_plane;
+use crate::{with_control_plane, with_control_plane_events};
 
 #[tauri::command]
 pub fn active_video_streams(
@@ -21,8 +21,12 @@ pub fn start_video_stream(
     client_id: String,
     request: StartVideoStreamRequest,
 ) -> Result<VideoStreamSession, String> {
-    with_control_plane(|control_plane| {
-        control_plane.start_video_stream(&paired_auth(auth_token, client_id), request)
+    with_control_plane_events(|control_plane, events| {
+        control_plane.start_video_stream_with_audit(
+            &paired_auth(auth_token, client_id),
+            request,
+            events,
+        )
     })
 }
 
@@ -32,8 +36,12 @@ pub fn stop_video_stream(
     client_id: String,
     request: StopVideoStreamRequest,
 ) -> Result<VideoStreamSession, String> {
-    with_control_plane(|control_plane| {
-        control_plane.stop_video_stream(&paired_auth(auth_token, client_id), request)
+    with_control_plane_events(|control_plane, events| {
+        control_plane.stop_video_stream_with_audit(
+            &paired_auth(auth_token, client_id),
+            request,
+            events,
+        )
     })
 }
 
@@ -43,8 +51,12 @@ pub fn reconnect_video_stream(
     client_id: String,
     request: ReconnectVideoStreamRequest,
 ) -> Result<VideoStreamSession, String> {
-    with_control_plane(|control_plane| {
-        control_plane.reconnect_video_stream(&paired_auth(auth_token, client_id), request)
+    with_control_plane_events(|control_plane, events| {
+        control_plane.reconnect_video_stream_with_audit(
+            &paired_auth(auth_token, client_id),
+            request,
+            events,
+        )
     })
 }
 
