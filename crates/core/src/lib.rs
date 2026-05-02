@@ -23,6 +23,7 @@ pub use video_stream::{
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
+use std::net::{IpAddr, Ipv4Addr};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -2151,6 +2152,12 @@ impl ServerConfig {
             return Err(ConfigError::MissingAuthToken);
         }
 
+        if self.bind_address.trim() != self.bind_address
+            || !is_allowed_control_bind_address(&self.bind_address)
+        {
+            return Err(ConfigError::InvalidBindAddress);
+        }
+
         if self.control_port == 0 {
             return Err(ConfigError::InvalidControlPort);
         }
@@ -2172,6 +2179,18 @@ impl ServerConfig {
 
         self.ssh_tunnel.validate()
     }
+}
+
+fn is_allowed_control_bind_address(bind_address: &str) -> bool {
+    match bind_address.parse::<IpAddr>() {
+        Ok(IpAddr::V4(address)) => address.is_loopback() || is_private_ipv4_address(address),
+        Ok(IpAddr::V6(_)) | Err(_) => false,
+    }
+}
+
+fn is_private_ipv4_address(address: Ipv4Addr) -> bool {
+    let [first, second, _, _] = address.octets();
+    first == 10 || (first == 172 && (16..=31).contains(&second)) || (first == 192 && second == 168)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2212,6 +2231,7 @@ impl SshTunnelConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConfigError {
     MissingAuthToken,
+    InvalidBindAddress,
     InvalidControlPort,
     InvalidHeartbeatInterval,
     MissingSshUser,
@@ -3604,6 +3624,50 @@ mod tests {
         let config = ServerConfig::local("test-token");
 
         assert_eq!(config.validate(), Ok(()));
+    }
+
+    #[test]
+    fn server_config_rejects_wildcard_bind_addresses() {
+        for bind_address in ["0.0.0.0", "::", "0:0:0:0:0:0:0:0"] {
+            let mut config = ServerConfig::local("test-token");
+            config.bind_address = bind_address.to_string();
+
+            assert_eq!(
+                config.validate(),
+                Err(ConfigError::InvalidBindAddress),
+                "{bind_address} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn server_config_rejects_public_hostname_ipv6_and_padded_bind_addresses() {
+        for bind_address in [
+            "203.0.113.10",
+            "apprelay.local",
+            "::1",
+            " 127.0.0.1 ",
+            " 192.168.1.10",
+        ] {
+            let mut config = ServerConfig::local("test-token");
+            config.bind_address = bind_address.to_string();
+
+            assert_eq!(
+                config.validate(),
+                Err(ConfigError::InvalidBindAddress),
+                "{bind_address} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn server_config_allows_loopback_and_private_ipv4_bind_addresses() {
+        for bind_address in ["127.0.0.1", "10.0.0.8", "172.16.1.10", "192.168.1.10"] {
+            let mut config = ServerConfig::local("test-token");
+            config.bind_address = bind_address.to_string();
+
+            assert_eq!(config.validate(), Ok(()), "{bind_address} must pass");
+        }
     }
 
     #[test]

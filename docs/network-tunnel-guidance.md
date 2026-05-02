@@ -34,9 +34,10 @@ Bind only to loopback when:
   forwarding setup that terminates on loopback
 
 Local LAN exposure is acceptable only for short-lived beta or release-runner
-tests on an isolated, trusted network. All of these conditions must be true:
+tests on an isolated, trusted IPv4 network. All of these conditions must be
+true:
 
-- the bind address is a private interface address, not `0.0.0.0`
+- the bind address is a private IPv4 interface address, not `0.0.0.0`
 - the network is controlled by the runner, not a public, guest, hotel, office,
   conference, or shared lab network
 - the firewall permits only the specific test client device or subnet needed
@@ -66,6 +67,10 @@ Direct exposure is prohibited when any of these are true:
 
 - binding to `0.0.0.0`, a public IP address, or an interface reachable from the
   internet
+- binding to hostnames; use explicit loopback or private IPv4 addresses so the
+  release-runner evidence names the interface being exposed
+- binding to IPv6 addresses; the current foreground listener formats listener
+  addresses as IPv4 host-and-port strings
 - relying on router port forwarding, NAT exposure, VPN-wide exposure, or cloud
   firewall rules that allow broad source ranges
 - running on public Wi-Fi, guest networks, unmanaged corporate networks, shared
@@ -138,8 +143,9 @@ After the run:
 - Real WebRTC/media transport security review is not complete.
 - Production audit logging, retention, redaction policy, and release signing
   remain separate Phase 8 work. Dependency audit policy is documented in
-  [dependency-audit-policy.md](dependency-audit-policy.md), with Rust advisory
-  checks still a release-runner boundary.
+  [dependency-audit-policy.md](dependency-audit-policy.md), with Node and Rust
+  advisory checks running in CI while final release evidence remains
+  release-runner-owned.
 - Server-side per-client application grants are persisted in authorized-client
   config entries and enforced during session creation when a paired client's
   grant list is non-empty. Runtime pairing approval/revocation persistence is
