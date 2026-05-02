@@ -143,14 +143,18 @@ Out of scope for this document:
   from the active authorization set. Sessions are tracked by paired-client owner
   and session-scoped controls are limited to that owner; revocation closes
   active sessions owned by the revoked client through the normal close-session
-  cleanup path. Stronger device verification, a distinct
-  admin credential or local-only revocation channel, richer device naming, and
-  least-privilege client capabilities remain future work.
-- Server-side application authorization remains incomplete. The foreground
-  `create-session` path now requires a client id that appears in the local
-  policy, but the foreground parser's caller-supplied id is not authenticated
-  device proof. It still uses the existing session application policy and does
-  not persist per-client application grants on the server.
+  cleanup path. The server also persists optional per-client application grant
+  lists and denies `create-session` when a paired client's non-empty grant list
+  does not include the requested application id. Stronger device verification,
+  a distinct admin credential or local-only revocation channel, richer device
+  naming, stronger grant-management UX, and least-privilege client capabilities
+  remain future work.
+- Server-side application authorization is bounded by foreground identity
+  limits. The foreground `create-session` path requires a client id that
+  appears in the local policy and enforces persisted per-client application
+  grants, but the foreground parser's caller-supplied id is not authenticated
+  device proof. The existing session application policy still applies after the
+  per-client grant check.
 - Runtime pairing approvals and revocations are persisted when the server
   control plane is constructed with a file-backed `ServerConfig` repository,
   including foreground revocation in `--config` mode. Constructors without a
