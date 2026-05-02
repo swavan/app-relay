@@ -30,6 +30,15 @@
       "toolEvidence": "<required: cargo-audit version or CI run evidence>",
       "runEvidence": "<required: CI step URL, run URL, or command output evidence for apps/client-tauri/src-tauri/Cargo.lock>",
       "advisorySummary": "<required: RustSec advisory ids and severities, or state no advisories reported>"
+    },
+    "tauriRustLockedChecks": {
+      "manifestPath": "apps/client-tauri/src-tauri/Cargo.toml",
+      "checkCommand": "cargo check --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked",
+      "testCommand": "cargo test --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked",
+      "result": "<required: passed, failed, blocked, or not-run>",
+      "toolEvidence": "<required: cargo version or CI run evidence>",
+      "runEvidence": "<required: CI step URL, run URL, or command output evidence for locked cargo check and cargo test against apps/client-tauri/src-tauri/Cargo.toml>",
+      "checkTestSummary": "<required: state locked cargo check and cargo test passed, or summarize the blocked/failing check/test evidence>"
     }
   },
   "unresolvedHighCriticalProductionAdvisory": {

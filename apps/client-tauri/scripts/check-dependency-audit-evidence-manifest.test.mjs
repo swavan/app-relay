@@ -49,6 +49,19 @@ const baseManifest = (overrides = {}) => ({
       advisorySummary:
         "No RustSec advisories reported for apps/client-tauri/src-tauri/Cargo.lock.",
     },
+    tauriRustLockedChecks: {
+      manifestPath: "apps/client-tauri/src-tauri/Cargo.toml",
+      checkCommand:
+        "cargo check --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked",
+      testCommand:
+        "cargo test --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked",
+      result: "passed",
+      toolEvidence: "cargo 1.90.0 command output from CI step",
+      runEvidence:
+        "cargo check and cargo test command output from CI step for apps/client-tauri/src-tauri/Cargo.toml",
+      checkTestSummary:
+        "Locked cargo check and cargo test passed for apps/client-tauri/src-tauri/Cargo.toml.",
+    },
   },
   unresolvedHighCriticalProductionAdvisory: {
     decision: "none",
@@ -229,6 +242,32 @@ describe("dependency audit evidence manifest checker", () => {
         ),
       ),
       /audits\.rustRoot\.result must be one of passed, failed, blocked, not-run/,
+    );
+  });
+
+  it("rejects missing Tauri Rust locked check/test evidence", () => {
+    expectFail(
+      runChecker(
+        writeManifest(
+          withAudit("tauriRustLockedChecks", {
+            checkTestSummary: "Cargo was reviewed.",
+          }),
+        ),
+      ),
+      /audits\.tauriRustLockedChecks\.checkTestSummary must summarize locked cargo check and cargo test evidence/,
+    );
+  });
+
+  it("rejects mismatched Tauri Rust check commands", () => {
+    expectFail(
+      runChecker(
+        writeManifest(
+          withAudit("tauriRustLockedChecks", {
+            checkCommand: "cargo check",
+          }),
+        ),
+      ),
+      /audits\.tauriRustLockedChecks\.checkCommand must be cargo check --manifest-path apps\/client-tauri\/src-tauri\/Cargo\.toml --locked/,
     );
   });
 

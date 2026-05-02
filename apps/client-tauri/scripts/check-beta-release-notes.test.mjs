@@ -20,9 +20,9 @@ const baseAnswers = {
   "Artifact signing and distribution status":
     "Artifacts are unsigned manual-runner builds distributed with checksum records.",
   "Dependency audit status":
-    "Node beta audit passed, and Rust Advisories evidence passed for both Rust lockfiles.",
+    "Node beta audit passed, Rust Advisories evidence passed for both Rust lockfiles, and locked Tauri Rust cargo check and cargo test passed for apps/client-tauri/src-tauri/Cargo.toml.",
   "Install, upgrade, uninstall, and rollback status":
-    "Native package managers were not exercised; the beta relies on deterministic generated plans plus manual release-runner execution.",
+    "Native install, upgrade, uninstall, and rollback package managers were not exercised; the beta relies on deterministic generated plans plus manual release-runner execution.",
   "Local network and tunnel boundary":
     "Server access is limited to loopback or trusted-LAN with SSH forwarding; broad internet exposure is prohibited.",
   "Native package gaps":
@@ -114,6 +114,70 @@ describe("beta release notes checker", () => {
     expectFail(
       runChecker(writeNotes(releaseNotes())),
       /must explicitly exclude or mark unsupported Windows desktop-server workflows/,
+    );
+  });
+
+  it("rejects filled notes that omit signing or checksum status", () => {
+    expectFail(
+      runChecker(
+        writeNotes(
+          releaseNotes({
+            "Unsupported platforms for this beta":
+              "Windows desktop-server workflows are excluded and unsupported for this beta; mobile client packages are also not included.",
+            "Artifact signing and distribution status":
+              "Artifacts are available from the release owner.",
+          }),
+        ),
+      ),
+      /Artifact signing and distribution status.*must satisfy answer requirement/,
+    );
+  });
+
+  it("rejects filled notes that omit locked Tauri Rust check and test evidence", () => {
+    expectFail(
+      runChecker(
+        writeNotes(
+          releaseNotes({
+            "Unsupported platforms for this beta":
+              "Windows desktop-server workflows are excluded and unsupported for this beta; mobile client packages are also not included.",
+            "Dependency audit status":
+              "Node beta audit passed, and Rust Advisories evidence passed for both Rust lockfiles.",
+          }),
+        ),
+      ),
+      /Dependency audit status.*must satisfy answer requirement/,
+    );
+  });
+
+  it("rejects filled notes that omit native package platform gaps", () => {
+    expectFail(
+      runChecker(
+        writeNotes(
+          releaseNotes({
+            "Unsupported platforms for this beta":
+              "Windows desktop-server workflows are excluded and unsupported for this beta; mobile client packages are also not included.",
+            "Native package gaps":
+              "Native package gaps remain for this limited beta.",
+          }),
+        ),
+      ),
+      /Native package gaps.*must satisfy answer requirement/,
+    );
+  });
+
+  it("rejects filled notes that omit manual privacy and no-secrets limits", () => {
+    expectFail(
+      runChecker(
+        writeNotes(
+          releaseNotes({
+            "Unsupported platforms for this beta":
+              "Windows desktop-server workflows are excluded and unsupported for this beta; mobile client packages are also not included.",
+            "Security and privacy limitations":
+              "Diagnostics are collected for beta review.",
+          }),
+        ),
+      ),
+      /Security and privacy limitations.*must satisfy answer requirement/,
     );
   });
 

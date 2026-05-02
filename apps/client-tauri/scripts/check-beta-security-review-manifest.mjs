@@ -60,7 +60,6 @@ const expectValidDate = (value, path) => {
 const allowedDecisions = new Set(["reviewed", "blocked", "not-applicable"]);
 const allowedResults = new Set(["passed", "failed", "blocked", "not-run"]);
 const allowedBlockerStatuses = new Set(["open", "closed", "scoped-out"]);
-const allowedClaimStatuses = new Set(["not-claimed", "claimed"]);
 
 const evidencePattern =
   /\b(?:https?:\/\/|github\.com\/.+\/actions\/runs\/|CI run|CI step|command output|build record|release-runner(?:\s+|-)run|release-runner(?:\s+|-)record|review record)\b/i;
@@ -77,6 +76,12 @@ const manifestPathSpecs = {
       /(?:^|\/)(?:[^/\s]+\/)*(?=[^/\s]*(?:release[-_]?artifact|artifact))[^/\s]+\.json$/i,
     message:
       "must be a .json path named for release-artifact or artifact evidence",
+  },
+  lifecycleEvidenceManifest: {
+    pattern:
+      /(?:^|\/)(?:[^/\s]+\/)*(?=[^/\s]*lifecycle[-_]?evidence)[^/\s]+\.json$/i,
+    message:
+      "must be a .json path named for lifecycle-evidence",
   },
   betaReleaseNotes: {
     pattern:
@@ -100,6 +105,7 @@ const reviewDecisionSpecs = [
 const manifestDecisionSpecs = [
   "dependencyAuditEvidenceManifest",
   "artifactManifest",
+  "lifecycleEvidenceManifest",
   "betaReleaseNotes",
 ];
 
@@ -196,23 +202,15 @@ const expectDecision = (entry, path) => {
   );
 };
 
-let hasBlockedReviewDecision = false;
 for (const key of reviewDecisionSpecs) {
   const entry = manifest.reviewDecisions?.[key];
   expectDecision(entry, `reviewDecisions.${key}`);
-  if (!isTemplatePlaceholder(entry.decision) && entry.decision === "blocked") {
-    hasBlockedReviewDecision = true;
-  }
 }
 
-let hasUnpassedSupportingManifestResult = false;
 for (const key of manifestDecisionSpecs) {
   const entry = manifest.reviewDecisions?.[key];
   const path = `reviewDecisions.${key}`;
   expectDecision(entry, path);
-  if (!isTemplatePlaceholder(entry.decision) && entry.decision === "blocked") {
-    hasBlockedReviewDecision = true;
-  }
   expectRequiredField(entry.manifestPath, `${path}.manifestPath`);
   expectPattern(
     entry.manifestPath,
@@ -232,9 +230,6 @@ for (const key of manifestDecisionSpecs) {
   ) {
     fail(`${path}.decision must be blocked when result is ${entry.result}`);
   }
-  if (!isTemplatePlaceholder(entry.result) && entry.result !== "passed") {
-    hasUnpassedSupportingManifestResult = true;
-  }
 }
 
 if (
@@ -246,7 +241,6 @@ if (
   );
 }
 
-let allBlockersClosedOrScopedOut = true;
 manifest.publicBetaBlockers.forEach((blocker, index) => {
   const path = `publicBetaBlockers[${index}]`;
   if (!blocker || typeof blocker !== "object" || Array.isArray(blocker)) {
@@ -259,9 +253,6 @@ manifest.publicBetaBlockers.forEach((blocker, index) => {
   if (!isTemplatePlaceholder(blocker.status)) {
     if (!allowedBlockerStatuses.has(blocker.status)) {
       fail(`${path}.status must be one of ${[...allowedBlockerStatuses].join(", ")}`);
-    }
-    if (!["closed", "scoped-out"].includes(blocker.status)) {
-      allBlockersClosedOrScopedOut = false;
     }
   }
   expectRequiredField(blocker.evidence, `${path}.evidence`);
@@ -279,36 +270,13 @@ if (!finalClaim || typeof finalClaim !== "object" || Array.isArray(finalClaim)) 
 }
 
 expectFilled(finalClaim.status, "finalPublicBetaReadinessClaim.status");
-if (!allowedClaimStatuses.has(finalClaim.status)) {
-  fail(
-    `finalPublicBetaReadinessClaim.status must be one of ${[
-      ...allowedClaimStatuses,
-    ].join(", ")}`,
-  );
+if (finalClaim.status !== "not-claimed") {
+  fail("finalPublicBetaReadinessClaim.status must remain not-claimed");
 }
 expectRequiredField(
   finalClaim.rationale,
   "finalPublicBetaReadinessClaim.rationale",
 );
-
-if (templateMode && finalClaim.status !== "not-claimed") {
-  fail("finalPublicBetaReadinessClaim.status must be not-claimed in template mode");
-}
-
-if (finalClaim.status === "claimed" && !allBlockersClosedOrScopedOut) {
-  fail(
-    "finalPublicBetaReadinessClaim.status must be not-claimed unless every public beta blocker is closed or scoped-out",
-  );
-}
-
-if (
-  finalClaim.status === "claimed" &&
-  (hasBlockedReviewDecision || hasUnpassedSupportingManifestResult)
-) {
-  fail(
-    "finalPublicBetaReadinessClaim.status must be not-claimed when any review decision is blocked or any supporting manifest result is failed, blocked, or not-run",
-  );
-}
 
 if (
   finalClaim.status === "not-claimed" &&
