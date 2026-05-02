@@ -492,10 +492,11 @@ Completed:
 - completed dependency audit policy slice in
   [`dependency-audit-policy.md`](dependency-audit-policy.md), distinguishing
   production and development dependencies, defining beta-blocking severity
-  rules, documenting the current Node CI audit, Tauri Rust crate CI check/test
-  coverage, and Rust advisory release-runner boundary, and listing required
-  release evidence and known gaps without claiming signed releases, final
-  security review, or production artifact publishing
+  rules, documenting the current Node CI audit, pinned `cargo-audit` CI coverage
+  for both Rust lockfiles with runtime RustSec advisory data, and Tauri Rust
+  crate CI check/test coverage, and listing required release evidence and known
+  gaps without claiming signed releases, final security review, or production
+  artifact publishing
 - completed Tauri Rust CI coverage slice: because the root Cargo workspace
   excludes `apps/client-tauri/src-tauri`, CI now runs locked `cargo check` and
   `cargo test` against that manifest while leaving native package builds,

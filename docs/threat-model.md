@@ -60,8 +60,9 @@ Out of scope for this document:
   lifecycle operations outside CI.
 - Future release pipeline to beta users: signing and package distribution are
   not yet implemented. Signed artifact policy and dependency audit policy are
-  documented, but native signing/publishing and Rust advisory checks remain
-  release-runner boundaries until deterministic tooling exists.
+  documented, but native signing and publishing remain release-runner
+  boundaries until signed artifacts exist. Rust advisory checks run in CI with
+  pinned commands and advisory data fetched at run time.
 
 ## Actors
 
@@ -186,8 +187,9 @@ Out of scope for this document:
   artifacts exist.
 - Dependency audit policy is documented in
   [dependency-audit-policy.md](dependency-audit-policy.md). Current CI runs the
-  Node beta dependency audit, but Rust advisory checks remain a
-  release-runner/manual boundary until deterministic tooling is added.
+  Node beta dependency audit and pinned `cargo-audit` checks for both Rust
+  lockfiles; final release evidence must still record the CI run date, commit
+  SHA, advisory tool output, and triage notes.
 - Real native media and input backends remain partial or planned on several
   platforms; unsupported states must continue to be visible and typed.
 - The threat model assumes local OS accounts protect config, profile, log, and

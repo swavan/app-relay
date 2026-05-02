@@ -1,9 +1,10 @@
 # Dependency Audit Policy
 
 This policy defines the dependency audit gate for AppRelay beta releases. It is
-a release-runner policy and deterministic CI boundary; it does not claim signed
-releases, final security review, or production artifact publishing are complete.
-The signed artifact gate is documented separately in
+a release-runner policy with pinned CI commands; live advisory feeds are still
+evaluated at run time. It does not claim signed releases, final security review,
+or production artifact publishing are complete. The signed artifact gate is
+documented separately in
 [`signed-release-artifact-policy.md`](signed-release-artifact-policy.md).
 
 ## Dependency Classes
@@ -76,6 +77,27 @@ from tooling that executes while producing beta artifacts.
 Lower-severity npm findings do not fail this CI step, but release runners still
 must triage and record them when they appear in local or release audit evidence.
 
+Rust dependencies are checked in CI with pinned `cargo-audit`:
+
+```sh
+cargo install cargo-audit --version 0.21.2 --locked
+cargo metadata --locked --format-version 1
+cargo audit --file Cargo.lock
+cargo metadata --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked --format-version 1
+cargo audit --file apps/client-tauri/src-tauri/Cargo.lock
+```
+
+This audits the checked-in Rust lockfiles for the root workspace and the Tauri
+client crate. It relies on RustSec advisory data available at run time, so the
+release evidence should record the CI run date, commit SHA, `cargo-audit`
+version, and any advisory ids reported by the tool.
+
+The Rust advisory CI job is intentionally stricter than the automatic beta
+blocker rule: any unignored RustSec advisory fails CI. If a non-production,
+moderate, or low-severity Rust advisory should not block beta, the release
+runner must add a reviewed ignore or policy adjustment with triage notes instead
+of bypassing the CI failure.
+
 The root Rust workspace excludes the Tauri Rust crate at
 `apps/client-tauri/src-tauri`, so CI covers that crate with locked manifest
 commands:
@@ -86,13 +108,8 @@ cargo test --manifest-path apps/client-tauri/src-tauri/Cargo.toml --locked
 ```
 
 These commands verify the crate builds and tests against its checked-in
-`Cargo.lock`; they do not perform Rust advisory scanning.
-
-Rust dependency advisories are not checked by CI yet. The repository has Rust
-lockfiles for the workspace and the Tauri client, but it does not currently pin
-or configure `cargo-audit`, `cargo-deny`, or an advisory database cache. Release
-runners must not infer that Rust dependencies have passed an automated advisory
-gate from a green CI run.
+`Cargo.lock`; Rust advisory scanning is performed by the separate `Rust
+Advisories` CI job.
 
 Do not add a new network-heavy Rust audit tool to CI unless the tool and
 advisory source are pinned or otherwise made reproducible enough for this
@@ -109,10 +126,8 @@ For each beta candidate, capture evidence with the commit SHA and date:
    `apps/client-tauri/package-lock.json`.
 4. CI run URL or local output showing locked `cargo check` and `cargo test`
    passed for `apps/client-tauri/src-tauri/Cargo.toml`.
-5. Rust audit boundary evidence for `Cargo.lock` and
-   `apps/client-tauri/src-tauri/Cargo.lock`:
-   either output from an approved Rust advisory tool, or a release note stating
-   that no deterministic Rust advisory gate is configured yet.
+5. CI run URL or local output showing pinned `cargo-audit` checked both
+   `Cargo.lock` and `apps/client-tauri/src-tauri/Cargo.lock`.
 6. Triage notes for every non-blocking advisory, including dependency class,
    severity, affected package, fixed version if available, and why it does not
    affect beta runtime or artifact generation.
@@ -125,10 +140,10 @@ package/version metadata.
 
 ## Known Gaps
 
-- Rust advisories are a release-runner/manual boundary until this repository
-  adopts deterministic `cargo-audit`, `cargo-deny`, or equivalent tooling.
 - `npm audit --audit-level=high` relies on npm advisory data at run time and
   does not audit Rust crates.
+- `cargo-audit` relies on RustSec advisory data at run time and does not audit
+  npm packages.
 - The npm CI gate treats high/critical advisories in the npm lockfile as beta
   blockers even when package metadata labels the package development-only,
   because current CI cannot prove whether that package executes during artifact
