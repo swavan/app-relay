@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "policyStatement": "Dependency audit manifests record release-runner evidence only; this template does not claim public beta readiness.",
+  "release": {
+    "commitSha": "<required: reviewed 40-character lowercase git commit sha>",
+    "auditDate": "<required: YYYY-MM-DD audit date>",
+    "ciRunUrl": "<required: CI run URL or release-runner audit record>"
+  },
+  "audits": {
+    "nodeNpm": {
+      "scope": "apps/client-tauri",
+      "command": "npm run audit:beta",
+      "result": "<required: passed, failed, blocked, or not-run>",
+      "toolEvidence": "<required: npm version or CI run evidence for npm audit>",
+      "runEvidence": "<required: CI step URL, run URL, or command output evidence for apps/client-tauri npm audit>",
+      "advisorySummary": "<required: advisory ids and severities, or state no high/critical advisories reported>"
+    },
+    "rustRoot": {
+      "lockfile": "Cargo.lock",
+      "command": "cargo audit --file Cargo.lock",
+      "result": "<required: passed, failed, blocked, or not-run>",
+      "toolEvidence": "<required: cargo-audit version or CI run evidence>",
+      "runEvidence": "<required: CI step URL, run URL, or command output evidence for root Cargo.lock>",
+      "advisorySummary": "<required: RustSec advisory ids and severities, or state no advisories reported>"
+    },
+    "rustTauri": {
+      "lockfile": "apps/client-tauri/src-tauri/Cargo.lock",
+      "command": "cargo audit --file apps/client-tauri/src-tauri/Cargo.lock",
+      "result": "<required: passed, failed, blocked, or not-run>",
+      "toolEvidence": "<required: cargo-audit version or CI run evidence>",
+      "runEvidence": "<required: CI step URL, run URL, or command output evidence for apps/client-tauri/src-tauri/Cargo.lock>",
+      "advisorySummary": "<required: RustSec advisory ids and severities, or state no advisories reported>"
+    }
+  },
+  "unresolvedHighCriticalProductionAdvisory": {
+    "decision": "<required: none or blocked>",
+    "rationale": "<required: state no unresolved production high/critical advisories, or beta is blocked pending remediation>"
+  }
+}

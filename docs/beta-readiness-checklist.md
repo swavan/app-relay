@@ -46,9 +46,11 @@ npm ci
 npm test
 npm run build
 npm run audit:beta
+npm run dependency-audit-evidence:check
 npm run package:check
 npm run release-artifacts:check
 npm run release-notes:check
+node scripts/check-dependency-audit-evidence-manifest.mjs ../../path/to/dependency-audit-evidence-manifest.json
 node scripts/check-release-artifact-manifest.mjs ../../path/to/release-artifact-manifest.json
 node scripts/check-beta-release-notes.mjs ../../path/to/release-notes.md
 ```
@@ -73,6 +75,9 @@ Additional evidence references:
 - [`release-artifact-manifest.template.json`](release-artifact-manifest.template.json)
   provides the deterministic checksum manifest shape checked by
   `npm run release-artifacts:check`.
+- [`dependency-audit-evidence-manifest.template.json`](dependency-audit-evidence-manifest.template.json)
+  provides the deterministic dependency audit evidence shape checked by
+  `npm run dependency-audit-evidence:check`.
 - [`install-upgrade-rollback-runbook.md`](install-upgrade-rollback-runbook.md)
   defines the manual service/package install, upgrade, uninstall, and rollback
   evidence boundary.

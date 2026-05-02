@@ -117,7 +117,24 @@ repository's release process.
 
 ## Release-Runner Evidence
 
-For each beta candidate, capture evidence with the commit SHA and date:
+For each beta candidate, start from
+[`dependency-audit-evidence-manifest.template.json`](dependency-audit-evidence-manifest.template.json).
+The checked template records audit evidence only; it does not claim public beta
+readiness. CI validates the template shape with:
+
+```sh
+cd apps/client-tauri
+npm run dependency-audit-evidence:check
+```
+
+A release runner can validate a filled manifest by running:
+
+```sh
+cd apps/client-tauri
+node scripts/check-dependency-audit-evidence-manifest.mjs ../../path/to/dependency-audit-evidence-manifest.json
+```
+
+For each beta candidate, capture evidence with the exact commit SHA and date:
 
 1. CI run URL showing the client `Audit beta dependencies` step passed.
 2. Local or CI output from `cd apps/client-tauri && npm run audit:beta`.
@@ -133,6 +150,12 @@ For each beta candidate, capture evidence with the commit SHA and date:
    affect beta runtime or artifact generation.
 7. A statement that there are no unresolved production `critical` or `high`
    findings. If that statement cannot be made, the beta release is blocked.
+
+The manifest checker enforces required release fields, expected audit commands
+and lockfile paths, audit result enums, tool/version or run evidence, and the
+unresolved production high/critical advisory decision. It does not run advisory
+tools, remediate dependencies, sign release artifacts, or replace the beta
+readiness checklist.
 
 Evidence must not include auth tokens, signing material, private registry
 credentials, or unpublished security exploit details beyond advisory ids and

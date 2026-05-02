@@ -117,6 +117,8 @@ jobs:
         run: npm run package:check
       - name: Check release artifact manifest template
         run: npm run release-artifacts:check
+      - name: Check dependency audit evidence manifest template
+        run: npm run dependency-audit-evidence:check
       - name: Check beta release notes template
         run: npm run release-notes:check
       - name: Restore workspace ownership
