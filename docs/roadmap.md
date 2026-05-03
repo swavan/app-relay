@@ -557,6 +557,50 @@ Acceptance criteria:
 - no critical or high production dependency vulnerabilities
 - all release-blocking bugs are closed or explicitly deferred
 
+In progress (real-media implementation, opt-in only, default builds and CI
+unaffected):
+
+- Phase A — macOS selected-window capture
+  - Phase A.0 (complete): cargo feature `macos-screencapturekit` is registered
+    on `apprelay-core` and forwarded by `apprelay-server`. With the feature on,
+    `ServerServices::for_current_platform` swaps the macOS video stream control
+    to a new `ScreenCaptureKitWindowRuntime` scaffold. The scaffold returns a
+    typed `ServiceUnavailable` on `start`/`resize` until the binding lands, so
+    enabling the feature is never a silent no-op. Default builds continue to
+    use `ControlPlaneMacosWindowCaptureRuntime`.
+  - Phase A.1 (complete): `ScreenCaptureKitWindowRuntime` now wraps the
+    [`screencapturekit`](https://crates.io/crates/screencapturekit) crate
+    (svtlabs) as an opt-in, target-gated dependency. `start` parses the
+    AppRelay selected-window id, looks up the matching `SCWindow` by
+    `CGWindowID`, builds an `SCContentFilter` and `SCStreamConfiguration`
+    sized to the requested viewport, and starts an `SCStream`. Each
+    delivered `CMSampleBuffer` advances the per-stream
+    `VideoCaptureRuntimeStatus` (frames_delivered, last_frame). `resize`
+    rebuilds the `SCStream` because the high-level wrapper does not expose
+    `updateConfiguration:`. `stop` tears down the stream and drops the
+    snapshot. ScreenCaptureKit failures are mapped to typed
+    `AppRelayError::PermissionDenied` /
+    `AppRelayError::ServiceUnavailable` /
+    `AppRelayError::NotFound`. Default Linux/Windows builds and CI are
+    unaffected (the dependency is `target."cfg(target_os = \"macos\")"`
+    and gated by the `macos-screencapturekit` feature). An integration
+    test in `crates/core/tests/macos_screencapturekit.rs` exercises a
+    real capture end-to-end and is `#[ignore]` because it requires
+    Screen Recording permission.
+- Phase B — VideoToolbox H.264 hardware encode (pending). Adds an additive
+  `payload: Vec<u8>` field to `EncodedVideoFrame` so existing in-memory tests
+  remain unchanged.
+- Phase C — Real SDP/ICE signaling over the existing line-based control plane
+  (pending). Base64-encodes SDP/ICE to keep the wire framing intact and adds
+  trickle-ICE operations.
+- Phase D — Server-side WebRTC peer (pending). Planned dependency: `str0m`
+  (sans-IO) over `webrtc-rs` for smaller transitive surface; `dependency-audit-
+  policy.md` will be updated in the same change because this lands real
+  crypto/SCTP/SRTP/ICE crates.
+- Phase E — Tauri client `RTCPeerConnection` and `<video>` decode in WKWebView
+  (pending). Updates Tauri capability/CSP files for WebRTC media.
+- Phase F — Mac-to-Mac end-to-end demo (pending).
+
 ## Release Rules
 
 - No phase should merge partially implemented user-facing features.

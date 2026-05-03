@@ -2,6 +2,8 @@
 
 mod audio_stream;
 mod input;
+#[cfg(all(feature = "macos-screencapturekit", target_os = "macos"))]
+mod macos_screencapturekit;
 mod video_stream;
 
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
@@ -14,6 +16,8 @@ pub use input::{
     map_point, InMemoryInputForwardingService, InputBackend, InputBackendService,
     InputForwardingService,
 };
+#[cfg(all(feature = "macos-screencapturekit", target_os = "macos"))]
+pub use macos_screencapturekit::ScreenCaptureKitWindowRuntime;
 pub use video_stream::{
     FakeMacosWindowCaptureRuntime, InMemoryVideoStreamService, MacosWindowCaptureResizeRequest,
     MacosWindowCaptureRuntime, MacosWindowCaptureRuntimeCalls, MacosWindowCaptureStartRequest,
