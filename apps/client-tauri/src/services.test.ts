@@ -5,8 +5,14 @@ import {
   hydrateActiveVideoStream,
   selectHydratedAudioStream,
   selectHydratedVideoStream,
+  type IceCandidateInput,
   type InputEvent,
   type RemoteService,
+  type SdpRole,
+  type SignalingDirection,
+  type SignalingMessage,
+  type SignalingPoll,
+  type SignalingSubmitAck,
   type ViewportSize
 } from "./services";
 import type {
@@ -184,6 +190,12 @@ function audioStreamFixture(
 }
 
 class FakeRemoteService implements RemoteService {
+  private signalingSequence = 0;
+  private signalingQueue: Record<SignalingDirection, SignalingMessage[]> = {
+    offerToAnswerer: [],
+    answererToOfferer: []
+  };
+
   async health() {
     return {
       service: "apprelay-server",
@@ -691,6 +703,84 @@ class FakeRemoteService implements RemoteService {
       state: "starting" as const
     };
   }
+
+  private nextSignalingMessage(
+    direction: SignalingDirection,
+    envelope: SignalingMessage["envelope"]
+  ): SignalingSubmitAck {
+    this.signalingSequence += 1;
+    const sequence = this.signalingSequence;
+    this.signalingQueue[direction].push({ sequence, direction, envelope });
+    return {
+      sessionId: "session-1",
+      direction,
+      sequence,
+      envelopeKind: envelope.kind,
+      payloadByteLength:
+        envelope.kind === "iceCandidate"
+          ? envelope.candidate.length
+          : envelope.kind === "endOfCandidates"
+            ? 0
+            : envelope.sdp.length
+    };
+  }
+
+  async submitSdpOffer(
+    sessionId: string,
+    sdp: string,
+    role: SdpRole
+  ): Promise<SignalingSubmitAck> {
+    return {
+      ...this.nextSignalingMessage("offerToAnswerer", { kind: "sdpOffer", sdp, role }),
+      sessionId
+    };
+  }
+
+  async submitSdpAnswer(sessionId: string, sdp: string): Promise<SignalingSubmitAck> {
+    return {
+      ...this.nextSignalingMessage("answererToOfferer", { kind: "sdpAnswer", sdp }),
+      sessionId
+    };
+  }
+
+  async submitIceCandidate(
+    sessionId: string,
+    direction: SignalingDirection,
+    candidate: IceCandidateInput
+  ): Promise<SignalingSubmitAck> {
+    return {
+      ...this.nextSignalingMessage(direction, {
+        kind: "iceCandidate",
+        candidate: candidate.candidate,
+        sdpMid: candidate.sdpMid,
+        sdpMlineIndex: candidate.sdpMlineIndex
+      }),
+      sessionId
+    };
+  }
+
+  async signalEndOfCandidates(
+    sessionId: string,
+    direction: SignalingDirection
+  ): Promise<SignalingSubmitAck> {
+    return {
+      ...this.nextSignalingMessage(direction, { kind: "endOfCandidates" }),
+      sessionId
+    };
+  }
+
+  async pollSignaling(
+    sessionId: string,
+    direction: SignalingDirection,
+    sinceSequence: number
+  ): Promise<SignalingPoll> {
+    const messages = this.signalingQueue[direction].filter(
+      (message) => message.sequence > sinceSequence
+    );
+    const lastSequence =
+      messages.length > 0 ? messages[messages.length - 1].sequence : sinceSequence;
+    return { sessionId, direction, lastSequence, messages };
+  }
 }
 
 describe("RemoteService contract", () => {
@@ -1175,5 +1265,59 @@ describe("RemoteService contract", () => {
       id: "audio-stream-1",
       state: "stopped"
     });
+  });
+
+  it("submits SDP/ICE envelopes and polls them with sequence resumption", async () => {
+    const service = new FakeRemoteService();
+
+    const offerAck = await service.submitSdpOffer("session-1", "v=0 offer", "offerer");
+    expect(offerAck).toMatchObject({
+      sessionId: "session-1",
+      direction: "offerToAnswerer",
+      sequence: 1,
+      envelopeKind: "sdpOffer",
+      payloadByteLength: 9
+    });
+
+    const answerAck = await service.submitSdpAnswer("session-1", "v=0 answer");
+    expect(answerAck).toMatchObject({
+      sequence: 2,
+      direction: "answererToOfferer",
+      envelopeKind: "sdpAnswer"
+    });
+
+    const candidateAck = await service.submitIceCandidate(
+      "session-1",
+      "offerToAnswerer",
+      {
+        candidate: "candidate:1 1 udp 2113937151 192.0.2.1 51234 typ host",
+        sdpMid: "video",
+        sdpMlineIndex: 0
+      }
+    );
+    expect(candidateAck.sequence).toBe(3);
+
+    const endAck = await service.signalEndOfCandidates("session-1", "offerToAnswerer");
+    expect(endAck.envelopeKind).toBe("endOfCandidates");
+
+    const offerPoll = await service.pollSignaling("session-1", "offerToAnswerer", 0);
+    expect(offerPoll.messages.map((message) => message.sequence)).toEqual([1, 3, 4]);
+    expect(offerPoll.lastSequence).toBe(4);
+    expect(offerPoll.messages[0].envelope).toMatchObject({
+      kind: "sdpOffer",
+      role: "offerer"
+    });
+    expect(offerPoll.messages[2].envelope).toMatchObject({ kind: "endOfCandidates" });
+
+    const resumed = await service.pollSignaling("session-1", "offerToAnswerer", 1);
+    expect(resumed.messages.map((message) => message.sequence)).toEqual([3, 4]);
+
+    const drained = await service.pollSignaling("session-1", "offerToAnswerer", 99);
+    expect(drained.messages).toEqual([]);
+    expect(drained.lastSequence).toBe(99);
+
+    const answerPoll = await service.pollSignaling("session-1", "answererToOfferer", 0);
+    expect(answerPoll.messages).toHaveLength(1);
+    expect(answerPoll.messages[0].envelope).toMatchObject({ kind: "sdpAnswer" });
   });
 });

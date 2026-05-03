@@ -3,15 +3,17 @@ use apprelay_protocol::{
     ActiveInputFocus, AppRelayError, AudioBackendFailureKind, AudioBackendKind, AudioBackendLeg,
     AudioBackendMediaStats, AudioBackendReadiness, AudioStreamSession, AudioStreamState,
     ButtonAction, ClientPoint, ControlAuth, ControlError, CreateSessionRequest, Feature,
-    ForwardInputRequest, InputDeliveryStatus, InputEvent, KeyAction, KeyModifiers,
-    LaunchIntentStatus, MappedInputEvent, MicrophoneMode, NegotiateVideoStreamRequest, Platform,
-    PointerButton, ReconnectVideoStreamRequest, ResizeIntentStatus, ResizeSessionRequest,
-    ServerPoint, ServerVersion, SessionState, StartAudioStreamRequest, StartVideoStreamRequest,
-    StopAudioStreamRequest, StopVideoStreamRequest, UpdateAudioStreamRequest,
-    VideoCaptureRuntimeState, VideoCaptureScope, VideoEncodingPipelineState,
-    VideoResolutionAdaptationReason, VideoStreamFailureKind, VideoStreamNegotiationState,
-    VideoStreamRecoveryAction, VideoStreamSignalingKind, VideoStreamState, ViewportSize,
-    WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription, WindowSelectionMethod,
+    ForwardInputRequest, IceCandidatePayload, InputDeliveryStatus, InputEvent, KeyAction,
+    KeyModifiers, LaunchIntentStatus, MappedInputEvent, MicrophoneMode,
+    NegotiateVideoStreamRequest, Platform, PointerButton, PollSignalingRequest,
+    ReconnectVideoStreamRequest, ResizeIntentStatus, ResizeSessionRequest, SdpRole, ServerPoint,
+    ServerVersion, SessionState, SignalingDirection, SignalingEnvelope, StartAudioStreamRequest,
+    StartVideoStreamRequest, StopAudioStreamRequest, StopVideoStreamRequest,
+    SubmitSignalingRequest, UpdateAudioStreamRequest, VideoCaptureRuntimeState, VideoCaptureScope,
+    VideoEncodingPipelineState, VideoResolutionAdaptationReason, VideoStreamFailureKind,
+    VideoStreamNegotiationState, VideoStreamRecoveryAction, VideoStreamSignalingKind,
+    VideoStreamState, ViewportSize, WebRtcIceCandidate, WebRtcSdpType, WebRtcSessionDescription,
+    WindowSelectionMethod,
 };
 use apprelay_server::{ServerControlPlane, ServerServices};
 
@@ -2445,4 +2447,260 @@ fn control_plane_stops_audio_stream_when_session_closes() {
         status.health.message.as_deref(),
         Some("application session session-1 closed")
     );
+}
+
+#[test]
+fn control_plane_signaling_round_trip_isolates_directions() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "test"),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+
+    let offer_ack = control_plane
+        .submit_signaling(
+            &auth,
+            SubmitSignalingRequest {
+                session_id: session.id.clone(),
+                direction: SignalingDirection::OfferToAnswerer,
+                envelope: SignalingEnvelope::SdpOffer {
+                    sdp: "offer-sdp".to_string(),
+                    role: SdpRole::Offerer,
+                },
+            },
+        )
+        .expect("submit offer");
+    assert_eq!(offer_ack.sequence, 1);
+
+    let answer_ack = control_plane
+        .submit_signaling(
+            &auth,
+            SubmitSignalingRequest {
+                session_id: session.id.clone(),
+                direction: SignalingDirection::AnswererToOfferer,
+                envelope: SignalingEnvelope::SdpAnswer {
+                    sdp: "answer-sdp".to_string(),
+                },
+            },
+        )
+        .expect("submit answer");
+    assert_eq!(answer_ack.sequence, 2);
+
+    let offer_poll = control_plane
+        .poll_signaling(
+            &auth,
+            PollSignalingRequest {
+                session_id: session.id.clone(),
+                direction: SignalingDirection::OfferToAnswerer,
+                since_sequence: 0,
+            },
+        )
+        .expect("poll offer side");
+    let answer_poll = control_plane
+        .poll_signaling(
+            &auth,
+            PollSignalingRequest {
+                session_id: session.id.clone(),
+                direction: SignalingDirection::AnswererToOfferer,
+                since_sequence: 0,
+            },
+        )
+        .expect("poll answerer side");
+
+    assert_eq!(offer_poll.messages.len(), 1);
+    assert!(matches!(
+        offer_poll.messages[0].envelope,
+        SignalingEnvelope::SdpOffer { .. }
+    ));
+    assert_eq!(answer_poll.messages.len(), 1);
+    assert!(matches!(
+        answer_poll.messages[0].envelope,
+        SignalingEnvelope::SdpAnswer { .. }
+    ));
+}
+
+#[test]
+fn control_plane_signaling_close_session_drops_queue_and_resets_sequence() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "test"),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    control_plane
+        .submit_signaling(
+            &auth,
+            SubmitSignalingRequest {
+                session_id: session.id.clone(),
+                direction: SignalingDirection::OfferToAnswerer,
+                envelope: SignalingEnvelope::IceCandidate(IceCandidatePayload {
+                    candidate: "candidate:foo".to_string(),
+                    sdp_mid: "video".to_string(),
+                    sdp_mline_index: 0,
+                }),
+            },
+        )
+        .expect("submit candidate");
+
+    control_plane
+        .close_session(&auth, &session.id)
+        .expect("close session");
+
+    let new_session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("recreate session");
+
+    let poll = control_plane
+        .poll_signaling(
+            &auth,
+            PollSignalingRequest {
+                session_id: new_session.id.clone(),
+                direction: SignalingDirection::OfferToAnswerer,
+                since_sequence: 0,
+            },
+        )
+        .expect("poll after close");
+    assert!(poll.messages.is_empty());
+
+    let resubmit = control_plane
+        .submit_signaling(
+            &auth,
+            SubmitSignalingRequest {
+                session_id: new_session.id,
+                direction: SignalingDirection::OfferToAnswerer,
+                envelope: SignalingEnvelope::EndOfCandidates,
+            },
+        )
+        .expect("resubmit after close");
+    assert_eq!(resubmit.sequence, 1);
+}
+
+#[test]
+fn control_plane_signaling_denies_non_owner_client() {
+    let mut config = ServerConfig::local("correct-token");
+    config.authorized_clients = vec![
+        apprelay_core::AuthorizedClient::new("client-1", "Client One"),
+        apprelay_core::AuthorizedClient::new("client-2", "Client Two"),
+    ];
+    let mut control_plane =
+        ServerControlPlane::new(ServerServices::new(Platform::Linux, "test"), config);
+    let owner_auth = ControlAuth::with_client_id("correct-token", "client-1");
+    let other_auth = ControlAuth::with_client_id("correct-token", "client-2");
+    let session = control_plane
+        .create_session(
+            &owner_auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create owner session");
+
+    let submit_response = control_plane.submit_signaling(
+        &other_auth,
+        SubmitSignalingRequest {
+            session_id: session.id.clone(),
+            direction: SignalingDirection::OfferToAnswerer,
+            envelope: SignalingEnvelope::EndOfCandidates,
+        },
+    );
+    let poll_response = control_plane.poll_signaling(
+        &other_auth,
+        PollSignalingRequest {
+            session_id: session.id.clone(),
+            direction: SignalingDirection::OfferToAnswerer,
+            since_sequence: 0,
+        },
+    );
+
+    assert_eq!(
+        submit_response,
+        Err(ControlError::Service(AppRelayError::PermissionDenied(
+            "client client-2 is not authorized for session session-1".to_string()
+        )))
+    );
+    assert_eq!(
+        poll_response,
+        Err(ControlError::Service(AppRelayError::PermissionDenied(
+            "client client-2 is not authorized for session session-1".to_string()
+        )))
+    );
+}
+
+#[test]
+fn control_plane_signaling_records_audit_event_without_payload_bytes() {
+    let mut control_plane = ServerControlPlane::new(
+        ServerServices::new(Platform::Linux, "test"),
+        paired_server_config(),
+    );
+    let auth = paired_auth();
+    let session = control_plane
+        .create_session(
+            &auth,
+            CreateSessionRequest {
+                application_id: "terminal".to_string(),
+                viewport: ViewportSize::new(1280, 720),
+            },
+        )
+        .expect("create session");
+    let mut events = InMemoryEventSink::default();
+
+    control_plane
+        .submit_signaling_with_audit(
+            &auth,
+            SubmitSignalingRequest {
+                session_id: session.id.clone(),
+                direction: SignalingDirection::AnswererToOfferer,
+                envelope: SignalingEnvelope::IceCandidate(IceCandidatePayload {
+                    candidate: "candidate:secret-leak-attempt".to_string(),
+                    sdp_mid: "video".to_string(),
+                    sdp_mline_index: 0,
+                }),
+            },
+            &mut events,
+        )
+        .expect("submit candidate with audit");
+    control_plane
+        .poll_signaling_with_audit(
+            &auth,
+            PollSignalingRequest {
+                session_id: session.id,
+                direction: SignalingDirection::AnswererToOfferer,
+                since_sequence: 0,
+            },
+            &mut events,
+        )
+        .expect("poll candidate with audit");
+
+    let recorded = events.events();
+    assert!(matches!(
+        recorded[0],
+        ServerEvent::SignalingEnvelopeSubmitted { .. }
+    ));
+    assert!(matches!(recorded[1], ServerEvent::SignalingPolled { .. }));
+    let serialized = format!("{recorded:?}");
+    assert!(!serialized.contains("secret-leak-attempt"));
 }

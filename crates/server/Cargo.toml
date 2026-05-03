@@ -7,6 +7,7 @@ repository.workspace = true
 [dependencies]
 apprelay-core = { path = "../core" }
 apprelay-protocol = { path = "../protocol" }
+base64 = "0.22"
 
 [features]
 default = []

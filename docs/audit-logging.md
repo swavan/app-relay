@@ -35,6 +35,14 @@ Current audit-relevant events cover:
   id, client id, selected window id, and mute booleans where relevant
 - direct input focus enable and disable success from focus/blur requests, with
   session id, client id, and selected window id
+- signaling envelope submit success, with session id, client id, direction,
+  envelope kind, monotonic per-session sequence number, decoded payload byte
+  length, and `sdpMid` for ICE candidate envelopes only
+- signaling envelope submit failure caused by service-layer validation
+  (invalid request) after authorization, with session id, client id, and the
+  user-facing reason (no payload bytes)
+- signaling poll success, with session id, client id, direction, requested
+  `sinceSequence`, returned `lastSequence`, and message count
 - SSH tunnel start, stop, and failure
 - server config load and save
 
@@ -46,14 +54,20 @@ Audit events must not include:
 - profile auth tokens
 - media contents, encoded frames, audio samples, or signaling payload bodies
 - raw keyboard text, pointer coordinates, or other input payload contents
+- raw SDP, ICE candidate strings, or any base64-encoded signaling payload bytes
 
 Pairing, session, stream, input focus, audio lifecycle, and revocation events
 may include stable identifiers, operation names, application ids, paired client
 ids, pairing request ids, peer addresses, failure reasons, viewport dimensions,
-selected window ids, and audio mute booleans. Unauthorized bad-token pairing
-requests remain only `request_rejected` events by operation name and do not log
-caller-supplied client details. File output percent-encodes unsafe event field
-bytes so spaces and control characters do not create additional fields.
+selected window ids, and audio mute booleans. Signaling envelope submit and
+poll events may additionally include the signaling direction, envelope kind,
+monotonic per-session sequence numbers, decoded payload byte length, message
+count, and the `sdpMid` value for ICE candidate envelopes; the SDP body, ICE
+candidate string, and base64-encoded payload bytes are never written.
+Unauthorized bad-token pairing requests remain only `request_rejected` events
+by operation name and do not log caller-supplied client details. File output
+percent-encodes unsafe event field bytes so spaces and control characters do
+not create additional fields.
 
 ## Known Gaps
 

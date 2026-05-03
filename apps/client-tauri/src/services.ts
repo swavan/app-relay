@@ -133,6 +133,47 @@ export type ActiveInputFocus = {
   selectedWindowId: string;
 };
 
+export type SignalingDirection = "offerToAnswerer" | "answererToOfferer";
+export type SdpRole = "offerer" | "answerer";
+
+export type SignalingEnvelope =
+  | { kind: "sdpOffer"; sdp: string; role: SdpRole }
+  | { kind: "sdpAnswer"; sdp: string }
+  | {
+      kind: "iceCandidate";
+      candidate: string;
+      sdpMid: string;
+      sdpMlineIndex: number;
+    }
+  | { kind: "endOfCandidates" };
+
+export type SignalingMessage = {
+  sequence: number;
+  direction: SignalingDirection;
+  envelope: SignalingEnvelope;
+};
+
+export type SignalingPoll = {
+  sessionId: string;
+  direction: SignalingDirection;
+  lastSequence: number;
+  messages: SignalingMessage[];
+};
+
+export type SignalingSubmitAck = {
+  sessionId: string;
+  direction: SignalingDirection;
+  sequence: number;
+  envelopeKind: string;
+  payloadByteLength: number;
+};
+
+export type IceCandidateInput = {
+  candidate: string;
+  sdpMid: string;
+  sdpMlineIndex: number;
+};
+
 export interface RemoteService {
   health(): Promise<HealthStatus>;
   capabilities(): Promise<Capability[]>;
@@ -165,6 +206,26 @@ export interface RemoteService {
     clientIceCandidates: WebRtcIceCandidate[]
   ): Promise<VideoStreamSession>;
   videoStreamStatus(streamId: string): Promise<VideoStreamSession>;
+  submitSdpOffer(
+    sessionId: string,
+    sdp: string,
+    role: SdpRole
+  ): Promise<SignalingSubmitAck>;
+  submitSdpAnswer(sessionId: string, sdp: string): Promise<SignalingSubmitAck>;
+  submitIceCandidate(
+    sessionId: string,
+    direction: SignalingDirection,
+    candidate: IceCandidateInput
+  ): Promise<SignalingSubmitAck>;
+  signalEndOfCandidates(
+    sessionId: string,
+    direction: SignalingDirection
+  ): Promise<SignalingSubmitAck>;
+  pollSignaling(
+    sessionId: string,
+    direction: SignalingDirection,
+    sinceSequence: number
+  ): Promise<SignalingPoll>;
 }
 
 function streamHydrationRank(stream: VideoStreamSession) {
@@ -417,6 +478,71 @@ export class TauriRemoteService implements RemoteService {
       authToken: this.authToken,
       clientId: this.clientId,
       streamId
+    });
+  }
+
+  async submitSdpOffer(
+    sessionId: string,
+    sdp: string,
+    role: SdpRole
+  ): Promise<SignalingSubmitAck> {
+    return invoke<SignalingSubmitAck>("submit_sdp_offer", {
+      authToken: this.authToken,
+      clientId: this.clientId,
+      sessionId,
+      role,
+      sdp
+    });
+  }
+
+  async submitSdpAnswer(sessionId: string, sdp: string): Promise<SignalingSubmitAck> {
+    return invoke<SignalingSubmitAck>("submit_sdp_answer", {
+      authToken: this.authToken,
+      clientId: this.clientId,
+      sessionId,
+      sdp
+    });
+  }
+
+  async submitIceCandidate(
+    sessionId: string,
+    direction: SignalingDirection,
+    candidate: IceCandidateInput
+  ): Promise<SignalingSubmitAck> {
+    return invoke<SignalingSubmitAck>("submit_ice_candidate", {
+      authToken: this.authToken,
+      clientId: this.clientId,
+      sessionId,
+      direction,
+      candidate: candidate.candidate,
+      sdpMid: candidate.sdpMid,
+      sdpMlineIndex: candidate.sdpMlineIndex
+    });
+  }
+
+  async signalEndOfCandidates(
+    sessionId: string,
+    direction: SignalingDirection
+  ): Promise<SignalingSubmitAck> {
+    return invoke<SignalingSubmitAck>("signal_end_of_candidates", {
+      authToken: this.authToken,
+      clientId: this.clientId,
+      sessionId,
+      direction
+    });
+  }
+
+  async pollSignaling(
+    sessionId: string,
+    direction: SignalingDirection,
+    sinceSequence: number
+  ): Promise<SignalingPoll> {
+    return invoke<SignalingPoll>("poll_signaling", {
+      authToken: this.authToken,
+      clientId: this.clientId,
+      sessionId,
+      direction,
+      sinceSequence
     });
   }
 }
