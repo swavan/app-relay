@@ -702,13 +702,44 @@ unaffected):
     `EndOfCandidates` consumed signal is a documented no-op. ICE-lite is
     enabled only on the answerer (server topology) because str0m rejects
     SDP exchanges where both peers are ICE-lite.
-  - Phase D.1.1 (pending): wire the peer into `ServerControlPlane` so a
-    video-stream start invokes `peer.start`, signaling submissions forward
-    to `peer.consume_signaling`, and encoded frames from the capture/encode
-    pipeline flow through `peer.push_encoded_frame`. Reintroduce the
-    `WebRtcPeerStarted`, `WebRtcPeerStopped`,
-    `WebRtcPeerSignalingConsumed`, `WebRtcPeerOutboundFrame`, and
-    `WebRtcPeerRejected` `ServerEvent` variants alongside their emit sites.
+  - Phase D.1.1.0 (complete): wired the peer into `ServerControlPlane`'s
+    video-stream and signaling flows. `start_video_stream` now also calls
+    `peer.start(session_id, stream_id, Answerer)` and emits
+    `ServerEvent::WebRtcPeerStarted`; on peer error the video stream is
+    rolled back via `services.stop_video_stream` and a typed
+    `AppRelayError` is returned alongside a `WebRtcPeerRejected` audit
+    event. `stop_video_stream` calls `peer.stop` and emits
+    `WebRtcPeerStopped`. `submit_signaling` only forwards
+    `OfferToAnswerer` envelopes into `peer.consume_signaling` (the
+    `AnswererToOfferer` direction is server→client polling traffic) and
+    emits `WebRtcPeerSignalingConsumed` with the envelope kind. The peer's
+    `take_outbound_signaling` queue is drained immediately and re-injected
+    via `services.submit_signaling` with direction `AnswererToOfferer` so
+    the client's existing `poll-signaling` flow delivers the answer SDP
+    and any locally produced ICE candidates; each injection emits a normal
+    `SignalingEnvelopeSubmitted` audit event with `client_id="server"` to
+    keep the audit log complete. The four `WebRtcPeerStarted`,
+    `WebRtcPeerStopped`, `WebRtcPeerSignalingConsumed`, and
+    `WebRtcPeerRejected` variants are reintroduced on `ServerEvent` with
+    matching `format_event` arms (no SDP/ICE/RTP bytes, no tokens).
+    Inner methods (`start_video_stream_inner`, `stop_video_stream_inner`,
+    `submit_signaling_inner`) now take `&mut dyn EventSink` so the
+    rollback path can record `WebRtcPeerRejected` directly; non-audit
+    public methods forward a `NullEventSink`. Default builds (in-memory
+    no-op peer) and `webrtc-peer`-feature builds (str0m peer) both pass
+    the new tests, including a feature-gated round-trip that submits an
+    SDP offer in `OfferToAnswerer` and asserts a real `SdpAnswer` shows
+    up in the `AnswererToOfferer` queue. Explicit non-goals: encoded
+    video frames are NOT yet pushed into `peer.push_encoded_frame`
+    (D.1.1.1), session-close cascading peer.stop is not yet wired
+    (D.1.1.1), and `WebRtcPeerOutboundFrame` is intentionally not added
+    until its emit site exists.
+  - Phase D.1.1.1 (pending): wire the encoded-frame pipeline so frames
+    produced by the capture + encoder bridge flow through
+    `peer.push_encoded_frame`, and add the matching
+    `WebRtcPeerOutboundFrame` `ServerEvent` variant. Cascade `peer.stop`
+    when `close_session` / `close_sessions_owned_by` tears down active
+    streams.
   - Phase D.1.2 (pending): UDP socket runtime that actually transmits the
     `RtpPacketBatch`es `take_outbound_rtp` produces and feeds inbound
     datagrams back into `Rtc::handle_input(Input::Receive(...))`.

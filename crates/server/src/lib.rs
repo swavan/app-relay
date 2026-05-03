@@ -56,10 +56,8 @@ pub struct ServerServices {
     signaling: SignalingControl,
     /// Server-side WebRTC peer. Default: `InMemoryWebRtcPeer` no-op.
     /// With the `webrtc-peer` feature on, swapped for the
-    /// `Str0mWebRtcPeer` scaffold (Phase D.0). Phase D.1 will expand
-    /// the scaffold into a real `str0m` integration that reads from
-    /// here, which is why the field is allowed to be currently unread.
-    #[allow(dead_code)]
+    /// `Str0mWebRtcPeer` scaffold (Phase D.0). Phase D.1.1 wires it
+    /// into the start/stop/submit-signaling control-plane flows.
     webrtc_peer: Mutex<Box<dyn apprelay_core::WebRtcPeer>>,
     platform: Platform,
     version: String,
@@ -530,6 +528,15 @@ pub struct ServerControlPlane {
     session_owners: HashMap<String, String>,
 }
 
+/// Zero-cost [`EventSink`] used by the non-audit public control-plane
+/// entry points. Lets the inner methods always emit through a sink
+/// without forcing every caller to thread one through.
+struct NullEventSink;
+
+impl EventSink for NullEventSink {
+    fn record(&mut self, _event: ServerEvent) {}
+}
+
 impl std::fmt::Debug for ServerControlPlane {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -839,8 +846,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StartVideoStreamRequest,
     ) -> ControlResult<VideoStreamSession> {
-        self.start_video_stream_inner(auth, request)
-            .map(|(stream, _)| stream)
+        self.start_video_stream_inner(auth, request, &mut NullEventSink)
     }
 
     pub fn start_video_stream_with_audit(
@@ -849,23 +855,61 @@ impl ServerControlPlane {
         request: StartVideoStreamRequest,
         events: &mut impl EventSink,
     ) -> ControlResult<VideoStreamSession> {
-        let (stream, event) = self.start_video_stream_inner(auth, request)?;
-        events.record(event);
-        Ok(stream)
+        self.start_video_stream_inner(auth, request, events)
     }
 
     fn start_video_stream_inner(
         &mut self,
         auth: &ControlAuth,
         request: StartVideoStreamRequest,
-    ) -> ControlResult<(VideoStreamSession, ServerEvent)> {
+        events: &mut dyn EventSink,
+    ) -> ControlResult<VideoStreamSession> {
         let client = self.authorize_session_owner(auth, &request.session_id)?;
         let stream = self
             .services
             .start_video_stream(request)
             .map_err(ControlError::from)?;
-        let event = video_stream_started_event(&client.id, &stream);
-        Ok((stream, event))
+        events.record(video_stream_started_event(&client.id, &stream));
+
+        let peer_result = {
+            let mut peer = self
+                .services
+                .webrtc_peer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            (**peer).start(
+                &stream.session_id,
+                &stream.id,
+                apprelay_protocol::WebRtcPeerRole::Answerer,
+            )
+        };
+        match peer_result {
+            Ok(()) => {
+                events.record(ServerEvent::WebRtcPeerStarted {
+                    session_id: stream.session_id.clone(),
+                    stream_id: stream.id.clone(),
+                    role: apprelay_protocol::WebRtcPeerRole::Answerer
+                        .label()
+                        .to_string(),
+                    paired_client: client.id.clone(),
+                });
+                Ok(stream)
+            }
+            Err(error) => {
+                // Roll back so the server doesn't expose a stream the
+                // peer can't service. The rollback is best-effort; if
+                // it fails, we still surface the original peer error.
+                let _ = self.services.stop_video_stream(StopVideoStreamRequest {
+                    stream_id: stream.id.clone(),
+                });
+                events.record(ServerEvent::WebRtcPeerRejected {
+                    session_id: stream.session_id,
+                    paired_client: client.id,
+                    reason: error.user_message(),
+                });
+                Err(ControlError::Service(error))
+            }
+        }
     }
 
     pub fn stop_video_stream(
@@ -873,8 +917,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: StopVideoStreamRequest,
     ) -> ControlResult<VideoStreamSession> {
-        self.stop_video_stream_inner(auth, request)
-            .map(|(stream, _)| stream)
+        self.stop_video_stream_inner(auth, request, &mut NullEventSink)
     }
 
     pub fn stop_video_stream_with_audit(
@@ -883,23 +926,48 @@ impl ServerControlPlane {
         request: StopVideoStreamRequest,
         events: &mut impl EventSink,
     ) -> ControlResult<VideoStreamSession> {
-        let (stream, event) = self.stop_video_stream_inner(auth, request)?;
-        events.record(event);
-        Ok(stream)
+        self.stop_video_stream_inner(auth, request, events)
     }
 
     fn stop_video_stream_inner(
         &mut self,
         auth: &ControlAuth,
         request: StopVideoStreamRequest,
-    ) -> ControlResult<(VideoStreamSession, ServerEvent)> {
+        events: &mut dyn EventSink,
+    ) -> ControlResult<VideoStreamSession> {
         let client = self.authorize_video_stream_owner(auth, &request.stream_id)?;
         let stream = self
             .services
             .stop_video_stream(request)
             .map_err(ControlError::from)?;
-        let event = video_stream_stopped_event(&client.id, &stream);
-        Ok((stream, event))
+        events.record(video_stream_stopped_event(&client.id, &stream));
+
+        let peer_result = {
+            let mut peer = self
+                .services
+                .webrtc_peer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            (**peer).stop(&stream.session_id, &stream.id)
+        };
+        match peer_result {
+            Ok(()) => {
+                events.record(ServerEvent::WebRtcPeerStopped {
+                    session_id: stream.session_id.clone(),
+                    stream_id: stream.id.clone(),
+                    paired_client: client.id.clone(),
+                });
+                Ok(stream)
+            }
+            Err(error) => {
+                events.record(ServerEvent::WebRtcPeerRejected {
+                    session_id: stream.session_id,
+                    paired_client: client.id,
+                    reason: error.user_message(),
+                });
+                Err(ControlError::Service(error))
+            }
+        }
     }
 
     pub fn reconnect_video_stream(
@@ -1102,8 +1170,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: SubmitSignalingRequest,
     ) -> ControlResult<SignalingSubmitAck> {
-        self.submit_signaling_inner(auth, request)
-            .map(|(ack, _)| ack)
+        self.submit_signaling_inner(auth, request, &mut NullEventSink)
     }
 
     pub fn submit_signaling_with_audit(
@@ -1112,34 +1179,129 @@ impl ServerControlPlane {
         request: SubmitSignalingRequest,
         events: &mut impl EventSink,
     ) -> ControlResult<SignalingSubmitAck> {
-        let (ack, event) = self.submit_signaling_inner(auth, request)?;
-        events.record(event);
-        Ok(ack)
+        self.submit_signaling_inner(auth, request, events)
     }
 
     fn submit_signaling_inner(
         &mut self,
         auth: &ControlAuth,
         request: SubmitSignalingRequest,
-    ) -> ControlResult<(SignalingSubmitAck, ServerEvent)> {
+        events: &mut dyn EventSink,
+    ) -> ControlResult<SignalingSubmitAck> {
         let client = self.authorize_existing_session_owner(auth, &request.session_id)?;
         let sdp_mid = request.envelope.sdp_mid_for_audit().map(str::to_string);
         let session_id = request.session_id.clone();
-        let direction_label = request.direction.label().to_string();
+        let direction = request.direction;
+        let direction_label = direction.label().to_string();
+        // Clone the envelope before forwarding into the signaling
+        // service: the peer also needs a copy when this is a
+        // client-submitted (`OfferToAnswerer`) envelope.
+        let envelope_for_peer = if direction == SignalingDirection::OfferToAnswerer {
+            Some(request.envelope.clone())
+        } else {
+            None
+        };
         let ack = self
             .services
             .submit_signaling(request)
             .map_err(ControlError::from)?;
-        let event = ServerEvent::SignalingEnvelopeSubmitted {
-            session_id,
+        events.record(ServerEvent::SignalingEnvelopeSubmitted {
+            session_id: session_id.clone(),
             client_id: client.id.clone(),
             direction: direction_label,
             envelope_kind: ack.envelope_kind.clone(),
             sequence: ack.sequence,
             payload_byte_length: ack.payload_byte_length,
             sdp_mid,
+        });
+
+        // Polling-direction envelopes (`AnswererToOfferer`) are
+        // server-produced traffic the client polls — never fed back
+        // into the peer.
+        let Some(envelope) = envelope_for_peer else {
+            return Ok(ack);
         };
-        Ok((ack, event))
+
+        let consume_result = {
+            let mut peer = self
+                .services
+                .webrtc_peer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            (**peer).consume_signaling(&session_id, envelope)
+        };
+        match consume_result {
+            Ok(()) => {
+                events.record(ServerEvent::WebRtcPeerSignalingConsumed {
+                    session_id: session_id.clone(),
+                    paired_client: client.id.clone(),
+                    envelope_kind: ack.envelope_kind.clone(),
+                });
+            }
+            Err(error) => {
+                // The envelope is already in the signaling queue but
+                // the peer rejected it. Surface the failure to the
+                // caller so it can retry/abort. The leftover queue
+                // entry will be drained by future polls — accepted
+                // for D.1.1.0; revisit when adding richer rollback.
+                events.record(ServerEvent::WebRtcPeerRejected {
+                    session_id,
+                    paired_client: client.id,
+                    reason: error.user_message(),
+                });
+                return Err(ControlError::Service(error));
+            }
+        }
+
+        // Drain any answerer-side envelopes the peer produced (SDP
+        // answer, local ICE candidates) and re-inject them as
+        // `AnswererToOfferer` traffic so the client's existing
+        // poll-signaling flow delivers them. Each injection is
+        // audited as a separate `SignalingEnvelopeSubmitted` event
+        // attributed to a synthetic `"server"` identity.
+        let outbound = {
+            let mut peer = self
+                .services
+                .webrtc_peer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            (**peer).take_outbound_signaling(&session_id)
+        };
+        for envelope in outbound {
+            let injected_sdp_mid = envelope.sdp_mid_for_audit().map(str::to_string);
+            let injected_kind = envelope.kind_label().to_string();
+            let inject_request = SubmitSignalingRequest {
+                session_id: session_id.clone(),
+                direction: SignalingDirection::AnswererToOfferer,
+                envelope,
+            };
+            match self.services.submit_signaling(inject_request) {
+                Ok(injected_ack) => {
+                    events.record(ServerEvent::SignalingEnvelopeSubmitted {
+                        session_id: session_id.clone(),
+                        client_id: "server".to_string(),
+                        direction: SignalingDirection::AnswererToOfferer.label().to_string(),
+                        envelope_kind: injected_kind,
+                        sequence: injected_ack.sequence,
+                        payload_byte_length: injected_ack.payload_byte_length,
+                        sdp_mid: injected_sdp_mid,
+                    });
+                }
+                Err(error) => {
+                    // Backlog full or other typed rejection on the
+                    // server-side queue. Surface as a peer rejection
+                    // so callers and audit sinks see a single typed
+                    // error path; do not fail the client's submit.
+                    events.record(ServerEvent::WebRtcPeerRejected {
+                        session_id: session_id.clone(),
+                        paired_client: client.id.clone(),
+                        reason: error.user_message(),
+                    });
+                }
+            }
+        }
+
+        Ok(ack)
     }
 
     pub fn poll_signaling(
@@ -5289,6 +5451,292 @@ mod tests {
         assert!(
             after_drain.starts_with("OK signaling-submit"),
             "submit after drain should succeed, got: {after_drain}"
+        );
+    }
+
+    /// Phase D.1.1.0 wires the WebRTC peer into the video-stream and
+    /// signaling control-plane flows. The four tests below codify the
+    /// audit-event ordering guarantees on default builds (the in-memory
+    /// no-op peer succeeds on every call). The `webrtc-peer` feature
+    /// test below covers the real `str0m` round-trip.
+    fn webrtc_audit_control_plane() -> ServerControlPlane {
+        ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config(),
+        )
+    }
+
+    fn webrtc_audit_session(
+        control_plane: &mut ServerControlPlane,
+        auth: &ControlAuth,
+    ) -> ApplicationSession {
+        control_plane
+            .create_session(
+                auth,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create session")
+    }
+
+    #[test]
+    fn start_video_stream_emits_webrtc_peer_started() {
+        let mut control_plane = webrtc_audit_control_plane();
+        let auth = paired_auth();
+        let session = webrtc_audit_session(&mut control_plane, &auth);
+
+        let mut events = InMemoryEventSink::default();
+        let stream = control_plane
+            .start_video_stream_with_audit(
+                &auth,
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+                &mut events,
+            )
+            .expect("start video stream");
+
+        let recorded = events.events();
+        assert!(
+            matches!(
+                recorded.first(),
+                Some(ServerEvent::VideoStreamStarted { stream_id, .. }) if stream_id == &stream.id
+            ),
+            "expected VideoStreamStarted as first event, got: {recorded:?}"
+        );
+        assert!(
+            matches!(
+                recorded.get(1),
+                Some(ServerEvent::WebRtcPeerStarted {
+                    session_id,
+                    stream_id,
+                    role,
+                    paired_client,
+                }) if session_id == &session.id
+                    && stream_id == &stream.id
+                    && role == "answerer"
+                    && paired_client == "test-client"
+            ),
+            "expected WebRtcPeerStarted as second event, got: {recorded:?}"
+        );
+    }
+
+    #[test]
+    fn stop_video_stream_emits_webrtc_peer_stopped() {
+        let mut control_plane = webrtc_audit_control_plane();
+        let auth = paired_auth();
+        let session = webrtc_audit_session(&mut control_plane, &auth);
+        let stream = control_plane
+            .start_video_stream(
+                &auth,
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+            )
+            .expect("start video stream");
+
+        let mut events = InMemoryEventSink::default();
+        control_plane
+            .stop_video_stream_with_audit(
+                &auth,
+                StopVideoStreamRequest {
+                    stream_id: stream.id.clone(),
+                },
+                &mut events,
+            )
+            .expect("stop video stream");
+
+        let recorded = events.events();
+        assert!(
+            matches!(
+                recorded.first(),
+                Some(ServerEvent::VideoStreamStopped { stream_id, .. }) if stream_id == &stream.id
+            ),
+            "expected VideoStreamStopped first, got: {recorded:?}"
+        );
+        assert!(
+            matches!(
+                recorded.get(1),
+                Some(ServerEvent::WebRtcPeerStopped {
+                    session_id,
+                    stream_id,
+                    paired_client,
+                }) if session_id == &session.id
+                    && stream_id == &stream.id
+                    && paired_client == "test-client"
+            ),
+            "expected WebRtcPeerStopped second, got: {recorded:?}"
+        );
+    }
+
+    #[test]
+    fn submit_signaling_offer_to_answerer_emits_webrtc_peer_signaling_consumed() {
+        let mut control_plane = webrtc_audit_control_plane();
+        let auth = paired_auth();
+        let session = webrtc_audit_session(&mut control_plane, &auth);
+
+        let mut events = InMemoryEventSink::default();
+        control_plane
+            .submit_signaling_with_audit(
+                &auth,
+                SubmitSignalingRequest {
+                    session_id: session.id.clone(),
+                    direction: SignalingDirection::OfferToAnswerer,
+                    envelope: SignalingEnvelope::SdpOffer {
+                        sdp: "v=0\r\n".to_string(),
+                        role: SdpRole::Offerer,
+                    },
+                },
+                &mut events,
+            )
+            .expect("submit signaling");
+
+        let recorded = events.events();
+        assert!(
+            recorded.iter().any(|event| matches!(
+                event,
+                ServerEvent::SignalingEnvelopeSubmitted { session_id, direction, envelope_kind, .. }
+                    if session_id == &session.id
+                        && direction == "offer-to-answerer"
+                        && envelope_kind == "sdp-offer"
+            )),
+            "missing SignalingEnvelopeSubmitted event; got: {recorded:?}"
+        );
+        assert!(
+            recorded.iter().any(|event| matches!(
+                event,
+                ServerEvent::WebRtcPeerSignalingConsumed { session_id, paired_client, envelope_kind }
+                    if session_id == &session.id
+                        && paired_client == "test-client"
+                        && envelope_kind == "sdp-offer"
+            )),
+            "missing WebRtcPeerSignalingConsumed event; got: {recorded:?}"
+        );
+    }
+
+    #[test]
+    fn submit_signaling_answerer_to_offerer_does_not_consume_into_peer() {
+        let mut control_plane = webrtc_audit_control_plane();
+        let auth = paired_auth();
+        let session = webrtc_audit_session(&mut control_plane, &auth);
+
+        let mut events = InMemoryEventSink::default();
+        control_plane
+            .submit_signaling_with_audit(
+                &auth,
+                SubmitSignalingRequest {
+                    session_id: session.id.clone(),
+                    direction: SignalingDirection::AnswererToOfferer,
+                    envelope: SignalingEnvelope::EndOfCandidates,
+                },
+                &mut events,
+            )
+            .expect("submit polling-direction signaling");
+
+        let recorded = events.events();
+        assert!(
+            recorded
+                .iter()
+                .any(|event| matches!(event, ServerEvent::SignalingEnvelopeSubmitted { .. })),
+            "missing SignalingEnvelopeSubmitted event; got: {recorded:?}"
+        );
+        assert!(
+            !recorded
+                .iter()
+                .any(|event| matches!(event, ServerEvent::WebRtcPeerSignalingConsumed { .. })),
+            "polling-direction submit must not consume into peer; got: {recorded:?}"
+        );
+    }
+
+    #[cfg(feature = "webrtc-peer")]
+    #[test]
+    fn feature_gated_peer_outbound_envelope_lands_in_answerer_to_offerer_queue() {
+        use apprelay_core::WebRtcPeer as _;
+        // Phase D.1.0 swaps the no-op in-memory peer for `Str0mWebRtcPeer`
+        // when the `webrtc-peer` feature is on. With D.1.1.0 wiring, an
+        // `OfferToAnswerer` SDP offer flowed through `submit_signaling`
+        // must drive the peer to produce an `SdpAnswer`, which the
+        // control plane re-injects into the `AnswererToOfferer` queue
+        // for the client's normal `poll_signaling` flow.
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::for_current_platform(),
+            paired_server_config(),
+        );
+        let auth = paired_auth();
+        let session = control_plane
+            .create_session(
+                &auth,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create session");
+        let _stream = control_plane
+            .start_video_stream(
+                &auth,
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+            )
+            .expect("start video stream");
+
+        // Drive a real, str0m-parseable SDP offer through the peer. We
+        // build one by spinning up an offerer instance off to the side
+        // — the str0m peer's parser is strict, so a hand-rolled `v=0`
+        // is not enough.
+        let mut bootstrap = apprelay_core::Str0mWebRtcPeer::new();
+        bootstrap
+            .start(
+                "bootstrap",
+                "bootstrap",
+                apprelay_protocol::WebRtcPeerRole::Offerer,
+            )
+            .expect("bootstrap offerer");
+        let bootstrap_offer = bootstrap
+            .take_outbound_signaling("bootstrap")
+            .into_iter()
+            .next()
+            .expect("bootstrap offerer produced an offer");
+        let bootstrap_sdp = match bootstrap_offer {
+            SignalingEnvelope::SdpOffer { sdp, .. } => sdp,
+            other => panic!("expected SdpOffer, got {other:?}"),
+        };
+
+        control_plane
+            .submit_signaling(
+                &auth,
+                SubmitSignalingRequest {
+                    session_id: session.id.clone(),
+                    direction: SignalingDirection::OfferToAnswerer,
+                    envelope: SignalingEnvelope::SdpOffer {
+                        sdp: bootstrap_sdp,
+                        role: SdpRole::Offerer,
+                    },
+                },
+            )
+            .expect("submit signaling offer");
+
+        // The control plane should have re-injected the peer's local
+        // SDP answer into the AnswererToOfferer queue. Polling that
+        // direction must surface at least one SdpAnswer envelope.
+        let poll = control_plane
+            .poll_signaling(
+                &auth,
+                PollSignalingRequest {
+                    session_id: session.id,
+                    direction: SignalingDirection::AnswererToOfferer,
+                    since_sequence: 0,
+                },
+            )
+            .expect("poll signaling");
+        assert!(
+            poll.messages
+                .iter()
+                .any(|message| matches!(message.envelope, SignalingEnvelope::SdpAnswer { .. })),
+            "expected at least one SdpAnswer in the answerer-to-offerer queue, got: {poll:?}"
         );
     }
 }
