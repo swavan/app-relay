@@ -349,7 +349,7 @@ fn new_control_plane() -> ServerControlPlane {
     ServerControlPlane::new(ServerServices::for_current_platform(), config)
 }
 
-fn paired_auth(auth_token: String, client_id: String) -> ControlAuth {
+pub(crate) fn paired_auth(auth_token: String, client_id: String) -> ControlAuth {
     ControlAuth::with_client_id(auth_token, client_id)
 }
 

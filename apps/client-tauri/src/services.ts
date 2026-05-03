@@ -489,9 +489,11 @@ export class TauriRemoteService implements RemoteService {
     return invoke<SignalingSubmitAck>("submit_sdp_offer", {
       authToken: this.authToken,
       clientId: this.clientId,
-      sessionId,
-      role,
-      sdp
+      request: {
+        sessionId,
+        direction: "offerToAnswerer",
+        envelope: { kind: "sdpOffer", sdp, role }
+      }
     });
   }
 
@@ -499,8 +501,11 @@ export class TauriRemoteService implements RemoteService {
     return invoke<SignalingSubmitAck>("submit_sdp_answer", {
       authToken: this.authToken,
       clientId: this.clientId,
-      sessionId,
-      sdp
+      request: {
+        sessionId,
+        direction: "answererToOfferer",
+        envelope: { kind: "sdpAnswer", sdp }
+      }
     });
   }
 
@@ -512,11 +517,16 @@ export class TauriRemoteService implements RemoteService {
     return invoke<SignalingSubmitAck>("submit_ice_candidate", {
       authToken: this.authToken,
       clientId: this.clientId,
-      sessionId,
-      direction,
-      candidate: candidate.candidate,
-      sdpMid: candidate.sdpMid,
-      sdpMlineIndex: candidate.sdpMlineIndex
+      request: {
+        sessionId,
+        direction,
+        envelope: {
+          kind: "iceCandidate",
+          candidate: candidate.candidate,
+          sdpMid: candidate.sdpMid,
+          sdpMlineIndex: candidate.sdpMlineIndex
+        }
+      }
     });
   }
 
@@ -527,8 +537,11 @@ export class TauriRemoteService implements RemoteService {
     return invoke<SignalingSubmitAck>("signal_end_of_candidates", {
       authToken: this.authToken,
       clientId: this.clientId,
-      sessionId,
-      direction
+      request: {
+        sessionId,
+        direction,
+        envelope: { kind: "endOfCandidates" }
+      }
     });
   }
 
@@ -540,9 +553,7 @@ export class TauriRemoteService implements RemoteService {
     return invoke<SignalingPoll>("poll_signaling", {
       authToken: this.authToken,
       clientId: this.clientId,
-      sessionId,
-      direction,
-      sinceSequence
+      request: { sessionId, direction, sinceSequence }
     });
   }
 }
