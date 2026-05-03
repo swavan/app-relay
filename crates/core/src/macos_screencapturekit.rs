@@ -58,15 +58,58 @@ use crate::video_stream::{
     MacosWindowCaptureResizeRequest, MacosWindowCaptureRuntime, MacosWindowCaptureStartRequest,
 };
 
-#[derive(Debug, Default)]
+/// Optional consumer that receives every `CMSampleBuffer` the
+/// runtime delivers. Kept behind a trait so the runtime can be used
+/// stand-alone (capture-only) without pulling in the
+/// VideoToolbox-backed encoder bridge.
+///
+/// Implementations run on ScreenCaptureKit's delivery thread, so they
+/// must be cheap and non-blocking.
+pub trait ScreenCaptureKitFrameConsumer: Send + Sync + 'static {
+    /// Forward a delivered sample buffer for the given stream. The
+    /// implementation may pull a `CVImageBuffer` out of `sample_buffer`
+    /// and feed it into a hardware encoder. The runtime keeps no
+    /// copy of the buffer once this call returns, so retain it if the
+    /// encoder needs to defer processing.
+    fn on_sample_buffer(&self, stream_id: &str, sample_buffer: &CMSampleBuffer);
+
+    /// Called when the runtime stops or invalidates a stream so the
+    /// consumer can release any per-stream encoder state. The default
+    /// implementation does nothing.
+    fn on_stream_stopped(&self, _stream_id: &str) {}
+}
+
+#[derive(Default)]
 pub struct ScreenCaptureKitWindowRuntime {
     snapshots: Arc<Mutex<HashMap<String, VideoCaptureRuntimeStatus>>>,
     streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+    frame_consumer: Option<Arc<dyn ScreenCaptureKitFrameConsumer>>,
+}
+
+impl std::fmt::Debug for ScreenCaptureKitWindowRuntime {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ScreenCaptureKitWindowRuntime")
+            .field("has_frame_consumer", &self.frame_consumer.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ScreenCaptureKitWindowRuntime {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Construct a runtime that forwards every delivered sample buffer
+    /// to `consumer` in addition to updating the per-stream snapshot.
+    /// Used by the macOS VideoToolbox bridge to feed captured frames
+    /// into a hardware H.264 encoder.
+    pub fn with_frame_consumer(consumer: Arc<dyn ScreenCaptureKitFrameConsumer>) -> Self {
+        Self {
+            snapshots: Arc::default(),
+            streams: Arc::default(),
+            frame_consumer: Some(consumer),
+        }
     }
 }
 
@@ -257,7 +300,16 @@ impl MacosWindowCaptureRuntime for ScreenCaptureKitWindowRuntime {
             }
         }
         self.lock_snapshots().remove(stream_id);
+        if let Some(consumer) = self.frame_consumer.as_ref() {
+            consumer.on_stream_stopped(stream_id);
+        }
     }
+
+    // `latest_encoded_payload` intentionally falls through to the
+    // trait default (`None`). The screencapturekit runtime itself
+    // does not encode; the VideoToolbox bridge that sits in front of
+    // it owns the encoded-payload lookup path so this runtime stays
+    // transport-neutral.
 
     fn snapshot(&self, stream_id: &str) -> Option<VideoCaptureRuntimeStatus> {
         self.lock_snapshots().get(stream_id).cloned()
@@ -300,6 +352,7 @@ impl ScreenCaptureKitWindowRuntime {
             stream_id: request.stream_id.clone(),
             snapshots: Arc::clone(&self.snapshots),
             target_viewport: target_viewport.clone(),
+            frame_consumer: self.frame_consumer.clone(),
         };
         stream.add_output_handler(handler, SCStreamOutputType::Screen);
 
@@ -312,11 +365,16 @@ impl ScreenCaptureKitWindowRuntime {
 }
 
 /// Per-stream output handler. Updates the shared snapshot map every
-/// time ScreenCaptureKit hands us a frame.
+/// time ScreenCaptureKit hands us a frame, and forwards the sample
+/// buffer to the optional `ScreenCaptureKitFrameConsumer` (the
+/// VideoToolbox bridge in practice). Forwarding only happens for
+/// `SCStreamOutputType::Screen` frames so audio output stays out of the
+/// video encoder path.
 struct FrameSink {
     stream_id: String,
     snapshots: Arc<Mutex<HashMap<String, VideoCaptureRuntimeStatus>>>,
     target_viewport: ViewportSize,
+    frame_consumer: Option<Arc<dyn ScreenCaptureKitFrameConsumer>>,
 }
 
 impl SCStreamOutputTrait for FrameSink {
@@ -351,6 +409,15 @@ impl SCStreamOutputTrait for FrameSink {
                 message: None,
             },
         );
+        // Drop the snapshots lock before invoking the consumer so the
+        // VideoToolbox bridge cannot hold the snapshot mutex while it
+        // pushes a `CVImageBuffer` into the encoder. The consumer runs
+        // on ScreenCaptureKit's delivery thread either way.
+        drop(snapshots);
+
+        if let Some(consumer) = self.frame_consumer.as_ref() {
+            consumer.on_sample_buffer(&self.stream_id, &sample_buffer);
+        }
     }
 }
 

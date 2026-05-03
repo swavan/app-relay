@@ -64,6 +64,15 @@ pub trait MacosWindowCaptureRuntime: std::fmt::Debug + Send + Sync {
     fn resize(&self, request: MacosWindowCaptureResizeRequest) -> Result<(), AppRelayError>;
     fn stop(&self, stream_id: &str);
     fn snapshot(&self, stream_id: &str) -> Option<VideoCaptureRuntimeStatus>;
+
+    /// Latest H.264 Annex-B payload for the given stream, if a real
+    /// hardware encoder is bridged into the capture runtime. The
+    /// default implementation returns `None` so capture-only runtimes
+    /// (and every non-macOS or non-VideoToolbox build) keep emitting
+    /// payload-free `EncodedVideoFrame`s without any code change.
+    fn latest_encoded_payload(&self, _stream_id: &str) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -373,6 +382,13 @@ impl InMemoryVideoEncodingPipeline {
             timestamp_ms: (next_sequence - 1) * 1_000 / u64::from(Self::MAX_FPS),
             byte_length,
             keyframe,
+            // The in-memory pipeline never produces real bytes; it stays
+            // payload-free so existing tests that compare encoded frames
+            // structurally keep matching. Real H.264 bytes are populated
+            // by `H264VideoEncoder` implementations such as the macOS
+            // VideoToolbox encoder behind the `macos-videotoolbox`
+            // feature.
+            payload: Vec::new(),
         });
     }
 
@@ -564,6 +580,19 @@ impl WindowCaptureBackendService {
     pub fn capture_snapshot(&self, stream_id: &str) -> Option<VideoCaptureRuntimeStatus> {
         match self {
             Self::MacosSelectedWindow { runtime } => runtime.snapshot(stream_id),
+            Self::LinuxSelectedWindow
+            | Self::FailingSelectedWindow { .. }
+            | Self::FailsOnceSelectedWindow { .. }
+            | Self::Unsupported { .. } => None,
+        }
+    }
+
+    /// Latest H.264 Annex-B payload for `stream_id`, if a real
+    /// hardware encoder is bridged into the capture runtime. Always
+    /// `None` for capture-only and non-macOS backends.
+    pub fn latest_encoded_payload(&self, stream_id: &str) -> Option<Vec<u8>> {
+        match self {
+            Self::MacosSelectedWindow { runtime } => runtime.latest_encoded_payload(stream_id),
             Self::LinuxSelectedWindow
             | Self::FailingSelectedWindow { .. }
             | Self::FailsOnceSelectedWindow { .. }
@@ -794,6 +823,11 @@ impl InMemoryVideoStreamService {
         }
 
         let Some(snapshot) = capture_backend.capture_snapshot(&stream.id) else {
+            // Even capture-only backends might not surface a snapshot
+            // (e.g. Linux). Still attempt to surface any encoded
+            // payload that an encoder bridge has produced — for the
+            // default backends this is a `None` short-circuit.
+            Self::reconcile_encoded_payload(capture_backend, stream);
             return;
         };
 
@@ -810,6 +844,36 @@ impl InMemoryVideoStreamService {
             let failure = Self::capture_failure(message);
             Self::apply_failure(stream, failure);
             stream.capture_runtime = snapshot;
+            return;
+        }
+
+        Self::reconcile_encoded_payload(capture_backend, stream);
+    }
+
+    /// Pull any hardware-encoded H.264 payload the capture backend has
+    /// staged for this stream and pin it to the most recent
+    /// `EncodedVideoFrame`. With the default in-memory pipeline the
+    /// backend always returns `None`, so the existing payload-free
+    /// behaviour is preserved.
+    fn reconcile_encoded_payload(
+        capture_backend: &WindowCaptureBackendService,
+        stream: &mut VideoStreamSession,
+    ) {
+        let Some(payload) = capture_backend.latest_encoded_payload(&stream.id) else {
+            return;
+        };
+        if payload.is_empty() {
+            return;
+        }
+        let Some(frame) = stream.encoding.output.last_frame.as_mut() else {
+            return;
+        };
+        // Only refresh when the payload actually changed; otherwise we
+        // would clone a `Vec<u8>` on every status poll. This keeps
+        // serialisation costs predictable when the runtime is idle.
+        if frame.payload != payload {
+            frame.byte_length = u32::try_from(payload.len()).unwrap_or(u32::MAX);
+            frame.payload = payload;
         }
     }
 }
@@ -2081,6 +2145,7 @@ mod tests {
                 timestamp_ms: 0,
                 byte_length: 23032,
                 keyframe: true,
+                payload: Vec::new(),
             })
         );
         assert_eq!(negotiated.stats.frames_encoded, 1);
@@ -2386,6 +2451,7 @@ mod tests {
                 timestamp_ms: 0,
                 byte_length: 23032,
                 keyframe: true,
+                payload: Vec::new(),
             })
         );
         assert_eq!(renegotiated.encoding.output.keyframes_encoded, 1);

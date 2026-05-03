@@ -12,6 +12,7 @@ apprelay-protocol = { path = "../protocol" }
 default = []
 pipewire-capture = ["apprelay-core/pipewire-capture"]
 macos-screencapturekit = ["apprelay-core/macos-screencapturekit"]
+macos-videotoolbox = ["apprelay-core/macos-videotoolbox"]
 
 [lib]
 path = "src/lib.rs"

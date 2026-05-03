@@ -183,6 +183,18 @@ Currently in this category:
   crates and their transitive dependencies (`core-media-rs`, `core-video-rs`,
   `objc`, `objc2`, `block2`, `dispatch`, `io-surface`, etc.) under the same
   rules as the rest of the production set.
+- `apprelay-core` feature `macos-videotoolbox` (used by Phase B of the
+  real-media implementation roadmap) shares the `core-foundation` crate added
+  by `macos-screencapturekit` under
+  `target.'cfg(target_os = "macos")'.dependencies` and links Apple's
+  `VideoToolbox`, `CoreMedia`, and `CoreFoundation` system frameworks via thin
+  `extern "C"` declarations rather than a Rust binding crate. Beta artifacts
+  that ship the VideoToolbox H.264 encoder (typically with both this feature
+  and `macos-screencapturekit` enabled) must record advisory triage for
+  `core-foundation` and any transitive crates it pulls in (`core-foundation-sys`,
+  `libc`, etc.) under the same rules as the rest of the production set; the
+  Apple system frameworks themselves are not crate-managed and are out of scope
+  for `cargo-audit`.
 - `apprelay-core` feature `pipewire-capture` is reserved for the Linux capture
   adapter and currently has no extra crate dependencies; the same opt-in rule
   will apply once it does.

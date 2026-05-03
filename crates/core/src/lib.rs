@@ -4,6 +4,9 @@ mod audio_stream;
 mod input;
 #[cfg(all(feature = "macos-screencapturekit", target_os = "macos"))]
 mod macos_screencapturekit;
+#[cfg(all(feature = "macos-videotoolbox", target_os = "macos"))]
+mod macos_videotoolbox;
+mod video_encoder;
 mod video_stream;
 
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
@@ -18,6 +21,17 @@ pub use input::{
 };
 #[cfg(all(feature = "macos-screencapturekit", target_os = "macos"))]
 pub use macos_screencapturekit::ScreenCaptureKitWindowRuntime;
+#[cfg(all(
+    feature = "macos-videotoolbox",
+    feature = "macos-screencapturekit",
+    target_os = "macos"
+))]
+pub use macos_videotoolbox::VideoToolboxScreenCaptureKitBridge;
+#[cfg(all(feature = "macos-videotoolbox", target_os = "macos"))]
+pub use macos_videotoolbox::{VideoToolboxEncodedFrameSink, VideoToolboxH264Encoder};
+pub use video_encoder::{
+    EncodedH264Frame, H264EncoderConfig, H264VideoEncoder, InMemoryH264VideoEncoder,
+};
 pub use video_stream::{
     FakeMacosWindowCaptureRuntime, InMemoryVideoStreamService, MacosWindowCaptureResizeRequest,
     MacosWindowCaptureRuntime, MacosWindowCaptureRuntimeCalls, MacosWindowCaptureStartRequest,
