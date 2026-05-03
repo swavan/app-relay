@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 mod audio_stream;
+mod signaling;
 mod video_stream;
 
 use apprelay_core::{
@@ -747,7 +748,12 @@ pub fn run() {
             video_stream::stop_video_stream,
             video_stream::reconnect_video_stream,
             video_stream::negotiate_video_stream,
-            video_stream::video_stream_status
+            video_stream::video_stream_status,
+            signaling::submit_sdp_offer,
+            signaling::submit_sdp_answer,
+            signaling::submit_ice_candidate,
+            signaling::signal_end_of_candidates,
+            signaling::poll_signaling
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AppRelay client");

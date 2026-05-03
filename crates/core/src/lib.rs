@@ -6,6 +6,7 @@ mod input;
 mod macos_screencapturekit;
 #[cfg(all(feature = "macos-videotoolbox", target_os = "macos"))]
 mod macos_videotoolbox;
+mod signaling;
 mod video_encoder;
 mod video_stream;
 
@@ -29,6 +30,10 @@ pub use macos_screencapturekit::ScreenCaptureKitWindowRuntime;
 pub use macos_videotoolbox::VideoToolboxScreenCaptureKitBridge;
 #[cfg(all(feature = "macos-videotoolbox", target_os = "macos"))]
 pub use macos_videotoolbox::{VideoToolboxEncodedFrameSink, VideoToolboxH264Encoder};
+pub use signaling::{
+    InMemorySignalingService, SignalingService, MAX_ENVELOPES_PER_SESSION,
+    SIGNALING_BACKLOG_FULL_MESSAGE_PREFIX,
+};
 pub use video_encoder::{
     EncodedH264Frame, H264EncoderConfig, H264VideoEncoder, InMemoryH264VideoEncoder,
 };
@@ -1465,6 +1470,37 @@ pub enum ServerEvent {
         client_id: String,
         selected_window_id: String,
     },
+    SignalingEnvelopeSubmitted {
+        session_id: String,
+        client_id: String,
+        direction: String,
+        envelope_kind: String,
+        sequence: u64,
+        payload_byte_length: u32,
+        sdp_mid: Option<String>,
+    },
+    SignalingEnvelopeRejected {
+        session_id: String,
+        client_id: String,
+        reason: String,
+    },
+    SignalingPolled {
+        session_id: String,
+        client_id: String,
+        direction: String,
+        since_sequence: u64,
+        last_sequence: u64,
+        message_count: u32,
+    },
+    /// Emitted when a `submit-*` signaling op is rejected because the
+    /// per-session backlog reached [`MAX_ENVELOPES_PER_SESSION`]. Carries
+    /// only structural metadata; mirrors the redaction style of the other
+    /// signaling events (no SDP/ICE bytes).
+    SignalingBacklogFull {
+        session_id: String,
+        paired_client: String,
+        current_depth: u32,
+    },
     ConfigLoaded {
         path: PathBuf,
     },
@@ -1757,6 +1793,65 @@ fn format_event(event: &ServerEvent) -> String {
                 event_field_value(session_id),
                 event_field_value(client_id),
                 event_field_value(selected_window_id),
+            )
+        }
+        ServerEvent::SignalingEnvelopeSubmitted {
+            session_id,
+            client_id,
+            direction,
+            envelope_kind,
+            sequence,
+            payload_byte_length,
+            sdp_mid,
+        } => {
+            let mut output = format!(
+                "event=signaling_envelope_submitted session_id={} client_id={} direction={} kind={} sequence={sequence} payload_byte_length={payload_byte_length}",
+                event_field_value(session_id),
+                event_field_value(client_id),
+                event_field_value(direction),
+                event_field_value(envelope_kind),
+            );
+            if let Some(sdp_mid) = sdp_mid {
+                output.push_str(&format!(" sdp_mid={}", event_field_value(sdp_mid)));
+            }
+            output
+        }
+        ServerEvent::SignalingEnvelopeRejected {
+            session_id,
+            client_id,
+            reason,
+        } => {
+            format!(
+                "event=signaling_envelope_rejected session_id={} client_id={} reason={}",
+                event_field_value(session_id),
+                event_field_value(client_id),
+                event_field_value(reason),
+            )
+        }
+        ServerEvent::SignalingPolled {
+            session_id,
+            client_id,
+            direction,
+            since_sequence,
+            last_sequence,
+            message_count,
+        } => {
+            format!(
+                "event=signaling_polled session_id={} client_id={} direction={} since_sequence={since_sequence} last_sequence={last_sequence} message_count={message_count}",
+                event_field_value(session_id),
+                event_field_value(client_id),
+                event_field_value(direction),
+            )
+        }
+        ServerEvent::SignalingBacklogFull {
+            session_id,
+            paired_client,
+            current_depth,
+        } => {
+            format!(
+                "event=signaling_backlog_full session_id={} paired_client={} current_depth={current_depth}",
+                event_field_value(session_id),
+                event_field_value(paired_client),
             )
         }
         ServerEvent::ConfigLoaded { path } => {

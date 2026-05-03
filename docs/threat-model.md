@@ -131,6 +131,14 @@ Out of scope for this document:
 - Tauri command layer accumulates policy bypasses: architecture requires thin
   Tauri commands that delegate to Rust services for persistence, validation,
   and policy.
+- Untrusted signaling payloads injected into the control plane: SDP and ICE
+  signaling operations require both the shared bearer token and a paired client
+  identity, and submit/poll operations are limited to the paired client that
+  owns the target session. Payloads are size-capped (16 KiB base64, ~12 KiB
+  decoded) before any further parsing, malformed base64 returns
+  `ERROR invalid-base64`, and oversize payloads return `ERROR payload-too-large`.
+  Phase C only stores and forwards signaling envelopes; SDP/ICE semantic
+  validation lives in the Phase D WebRTC peer.
 
 ## Explicit Gaps And Assumptions
 

@@ -80,6 +80,7 @@ version = "0.1.0"
 dependencies = [
  "apprelay-core",
  "apprelay-protocol",
+ "base64 0.22.1",
 ]
 
 [[package]]

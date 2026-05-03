@@ -614,9 +614,40 @@ unaffected):
   `VTCompressionSession` end-to-end with a synthetic `CVPixelBuffer` and
   is `#[ignore]` because it requires the cargo feature and a macOS host
   (no Screen Recording permission needed).
-- Phase C — Real SDP/ICE signaling over the existing line-based control plane
-  (pending). Base64-encodes SDP/ICE to keep the wire framing intact and adds
-  trickle-ICE operations.
+- Phase C (complete) — Real SDP/ICE signaling over the existing line-based
+  control plane. The protocol crate now owns transport-neutral
+  `SignalingEnvelope`, `SignalingDirection`, `IceCandidatePayload`,
+  `SignalingMessage`, `SignalingPoll`, and `SignalingSubmitAck` types plus
+  encoded/decoded payload size caps. Core gains a `SignalingService` trait and
+  an `InMemorySignalingService` store-and-forward queue keyed by session id
+  with monotonic per-session sequence numbers and isolated
+  offerer-to-answerer/answerer-to-offerer queues. The server wires the queue
+  through `ServerControlPlane` with the existing two-layered authorization
+  (shared bearer token plus paired-client identity) and session-ownership
+  checks, and exposes five new line-based control-plane operations:
+  `submit-sdp-offer`, `submit-sdp-answer`, `submit-ice-candidate`,
+  `signal-end-of-candidates`, and `poll-signaling`. SDP and ICE candidate
+  payloads cross the wire as base64 (standard alphabet, padded) so the line
+  framing stays intact; submissions over 16 KiB encoded or ~12 KiB decoded
+  return `ERROR payload-too-large`, malformed base64 returns
+  `ERROR invalid-base64`, and the server does not parse SDP or ICE semantics
+  in this phase. Each successful submit emits a
+  `SignalingEnvelopeSubmitted` audit event with direction, envelope kind,
+  per-session sequence, decoded byte length, and the `sdpMid` for ICE
+  envelopes only; each poll emits a `SignalingPolled` event with direction,
+  `sinceSequence`, returned `lastSequence`, and message count;
+  service-validated rejections after authorization emit a
+  `SignalingEnvelopeRejected` event. Audit events never carry SDP, ICE
+  candidate strings, or base64 payload bytes (`docs/audit-logging.md` records
+  the redaction boundary). The Tauri layer stays thin: five new commands
+  (`submit_sdp_offer`, `submit_sdp_answer`, `submit_ice_candidate`,
+  `signal_end_of_candidates`, `poll_signaling`) wrap the control-plane
+  methods, and `apps/client-tauri/src/services.ts` exposes typed
+  `submitSdpOffer`, `submitSdpAnswer`, `submitIceCandidate`,
+  `signalEndOfCandidates`, and `pollSignaling` methods plus
+  `SignalingEnvelope`, `SignalingMessage`, `SignalingPoll`, and
+  `SignalingSubmitAck` types. No real WebRTC peer is wired yet — Phase D will
+  consume these envelopes.
 - Phase D — Server-side WebRTC peer (pending). Planned dependency: `str0m`
   (sans-IO) over `webrtc-rs` for smaller transitive surface; `dependency-audit-
   policy.md` will be updated in the same change because this lands real

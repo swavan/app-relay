@@ -1,6 +1,7 @@
 //! Server composition for AppRelay.
 
 mod audio_stream;
+mod signaling;
 mod video_stream;
 
 use std::cell::RefCell;
@@ -12,6 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
+
 use apprelay_core::{
     ApplicationDiscovery, ApplicationLaunchBackendService, ApplicationSessionService,
     ApplicationWindowSelectionBackendService, CapabilityService, ClientAuthorizationService,
@@ -20,20 +24,24 @@ use apprelay_core::{
     InMemoryInputForwardingService, InputBackendService, InputForwardingService,
     MacosApplicationDiscovery, MacosWindowCaptureRuntime, ServerConfig, ServerConfigRepository,
     ServerEvent, SessionPolicy, StaticHealthService, UnsupportedApplicationDiscovery,
-    WindowResizeBackendService,
+    WindowResizeBackendService, SIGNALING_BACKLOG_FULL_MESSAGE_PREFIX,
 };
 use apprelay_protocol::{
     ActiveInputFocus, AppRelayError, ApplicationLaunch, ApplicationSession, ApplicationSummary,
     ApprovePairingRequest, AudioStreamSession, ControlAuth, ControlClientIdentity, ControlError,
     ControlResult, CreateSessionRequest, DiagnosticsBundle, Feature, ForwardInputRequest,
-    HealthStatus, HeartbeatStatus, InputDelivery, InputDeliveryStatus, InputEvent,
-    LaunchIntentStatus, NegotiateVideoStreamRequest, PairingRequest, PendingPairing, Platform,
-    PlatformCapability, ReconnectVideoStreamRequest, ResizeSessionRequest, RevokeClientRequest,
-    ServerVersion, StartAudioStreamRequest, StartVideoStreamRequest, StopAudioStreamRequest,
-    StopVideoStreamRequest, UpdateAudioStreamRequest, VideoStreamSession, ViewportSize,
+    HealthStatus, HeartbeatStatus, IceCandidatePayload, InputDelivery, InputDeliveryStatus,
+    InputEvent, LaunchIntentStatus, NegotiateVideoStreamRequest, PairingRequest, PendingPairing,
+    Platform, PlatformCapability, PollSignalingRequest, ReconnectVideoStreamRequest,
+    ResizeSessionRequest, RevokeClientRequest, SdpRole, ServerVersion, SignalingDirection,
+    SignalingEnvelope, SignalingPoll, SignalingSubmitAck, StartAudioStreamRequest,
+    StartVideoStreamRequest, StopAudioStreamRequest, StopVideoStreamRequest,
+    SubmitSignalingRequest, UpdateAudioStreamRequest, VideoStreamSession, ViewportSize,
+    MAX_SIGNALING_PAYLOAD_BASE64_BYTES, MAX_SIGNALING_PAYLOAD_DECODED_BYTES,
 };
 
 use crate::audio_stream::AudioStreamControl;
+use crate::signaling::SignalingControl;
 use crate::video_stream::VideoStreamControl;
 
 #[derive(Debug)]
@@ -45,6 +53,7 @@ pub struct ServerServices {
     input_forwarding: InMemoryInputForwardingService,
     video_stream: VideoStreamControl,
     audio_stream: AudioStreamControl,
+    signaling: SignalingControl,
     platform: Platform,
     version: String,
 }
@@ -68,6 +77,7 @@ impl ServerServices {
             )),
             video_stream: VideoStreamControl::for_platform(platform),
             audio_stream: AudioStreamControl::for_platform(platform),
+            signaling: SignalingControl::new(),
             platform,
             version,
         }
@@ -243,6 +253,7 @@ impl ServerServices {
         self.input_forwarding.close_session(session_id);
         self.video_stream.record_session_closed(session_id);
         self.audio_stream.record_session_closed(session_id);
+        self.signaling.record_session_closed(session_id);
         Ok(session)
     }
 
@@ -356,6 +367,27 @@ impl ServerServices {
             .into_iter()
             .filter(|stream| active_session_ids.contains(&stream.session_id))
             .collect()
+    }
+
+    pub fn submit_signaling(
+        &mut self,
+        request: SubmitSignalingRequest,
+    ) -> Result<SignalingSubmitAck, AppRelayError> {
+        self.signaling.submit(request)
+    }
+
+    pub fn poll_signaling(
+        &mut self,
+        request: PollSignalingRequest,
+    ) -> Result<SignalingPoll, AppRelayError> {
+        self.signaling.poll(request)
+    }
+
+    /// Combined backlog depth (both directions) for `session_id`. Used by
+    /// the foreground wire codec when emitting a
+    /// `ServerEvent::SignalingBacklogFull` audit event.
+    pub fn signaling_backlog_depth(&self, session_id: &str) -> usize {
+        self.signaling.current_depth(session_id)
     }
 
     pub fn version(&self) -> ServerVersion {
@@ -1047,6 +1079,96 @@ impl ServerControlPlane {
             .collect())
     }
 
+    pub fn submit_signaling(
+        &mut self,
+        auth: &ControlAuth,
+        request: SubmitSignalingRequest,
+    ) -> ControlResult<SignalingSubmitAck> {
+        self.submit_signaling_inner(auth, request)
+            .map(|(ack, _)| ack)
+    }
+
+    pub fn submit_signaling_with_audit(
+        &mut self,
+        auth: &ControlAuth,
+        request: SubmitSignalingRequest,
+        events: &mut impl EventSink,
+    ) -> ControlResult<SignalingSubmitAck> {
+        let (ack, event) = self.submit_signaling_inner(auth, request)?;
+        events.record(event);
+        Ok(ack)
+    }
+
+    fn submit_signaling_inner(
+        &mut self,
+        auth: &ControlAuth,
+        request: SubmitSignalingRequest,
+    ) -> ControlResult<(SignalingSubmitAck, ServerEvent)> {
+        let client = self.authorize_existing_session_owner(auth, &request.session_id)?;
+        let sdp_mid = request.envelope.sdp_mid_for_audit().map(str::to_string);
+        let session_id = request.session_id.clone();
+        let direction_label = request.direction.label().to_string();
+        let ack = self
+            .services
+            .submit_signaling(request)
+            .map_err(ControlError::from)?;
+        let event = ServerEvent::SignalingEnvelopeSubmitted {
+            session_id,
+            client_id: client.id.clone(),
+            direction: direction_label,
+            envelope_kind: ack.envelope_kind.clone(),
+            sequence: ack.sequence,
+            payload_byte_length: ack.payload_byte_length,
+            sdp_mid,
+        };
+        Ok((ack, event))
+    }
+
+    pub fn poll_signaling(
+        &mut self,
+        auth: &ControlAuth,
+        request: PollSignalingRequest,
+    ) -> ControlResult<SignalingPoll> {
+        self.poll_signaling_inner(auth, request)
+            .map(|(poll, _)| poll)
+    }
+
+    pub fn poll_signaling_with_audit(
+        &mut self,
+        auth: &ControlAuth,
+        request: PollSignalingRequest,
+        events: &mut impl EventSink,
+    ) -> ControlResult<SignalingPoll> {
+        let (poll, event) = self.poll_signaling_inner(auth, request)?;
+        events.record(event);
+        Ok(poll)
+    }
+
+    fn poll_signaling_inner(
+        &mut self,
+        auth: &ControlAuth,
+        request: PollSignalingRequest,
+    ) -> ControlResult<(SignalingPoll, ServerEvent)> {
+        let client = self.authorize_existing_session_owner(auth, &request.session_id)?;
+        let session_id = request.session_id.clone();
+        let direction_label = request.direction.label().to_string();
+        let since_sequence = request.since_sequence;
+        let poll = self
+            .services
+            .poll_signaling(request)
+            .map_err(ControlError::from)?;
+        let message_count = u32::try_from(poll.messages.len()).unwrap_or(u32::MAX);
+        let event = ServerEvent::SignalingPolled {
+            session_id,
+            client_id: client.id.clone(),
+            direction: direction_label,
+            since_sequence,
+            last_sequence: poll.last_sequence,
+            message_count,
+        };
+        Ok((poll, event))
+    }
+
     pub fn heartbeat(&self, auth: &ControlAuth) -> ControlResult<HeartbeatStatus> {
         self.authorize(auth)?;
         let sequence = self.heartbeat_sequence.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1055,6 +1177,13 @@ impl ServerControlPlane {
             healthy: true,
             sequence,
         })
+    }
+
+    /// Combined backlog depth (both directions) for `session_id`. Exposed
+    /// for the foreground wire codec so it can include `current_depth` in
+    /// `ServerEvent::SignalingBacklogFull` after a backlog-full rejection.
+    pub fn signaling_backlog_depth(&self, session_id: &str) -> usize {
+        self.services.signaling_backlog_depth(session_id)
     }
 
     fn authorize(&self, auth: &ControlAuth) -> Result<(), ControlError> {
@@ -1095,6 +1224,36 @@ impl ServerControlPlane {
         }
 
         Ok(client)
+    }
+
+    /// Strict variant of [`Self::authorize_session_owner`] that requires the
+    /// session to already be tracked in `session_owners` and owned by the
+    /// caller. Unlike `authorize_session_owner`, an unknown `session_id` is
+    /// rejected with `PermissionDenied` rather than implicitly accepted.
+    ///
+    /// This closes a queue-poisoning vector against the in-memory signaling
+    /// service: predictable monotonic session ids (`session-N`) combined with
+    /// implicit-create on `submit` would otherwise let a paired client stage
+    /// envelopes for `session-N+1` before the legitimate owner creates it.
+    /// Use this for every signaling op (`submit-sdp-offer`,
+    /// `submit-sdp-answer`, `submit-ice-candidate`, `signal-end-of-candidates`,
+    /// `poll-signaling`).
+    fn authorize_existing_session_owner(
+        &self,
+        auth: &ControlAuth,
+        session_id: &str,
+    ) -> Result<apprelay_core::AuthorizedClient, ControlError> {
+        let client = self.authorize_paired_client(auth)?;
+        if self.client_owns_session(&client.id, session_id) {
+            return Ok(client);
+        }
+
+        Err(ControlError::Service(AppRelayError::PermissionDenied(
+            format!(
+                "client {} is not authorized for session {}",
+                client.id, session_id
+            ),
+        )))
     }
 
     fn authorize_video_stream_owner(
@@ -1462,6 +1621,38 @@ impl ForegroundControlServer {
                     .active_sessions(&ControlAuth::with_client_id(auth.token(), client_id))
                     .map(|sessions| response_only(format_sessions_response(sessions)))
             }
+            "submit-sdp-offer" => match parse_signaling_offer_args(&mut args) {
+                Ok(parsed) => match self.handle_submit_signaling(auth.token(), parsed, events) {
+                    SubmitSignalingDispatch::Forward(result) => result,
+                    SubmitSignalingDispatch::ShortCircuit(response) => return response,
+                },
+                Err(error) => return error.to_response().to_string(),
+            },
+            "submit-sdp-answer" => match parse_signaling_answer_args(&mut args) {
+                Ok(parsed) => match self.handle_submit_signaling(auth.token(), parsed, events) {
+                    SubmitSignalingDispatch::Forward(result) => result,
+                    SubmitSignalingDispatch::ShortCircuit(response) => return response,
+                },
+                Err(error) => return error.to_response().to_string(),
+            },
+            "submit-ice-candidate" => match parse_signaling_candidate_args(&mut args) {
+                Ok(parsed) => match self.handle_submit_signaling(auth.token(), parsed, events) {
+                    SubmitSignalingDispatch::Forward(result) => result,
+                    SubmitSignalingDispatch::ShortCircuit(response) => return response,
+                },
+                Err(error) => return error.to_response().to_string(),
+            },
+            "signal-end-of-candidates" => match parse_signaling_end_args(&mut args) {
+                Ok(parsed) => match self.handle_submit_signaling(auth.token(), parsed, events) {
+                    SubmitSignalingDispatch::Forward(result) => result,
+                    SubmitSignalingDispatch::ShortCircuit(response) => return response,
+                },
+                Err(error) => return error.to_response().to_string(),
+            },
+            "poll-signaling" => match parse_poll_signaling_args(&mut args) {
+                Ok(parsed) => self.handle_poll_signaling(auth.token(), parsed),
+                Err(error) => return error.to_response().to_string(),
+            },
             _ => return "ERROR unknown-operation".to_string(),
         };
 
@@ -1490,6 +1681,102 @@ impl ForegroundControlServer {
                 format!("ERROR service {}", error.user_message())
             }
         }
+    }
+
+    fn handle_submit_signaling(
+        &self,
+        token: &str,
+        parsed: ParsedSignalingSubmit,
+        events: &mut impl EventSink,
+    ) -> SubmitSignalingDispatch {
+        let ParsedSignalingSubmit { client_id, request } = parsed;
+        let session_id = request.session_id.clone();
+        let direction = request.direction;
+        let sdp_mid = request.envelope.sdp_mid_for_audit().map(str::to_string);
+        let auth = ControlAuth::with_client_id(token, &client_id);
+        let submit_result = self
+            .control_plane
+            .borrow_mut()
+            .submit_signaling(&auth, request);
+        match submit_result {
+            Ok(ack) => {
+                let event = ServerEvent::SignalingEnvelopeSubmitted {
+                    session_id,
+                    client_id: client_id.clone(),
+                    direction: direction.label().to_string(),
+                    envelope_kind: ack.envelope_kind.clone(),
+                    sequence: ack.sequence,
+                    payload_byte_length: ack.payload_byte_length,
+                    sdp_mid,
+                };
+                SubmitSignalingDispatch::Forward(Ok((
+                    format_signaling_submit_response(&ack),
+                    vec![event],
+                )))
+            }
+            Err(ControlError::Service(error)) => {
+                // Backlog-full is a typed flow-control rejection. Short-
+                // circuit the outer dispatch so we emit the matching
+                // audit event without a misleading `RequestAuthorized`
+                // entry, and return a stable wire response.
+                if matches!(
+                    &error,
+                    AppRelayError::ServiceUnavailable(message)
+                        if message.starts_with(SIGNALING_BACKLOG_FULL_MESSAGE_PREFIX)
+                ) {
+                    let current_depth = u32::try_from(
+                        self.control_plane
+                            .borrow()
+                            .signaling_backlog_depth(&session_id),
+                    )
+                    .unwrap_or(u32::MAX);
+                    events.record(ServerEvent::SignalingBacklogFull {
+                        session_id,
+                        paired_client: client_id,
+                        current_depth,
+                    });
+                    return SubmitSignalingDispatch::ShortCircuit(
+                        "ERROR signaling-backlog-full".to_string(),
+                    );
+                }
+                if matches!(&error, AppRelayError::InvalidRequest(_)) {
+                    events.record(ServerEvent::SignalingEnvelopeRejected {
+                        session_id,
+                        client_id,
+                        reason: error.user_message(),
+                    });
+                }
+                SubmitSignalingDispatch::Forward(Err(ControlError::Service(error)))
+            }
+            Err(error) => SubmitSignalingDispatch::Forward(Err(error)),
+        }
+    }
+
+    fn handle_poll_signaling(
+        &self,
+        token: &str,
+        parsed: ParsedPollSignaling,
+    ) -> ControlResult<(String, Vec<ServerEvent>)> {
+        let ParsedPollSignaling { client_id, request } = parsed;
+        let auth = ControlAuth::with_client_id(token, &client_id);
+        let session_id = request.session_id.clone();
+        let direction = request.direction;
+        let since_sequence = request.since_sequence;
+        let poll = self
+            .control_plane
+            .borrow_mut()
+            .poll_signaling(&auth, request)?;
+        let response = format_signaling_poll_response(&poll);
+        let message_count = u32::try_from(poll.messages.len()).unwrap_or(u32::MAX);
+        let event = ServerEvent::SignalingPolled {
+            session_id,
+            client_id,
+            direction: direction.label().to_string(),
+            since_sequence,
+            last_sequence: poll.last_sequence,
+            message_count,
+        };
+        Ok((response, vec![event]))
     }
 }
 
@@ -1773,6 +2060,325 @@ fn selection_method(method: &apprelay_protocol::WindowSelectionMethod) -> &'stat
         apprelay_protocol::WindowSelectionMethod::NativeWindow => "native-window",
         apprelay_protocol::WindowSelectionMethod::Synthetic => "synthetic",
     }
+}
+
+struct ParsedSignalingSubmit {
+    client_id: String,
+    request: SubmitSignalingRequest,
+}
+
+struct ParsedPollSignaling {
+    client_id: String,
+    request: PollSignalingRequest,
+}
+
+/// Outcome of dispatching a `submit-*` signaling request through
+/// [`ForegroundControlServer::handle_submit_signaling`]. `Forward` lets the
+/// outer dispatch keep its standard `RequestAuthorized` / `RequestRejected`
+/// behaviour; `ShortCircuit` is used for typed flow-control rejections
+/// (e.g. backlog-full) where the handler has already recorded the matching
+/// audit event and produced the wire response.
+enum SubmitSignalingDispatch {
+    Forward(ControlResult<(String, Vec<ServerEvent>)>),
+    ShortCircuit(String),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SignalingArgError {
+    BadRequest,
+    InvalidBase64,
+    PayloadTooLarge,
+}
+
+impl SignalingArgError {
+    fn to_response(self) -> &'static str {
+        match self {
+            Self::BadRequest => "ERROR bad-request",
+            Self::InvalidBase64 => "ERROR invalid-base64",
+            Self::PayloadTooLarge => "ERROR payload-too-large",
+        }
+    }
+}
+
+fn parse_keyed_args<'a>(
+    args: &mut std::str::SplitWhitespace<'a>,
+) -> Result<HashMap<&'a str, &'a str>, SignalingArgError> {
+    let mut entries = HashMap::new();
+    for token in args.by_ref() {
+        let Some((key, value)) = token.split_once('=') else {
+            return Err(SignalingArgError::BadRequest);
+        };
+        if key.is_empty() {
+            return Err(SignalingArgError::BadRequest);
+        }
+        if entries.insert(key, value).is_some() {
+            return Err(SignalingArgError::BadRequest);
+        }
+    }
+    Ok(entries)
+}
+
+fn require_arg<'a>(
+    entries: &mut HashMap<&'a str, &'a str>,
+    key: &str,
+) -> Result<&'a str, SignalingArgError> {
+    entries
+        .remove(key)
+        .filter(|value| !value.is_empty())
+        .ok_or(SignalingArgError::BadRequest)
+}
+
+fn ensure_no_extra_args(entries: &HashMap<&str, &str>) -> Result<(), SignalingArgError> {
+    if entries.is_empty() {
+        Ok(())
+    } else {
+        Err(SignalingArgError::BadRequest)
+    }
+}
+
+fn parse_signaling_offer_args(
+    args: &mut std::str::SplitWhitespace<'_>,
+) -> Result<ParsedSignalingSubmit, SignalingArgError> {
+    let client_id = args
+        .next()
+        .ok_or(SignalingArgError::BadRequest)?
+        .to_string();
+    let mut entries = parse_keyed_args(args)?;
+    let session_id = require_arg(&mut entries, "session_id")?.to_string();
+    let role =
+        SdpRole::parse(require_arg(&mut entries, "role")?).ok_or(SignalingArgError::BadRequest)?;
+    let sdp_b64 = require_arg(&mut entries, "sdp_b64")?;
+    ensure_no_extra_args(&entries)?;
+    let sdp_bytes = decode_signaling_payload(sdp_b64)?;
+    let sdp = String::from_utf8(sdp_bytes).map_err(|_| SignalingArgError::InvalidBase64)?;
+    Ok(ParsedSignalingSubmit {
+        client_id,
+        request: SubmitSignalingRequest {
+            session_id,
+            direction: SignalingDirection::OfferToAnswerer,
+            envelope: SignalingEnvelope::SdpOffer { sdp, role },
+        },
+    })
+}
+
+fn parse_signaling_answer_args(
+    args: &mut std::str::SplitWhitespace<'_>,
+) -> Result<ParsedSignalingSubmit, SignalingArgError> {
+    let client_id = args
+        .next()
+        .ok_or(SignalingArgError::BadRequest)?
+        .to_string();
+    let mut entries = parse_keyed_args(args)?;
+    let session_id = require_arg(&mut entries, "session_id")?.to_string();
+    let sdp_b64 = require_arg(&mut entries, "sdp_b64")?;
+    ensure_no_extra_args(&entries)?;
+    let sdp_bytes = decode_signaling_payload(sdp_b64)?;
+    let sdp = String::from_utf8(sdp_bytes).map_err(|_| SignalingArgError::InvalidBase64)?;
+    Ok(ParsedSignalingSubmit {
+        client_id,
+        request: SubmitSignalingRequest {
+            session_id,
+            direction: SignalingDirection::AnswererToOfferer,
+            envelope: SignalingEnvelope::SdpAnswer { sdp },
+        },
+    })
+}
+
+fn parse_signaling_candidate_args(
+    args: &mut std::str::SplitWhitespace<'_>,
+) -> Result<ParsedSignalingSubmit, SignalingArgError> {
+    let client_id = args
+        .next()
+        .ok_or(SignalingArgError::BadRequest)?
+        .to_string();
+    let mut entries = parse_keyed_args(args)?;
+    let session_id = require_arg(&mut entries, "session_id")?.to_string();
+    let direction = parse_direction_arg(require_arg(&mut entries, "direction")?)?;
+    let candidate_b64 = require_arg(&mut entries, "candidate_b64")?;
+    let sdp_mid = decode_token_arg(require_arg(&mut entries, "sdp_mid")?)?;
+    let sdp_mline_index: u16 = require_arg(&mut entries, "sdp_mline_index")?
+        .parse()
+        .map_err(|_| SignalingArgError::BadRequest)?;
+    ensure_no_extra_args(&entries)?;
+    let candidate_bytes = decode_signaling_payload(candidate_b64)?;
+    let candidate =
+        String::from_utf8(candidate_bytes).map_err(|_| SignalingArgError::InvalidBase64)?;
+    Ok(ParsedSignalingSubmit {
+        client_id,
+        request: SubmitSignalingRequest {
+            session_id,
+            direction,
+            envelope: SignalingEnvelope::IceCandidate(IceCandidatePayload {
+                candidate,
+                sdp_mid,
+                sdp_mline_index,
+            }),
+        },
+    })
+}
+
+fn parse_signaling_end_args(
+    args: &mut std::str::SplitWhitespace<'_>,
+) -> Result<ParsedSignalingSubmit, SignalingArgError> {
+    let client_id = args
+        .next()
+        .ok_or(SignalingArgError::BadRequest)?
+        .to_string();
+    let mut entries = parse_keyed_args(args)?;
+    let session_id = require_arg(&mut entries, "session_id")?.to_string();
+    let direction = parse_direction_arg(require_arg(&mut entries, "direction")?)?;
+    ensure_no_extra_args(&entries)?;
+    Ok(ParsedSignalingSubmit {
+        client_id,
+        request: SubmitSignalingRequest {
+            session_id,
+            direction,
+            envelope: SignalingEnvelope::EndOfCandidates,
+        },
+    })
+}
+
+fn parse_poll_signaling_args(
+    args: &mut std::str::SplitWhitespace<'_>,
+) -> Result<ParsedPollSignaling, SignalingArgError> {
+    let client_id = args
+        .next()
+        .ok_or(SignalingArgError::BadRequest)?
+        .to_string();
+    let mut entries = parse_keyed_args(args)?;
+    let session_id = require_arg(&mut entries, "session_id")?.to_string();
+    let direction = parse_direction_arg(require_arg(&mut entries, "direction")?)?;
+    let since_sequence: u64 = require_arg(&mut entries, "since_sequence")?
+        .parse()
+        .map_err(|_| SignalingArgError::BadRequest)?;
+    ensure_no_extra_args(&entries)?;
+    Ok(ParsedPollSignaling {
+        client_id,
+        request: PollSignalingRequest {
+            session_id,
+            direction,
+            since_sequence,
+        },
+    })
+}
+
+fn parse_direction_arg(value: &str) -> Result<SignalingDirection, SignalingArgError> {
+    match value {
+        "offer-to-answerer" => Ok(SignalingDirection::OfferToAnswerer),
+        "answerer-to-offerer" => Ok(SignalingDirection::AnswererToOfferer),
+        _ => Err(SignalingArgError::BadRequest),
+    }
+}
+
+fn decode_token_arg(value: &str) -> Result<String, SignalingArgError> {
+    let mut decoded = String::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return Err(SignalingArgError::BadRequest);
+            }
+            let high = hex_digit(bytes[index + 1])?;
+            let low = hex_digit(bytes[index + 2])?;
+            decoded.push((high * 16 + low) as char);
+            index += 3;
+        } else {
+            decoded.push(bytes[index] as char);
+            index += 1;
+        }
+    }
+    Ok(decoded)
+}
+
+fn hex_digit(byte: u8) -> Result<u8, SignalingArgError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(SignalingArgError::BadRequest),
+    }
+}
+
+fn decode_signaling_payload(value: &str) -> Result<Vec<u8>, SignalingArgError> {
+    if value.len() > MAX_SIGNALING_PAYLOAD_BASE64_BYTES {
+        return Err(SignalingArgError::PayloadTooLarge);
+    }
+    let bytes = BASE64_STANDARD
+        .decode(value)
+        .map_err(|_| SignalingArgError::InvalidBase64)?;
+    if bytes.len() > MAX_SIGNALING_PAYLOAD_DECODED_BYTES {
+        return Err(SignalingArgError::PayloadTooLarge);
+    }
+    Ok(bytes)
+}
+
+fn encode_signaling_payload(bytes: &[u8]) -> String {
+    BASE64_STANDARD.encode(bytes)
+}
+
+fn format_signaling_submit_response(ack: &SignalingSubmitAck) -> String {
+    format!(
+        "OK signaling-submit session_id={} direction={} sequence={} kind={} payload_byte_length={}",
+        line_token(&ack.session_id),
+        ack.direction.label(),
+        ack.sequence,
+        ack.envelope_kind,
+        ack.payload_byte_length
+    )
+}
+
+fn format_signaling_poll_response(poll: &SignalingPoll) -> String {
+    if poll.messages.is_empty() {
+        return format!(
+            "OK signaling session_id={} direction={} sequence={} count=0 empty=true",
+            line_token(&poll.session_id),
+            poll.direction.label(),
+            poll.last_sequence,
+        );
+    }
+
+    let mut response = format!(
+        "OK signaling session_id={} direction={} sequence={} count={} empty=false",
+        line_token(&poll.session_id),
+        poll.direction.label(),
+        poll.last_sequence,
+        poll.messages.len()
+    );
+
+    for (index, message) in poll.messages.iter().enumerate() {
+        let prefix = format!("msg{index}");
+        response.push_str(&format!(
+            " {prefix}.sequence={} {prefix}.kind={}",
+            message.sequence,
+            message.envelope.kind_label(),
+        ));
+        match &message.envelope {
+            SignalingEnvelope::SdpOffer { sdp, role } => {
+                response.push_str(&format!(
+                    " {prefix}.role={} {prefix}.sdp_b64={}",
+                    role.label(),
+                    encode_signaling_payload(sdp.as_bytes()),
+                ));
+            }
+            SignalingEnvelope::SdpAnswer { sdp } => {
+                response.push_str(&format!(
+                    " {prefix}.sdp_b64={}",
+                    encode_signaling_payload(sdp.as_bytes()),
+                ));
+            }
+            SignalingEnvelope::IceCandidate(payload) => {
+                response.push_str(&format!(
+                    " {prefix}.sdp_mid={} {prefix}.sdp_mline_index={} {prefix}.candidate_b64={}",
+                    line_token(&payload.sdp_mid),
+                    payload.sdp_mline_index,
+                    encode_signaling_payload(payload.candidate.as_bytes()),
+                ));
+            }
+            SignalingEnvelope::EndOfCandidates => {}
+        }
+    }
+    response
 }
 
 fn line_token(value: &str) -> String {
@@ -2259,7 +2865,9 @@ fn xml_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use apprelay_core::{ConfigStoreError, FileServerConfigRepository, InMemoryEventSink};
+    use apprelay_core::{
+        ConfigStoreError, FileServerConfigRepository, InMemoryEventSink, MAX_ENVELOPES_PER_SESSION,
+    };
 
     #[derive(Clone, Debug)]
     struct FailingServerConfigRepository;
@@ -4093,6 +4701,522 @@ mod tests {
         assert_eq!(
             installer.uninstall_plan_for_platform(Platform::Android),
             Err(ServiceInstallError::UnsupportedPlatform(Platform::Android))
+        );
+    }
+
+    fn create_signaling_test_session(
+        server: &ForegroundControlServer,
+        events: &mut InMemoryEventSink,
+    ) {
+        let response = server.handle_request(
+            "create-session correct-token test-client terminal 1280 720",
+            events,
+        );
+        assert!(
+            response.starts_with("OK create-session"),
+            "create-session failed: {response}"
+        );
+    }
+
+    fn signaling_server() -> ForegroundControlServer {
+        ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            paired_server_config(),
+        ))
+    }
+
+    fn b64(value: &str) -> String {
+        BASE64_STANDARD.encode(value.as_bytes())
+    }
+
+    #[test]
+    fn foreground_server_submits_sdp_offer_and_audits_payload_metrics() {
+        let server = signaling_server();
+        let mut events = InMemoryEventSink::default();
+        create_signaling_test_session(&server, &mut events);
+        let sdp_b64 = b64("v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\n");
+
+        let request = format!(
+            "submit-sdp-offer correct-token test-client session_id=session-1 role=offerer sdp_b64={sdp_b64}"
+        );
+        let response = server.handle_request(&request, &mut events);
+
+        assert_eq!(
+            response,
+            "OK signaling-submit session_id=session-1 direction=offer-to-answerer sequence=1 kind=sdp-offer payload_byte_length=34"
+        );
+        let recorded = events.events();
+        assert!(matches!(
+            recorded.last(),
+            Some(ServerEvent::SignalingEnvelopeSubmitted {
+                session_id,
+                client_id,
+                direction,
+                envelope_kind,
+                sequence,
+                payload_byte_length,
+                sdp_mid,
+            }) if session_id == "session-1"
+                && client_id == "test-client"
+                && direction == "offer-to-answerer"
+                && envelope_kind == "sdp-offer"
+                && *sequence == 1
+                && *payload_byte_length == 34
+                && sdp_mid.is_none()
+        ));
+        let serialized = format!("{recorded:?}");
+        assert!(!serialized.contains("v=0"));
+        assert!(!serialized.contains(&sdp_b64));
+    }
+
+    #[test]
+    fn foreground_server_submits_ice_candidate_with_sdp_mid_in_audit() {
+        let server = signaling_server();
+        let mut events = InMemoryEventSink::default();
+        create_signaling_test_session(&server, &mut events);
+        let candidate_b64 = b64("candidate:1 1 udp 2113937151 192.0.2.1 51234 typ host");
+
+        let request = format!(
+            "submit-ice-candidate correct-token test-client session_id=session-1 direction=answerer-to-offerer candidate_b64={candidate_b64} sdp_mid=video sdp_mline_index=0"
+        );
+        let response = server.handle_request(&request, &mut events);
+
+        assert!(response.starts_with("OK signaling-submit"));
+        assert!(response.contains("kind=ice-candidate"));
+        assert!(matches!(
+            events.events().last(),
+            Some(ServerEvent::SignalingEnvelopeSubmitted {
+                envelope_kind,
+                direction,
+                sdp_mid,
+                ..
+            }) if envelope_kind == "ice-candidate"
+                && direction == "answerer-to-offerer"
+                && sdp_mid.as_deref() == Some("video")
+        ));
+        let serialized = format!("{:?}", events.events());
+        assert!(!serialized.contains("candidate:1 1 udp"));
+    }
+
+    #[test]
+    fn foreground_server_signals_end_of_candidates_marker() {
+        let server = signaling_server();
+        let mut events = InMemoryEventSink::default();
+        create_signaling_test_session(&server, &mut events);
+
+        let response = server.handle_request(
+            "signal-end-of-candidates correct-token test-client session_id=session-1 direction=offer-to-answerer",
+            &mut events,
+        );
+
+        assert_eq!(
+            response,
+            "OK signaling-submit session_id=session-1 direction=offer-to-answerer sequence=1 kind=end-of-candidates payload_byte_length=0"
+        );
+
+        let poll = server.handle_request(
+            "poll-signaling correct-token test-client session_id=session-1 direction=offer-to-answerer since_sequence=0",
+            &mut events,
+        );
+        assert!(poll.contains("msg0.kind=end-of-candidates"));
+    }
+
+    #[test]
+    fn foreground_server_polls_signaling_with_since_sequence_resumption() {
+        let server = signaling_server();
+        let mut events = InMemoryEventSink::default();
+        create_signaling_test_session(&server, &mut events);
+        let offer_b64 = b64("offer-sdp");
+        let answer_b64 = b64("answer-sdp");
+        let candidate_b64 = b64("candidate:foo");
+
+        server.handle_request(
+            &format!(
+                "submit-sdp-offer correct-token test-client session_id=session-1 role=offerer sdp_b64={offer_b64}"
+            ),
+            &mut events,
+        );
+        server.handle_request(
+            &format!(
+                "submit-sdp-answer correct-token test-client session_id=session-1 sdp_b64={answer_b64}"
+            ),
+            &mut events,
+        );
+        server.handle_request(
+            &format!(
+                "submit-ice-candidate correct-token test-client session_id=session-1 direction=offer-to-answerer candidate_b64={candidate_b64} sdp_mid=video sdp_mline_index=0"
+            ),
+            &mut events,
+        );
+
+        let initial = server.handle_request(
+            "poll-signaling correct-token test-client session_id=session-1 direction=offer-to-answerer since_sequence=0",
+            &mut events,
+        );
+        assert!(initial.contains("count=2"));
+        assert!(initial.contains("msg0.sequence=1"));
+        assert!(initial.contains("msg0.kind=sdp-offer"));
+        assert!(initial.contains(&format!("msg0.sdp_b64={offer_b64}")));
+        assert!(initial.contains("msg1.sequence=3"));
+        assert!(initial.contains("msg1.kind=ice-candidate"));
+
+        let resumed = server.handle_request(
+            "poll-signaling correct-token test-client session_id=session-1 direction=offer-to-answerer since_sequence=1",
+            &mut events,
+        );
+        assert!(resumed.contains("count=1"));
+        assert!(resumed.contains("msg0.sequence=3"));
+        assert!(resumed.contains("msg0.kind=ice-candidate"));
+
+        let answer_poll = server.handle_request(
+            "poll-signaling correct-token test-client session_id=session-1 direction=answerer-to-offerer since_sequence=0",
+            &mut events,
+        );
+        assert!(answer_poll.contains("count=1"));
+        assert!(answer_poll.contains("msg0.kind=sdp-answer"));
+
+        let drained = server.handle_request(
+            "poll-signaling correct-token test-client session_id=session-1 direction=offer-to-answerer since_sequence=99",
+            &mut events,
+        );
+        assert!(drained.contains("count=0"));
+        assert!(drained.contains("empty=true"));
+    }
+
+    #[test]
+    fn foreground_server_signaling_records_polled_event_without_sdp_payload() {
+        let server = signaling_server();
+        let mut events = InMemoryEventSink::default();
+        create_signaling_test_session(&server, &mut events);
+        server.handle_request(
+            &format!(
+                "submit-sdp-offer correct-token test-client session_id=session-1 role=offerer sdp_b64={}",
+                b64("v=0 sample")
+            ),
+            &mut events,
+        );
+
+        events.events();
+        let _ = server.handle_request(
+            "poll-signaling correct-token test-client session_id=session-1 direction=offer-to-answerer since_sequence=0",
+            &mut events,
+        );
+
+        let recorded = events.events();
+        assert!(recorded.iter().any(|event| matches!(
+            event,
+            ServerEvent::SignalingPolled {
+                session_id,
+                client_id,
+                direction,
+                since_sequence,
+                last_sequence,
+                message_count,
+            } if session_id == "session-1"
+                && client_id == "test-client"
+                && direction == "offer-to-answerer"
+                && *since_sequence == 0
+                && *last_sequence == 1
+                && *message_count == 1
+        )));
+        let serialized = format!("{recorded:?}");
+        assert!(!serialized.contains("v=0 sample"));
+    }
+
+    #[test]
+    fn foreground_server_signaling_rejects_invalid_base64() {
+        let server = signaling_server();
+        let mut events = InMemoryEventSink::default();
+        create_signaling_test_session(&server, &mut events);
+
+        let response = server.handle_request(
+            "submit-sdp-offer correct-token test-client session_id=session-1 role=offerer sdp_b64=not_valid",
+            &mut events,
+        );
+        assert_eq!(response, "ERROR invalid-base64");
+    }
+
+    #[test]
+    fn foreground_server_signaling_rejects_oversized_payload() {
+        let server = signaling_server();
+        let mut events = InMemoryEventSink::default();
+        create_signaling_test_session(&server, &mut events);
+        let oversized_b64 = "A".repeat(MAX_SIGNALING_PAYLOAD_BASE64_BYTES + 4);
+
+        let response = server.handle_request(
+            &format!(
+                "submit-sdp-offer correct-token test-client session_id=session-1 role=offerer sdp_b64={oversized_b64}"
+            ),
+            &mut events,
+        );
+        assert_eq!(response, "ERROR payload-too-large");
+    }
+
+    #[test]
+    fn foreground_server_signaling_rejects_unauthorized_client() {
+        let server = signaling_server();
+        let mut events = InMemoryEventSink::default();
+        create_signaling_test_session(&server, &mut events);
+
+        let response = server.handle_request(
+            &format!(
+                "submit-sdp-offer wrong-token test-client session_id=session-1 role=offerer sdp_b64={}",
+                b64("offer")
+            ),
+            &mut events,
+        );
+        assert_eq!(response, "ERROR unauthorized");
+
+        let poll_response = server.handle_request(
+            "poll-signaling wrong-token test-client session_id=session-1 direction=offer-to-answerer since_sequence=0",
+            &mut events,
+        );
+        assert_eq!(poll_response, "ERROR unauthorized");
+    }
+
+    #[test]
+    fn foreground_server_signaling_rejects_unpaired_client() {
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            two_client_server_config(),
+        ));
+        let mut events = InMemoryEventSink::default();
+        let creation = server.handle_request(
+            "create-session correct-token client-1 terminal 1280 720",
+            &mut events,
+        );
+        assert!(creation.starts_with("OK create-session"));
+
+        let response = server.handle_request(
+            &format!(
+                "submit-sdp-offer correct-token client-2 session_id=session-1 role=offerer sdp_b64={}",
+                b64("offer")
+            ),
+            &mut events,
+        );
+        assert_eq!(
+            response,
+            "ERROR service client client-2 is not authorized for session session-1"
+        );
+    }
+
+    #[test]
+    fn foreground_server_signaling_close_session_drops_queue() {
+        let server = signaling_server();
+        let mut events = InMemoryEventSink::default();
+        create_signaling_test_session(&server, &mut events);
+        server.handle_request(
+            &format!(
+                "submit-sdp-offer correct-token test-client session_id=session-1 role=offerer sdp_b64={}",
+                b64("offer")
+            ),
+            &mut events,
+        );
+
+        let close = server.handle_request(
+            "close-session correct-token test-client session-1",
+            &mut events,
+        );
+        assert!(close.starts_with("OK close-session"));
+
+        // After close, paired client owns no session anymore. A poll for a
+        // non-owned existing session id is denied. A poll for an unowned
+        // (no-record) id is allowed but the queue is empty because
+        // close-session dropped it. Re-create to verify the sequence reset.
+        create_signaling_test_session(&server, &mut events);
+        let poll = server.handle_request(
+            "poll-signaling correct-token test-client session_id=session-1 direction=offer-to-answerer since_sequence=0",
+            &mut events,
+        );
+        assert!(poll.contains("count=0"));
+        assert!(poll.contains("empty=true"));
+    }
+
+    #[test]
+    fn foreground_server_signaling_rejects_bad_request_args() {
+        let server = signaling_server();
+        let mut events = InMemoryEventSink::default();
+        create_signaling_test_session(&server, &mut events);
+
+        // Missing role.
+        let no_role = server.handle_request(
+            &format!(
+                "submit-sdp-offer correct-token test-client session_id=session-1 sdp_b64={}",
+                b64("offer")
+            ),
+            &mut events,
+        );
+        assert_eq!(no_role, "ERROR bad-request");
+
+        // Unknown direction.
+        let bad_direction = server.handle_request(
+            "poll-signaling correct-token test-client session_id=session-1 direction=sideways since_sequence=0",
+            &mut events,
+        );
+        assert_eq!(bad_direction, "ERROR bad-request");
+
+        // Duplicate keys.
+        let dup = server.handle_request(
+            "poll-signaling correct-token test-client session_id=session-1 session_id=session-2 direction=offer-to-answerer since_sequence=0",
+            &mut events,
+        );
+        assert_eq!(dup, "ERROR bad-request");
+    }
+
+    #[test]
+    fn foreground_server_signaling_rejects_submit_for_unknown_session_and_leaves_no_trace() {
+        // Regression test for the queue-poison vector. Predictable monotonic
+        // session ids let an attacker submit envelopes for a session that
+        // does not exist yet; without strict ownership checks, the legitimate
+        // owner who later creates the session would poll a pre-poisoned queue.
+        let server = ForegroundControlServer::new(ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            two_client_server_config(),
+        ));
+        let mut events = InMemoryEventSink::default();
+
+        // client-A creates session-1.
+        let creation = server.handle_request(
+            "create-session correct-token client-1 terminal 1280 720",
+            &mut events,
+        );
+        assert!(creation.starts_with("OK create-session"));
+
+        // client-B tries to stage signaling for session-2 *before* it exists.
+        let attempted_offer = b64("attacker-offer-sdp");
+        let poison = server.handle_request(
+            &format!(
+                "submit-sdp-offer correct-token client-2 session_id=session-2 role=offerer sdp_b64={attempted_offer}"
+            ),
+            &mut events,
+        );
+        assert_eq!(
+            poison, "ERROR service client client-2 is not authorized for session session-2",
+            "unknown session must be rejected, not implicitly created"
+        );
+        let recorded_after_poison = events.events();
+        assert!(
+            recorded_after_poison.iter().any(|event| matches!(
+                event,
+                ServerEvent::RequestRejected { operation } if operation == "submit-sdp-offer"
+            )),
+            "queue-poison attempt must emit RequestRejected; events were: {recorded_after_poison:?}"
+        );
+        // The rejection must not have left a SignalingEnvelopeSubmitted audit
+        // record for session-2 (which would imply the envelope reached the
+        // queue).
+        assert!(
+            !recorded_after_poison.iter().any(|event| matches!(
+                event,
+                ServerEvent::SignalingEnvelopeSubmitted { session_id, .. } if session_id == "session-2"
+            )),
+            "no signaling submit event should have been recorded for session-2"
+        );
+
+        // client-A now legitimately creates session-2 and polls it.
+        let second_creation = server.handle_request(
+            "create-session correct-token client-1 terminal 1280 720",
+            &mut events,
+        );
+        assert!(
+            second_creation.starts_with("OK create-session"),
+            "second create-session failed: {second_creation}"
+        );
+
+        let poll = server.handle_request(
+            "poll-signaling correct-token client-1 session_id=session-2 direction=offer-to-answerer since_sequence=0",
+            &mut events,
+        );
+        // The queue must be empty: the attacker's pre-poisoned envelope left
+        // no trace.
+        assert!(
+            poll.contains("count=0"),
+            "expected empty backlog, got: {poll}"
+        );
+        assert!(
+            poll.contains("empty=true"),
+            "expected empty backlog, got: {poll}"
+        );
+    }
+
+    #[test]
+    fn foreground_server_signaling_rejects_submit_when_session_backlog_is_full() {
+        // A legitimate paired client owns the session, so Fix 1's auth gate
+        // does not apply. Fix 3 still bounds the per-session backlog to
+        // protect server memory.
+        let server = signaling_server();
+        let mut events = InMemoryEventSink::default();
+        create_signaling_test_session(&server, &mut events);
+
+        // Fill the per-session backlog to the cap. End-of-candidates carries
+        // no payload, so this is the cheapest envelope to enqueue.
+        for _ in 0..MAX_ENVELOPES_PER_SESSION {
+            let response = server.handle_request(
+                "signal-end-of-candidates correct-token test-client session_id=session-1 direction=offer-to-answerer",
+                &mut events,
+            );
+            assert!(
+                response.starts_with("OK signaling-submit"),
+                "filling backlog failed: {response}"
+            );
+        }
+
+        // The next submit must be rejected with the typed wire response and
+        // a SignalingBacklogFull audit event.
+        let baseline_event_count = events.events().len();
+        let rejection = server.handle_request(
+            "signal-end-of-candidates correct-token test-client session_id=session-1 direction=offer-to-answerer",
+            &mut events,
+        );
+        assert_eq!(rejection, "ERROR signaling-backlog-full");
+        let new_events = &events.events()[baseline_event_count..];
+        assert!(
+            new_events.iter().any(|event| matches!(
+                event,
+                ServerEvent::SignalingBacklogFull {
+                    session_id,
+                    paired_client,
+                    current_depth,
+                } if session_id == "session-1"
+                    && paired_client == "test-client"
+                    && *current_depth as usize == MAX_ENVELOPES_PER_SESSION
+            )),
+            "missing SignalingBacklogFull audit event; recorded: {new_events:?}"
+        );
+        // Backlog rejections are flow-control, not auth failures: there must
+        // be no RequestAuthorized entry for the rejected op (it never
+        // reached the queue).
+        assert!(
+            !new_events.iter().any(|event| matches!(
+                event,
+                ServerEvent::RequestAuthorized { operation } if operation == "signal-end-of-candidates"
+            )),
+            "rejected submit should not record RequestAuthorized; recorded: {new_events:?}"
+        );
+
+        // The legitimate consumer drains the queue. since_sequence is the
+        // ack cursor: passing the high-water mark frees every slot.
+        let drain = server.handle_request(
+            &format!(
+                "poll-signaling correct-token test-client session_id=session-1 direction=offer-to-answerer since_sequence={}",
+                u64::MAX
+            ),
+            &mut events,
+        );
+        assert!(
+            drain.contains("count=0"),
+            "expected drained queue, got: {drain}"
+        );
+
+        // After draining, submits succeed again — i.e. the cap is on
+        // backlog depth, not lifetime count.
+        let after_drain = server.handle_request(
+            "signal-end-of-candidates correct-token test-client session_id=session-1 direction=offer-to-answerer",
+            &mut events,
+        );
+        assert!(
+            after_drain.starts_with("OK signaling-submit"),
+            "submit after drain should succeed, got: {after_drain}"
         );
     }
 }

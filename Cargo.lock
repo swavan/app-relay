@@ -27,6 +27,7 @@ version = "0.1.0"
 dependencies = [
  "apprelay-core",
  "apprelay-protocol",
+ "base64",
 ]
 
 [[package]]

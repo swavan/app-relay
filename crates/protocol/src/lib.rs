@@ -6,6 +6,7 @@
 
 mod audio_stream;
 mod input;
+mod signaling;
 mod video_stream;
 
 pub use audio_stream::{
@@ -20,6 +21,11 @@ pub use input::{
     ActiveInputFocus, ButtonAction, ClientPoint, ForwardInputRequest, InputBackendKind,
     InputDelivery, InputDeliveryStatus, InputEvent, KeyAction, KeyModifiers, MappedInputEvent,
     PointerButton, ServerPoint,
+};
+pub use signaling::{
+    IceCandidatePayload, PollSignalingRequest, SdpRole, SignalingDirection, SignalingEnvelope,
+    SignalingMessage, SignalingPoll, SignalingSubmitAck, SubmitSignalingRequest,
+    MAX_SIGNALING_PAYLOAD_BASE64_BYTES, MAX_SIGNALING_PAYLOAD_DECODED_BYTES,
 };
 pub use video_stream::{
     CapturedVideoFrame, EncodedVideoFrame, NegotiateVideoStreamRequest,
