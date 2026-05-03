@@ -1658,6 +1658,12 @@ fn control_plane_audits_video_stream_lifecycle_successes() {
                 client_id: "test-client".to_string(),
                 selected_window_id: stream.selected_window_id.clone(),
             },
+            ServerEvent::WebRtcPeerStarted {
+                session_id: session.id.clone(),
+                stream_id: stream.id.clone(),
+                role: "answerer".to_string(),
+                paired_client: "test-client".to_string(),
+            },
             ServerEvent::VideoStreamReconnected {
                 stream_id: stream.id.clone(),
                 session_id: session.id.clone(),
@@ -1665,10 +1671,15 @@ fn control_plane_audits_video_stream_lifecycle_successes() {
                 selected_window_id: stream.selected_window_id.clone(),
             },
             ServerEvent::VideoStreamStopped {
-                stream_id: stream.id,
-                session_id: session.id,
+                stream_id: stream.id.clone(),
+                session_id: session.id.clone(),
                 client_id: "test-client".to_string(),
-                selected_window_id: stream.selected_window_id,
+                selected_window_id: stream.selected_window_id.clone(),
+            },
+            ServerEvent::WebRtcPeerStopped {
+                session_id: session.id,
+                stream_id: stream.id,
+                paired_client: "test-client".to_string(),
             },
         ]
     );

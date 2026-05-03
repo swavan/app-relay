@@ -1510,6 +1510,39 @@ pub enum ServerEvent {
         paired_client: String,
         current_depth: u32,
     },
+    /// The server-side WebRTC peer accepted a `start` for a freshly
+    /// created video stream. Carries only structural metadata; SDP/ICE
+    /// payloads are not present.
+    WebRtcPeerStarted {
+        session_id: String,
+        stream_id: String,
+        role: String,
+        paired_client: String,
+    },
+    /// The server-side WebRTC peer accepted a `stop` for a video
+    /// stream. Idempotent on the peer side; emitted whenever the
+    /// control plane drives a stop.
+    WebRtcPeerStopped {
+        session_id: String,
+        stream_id: String,
+        paired_client: String,
+    },
+    /// The server-side WebRTC peer integrated a client-submitted
+    /// signaling envelope (`OfferToAnswerer` direction) into its state
+    /// machine. Carries only the envelope kind for redacted audit.
+    WebRtcPeerSignalingConsumed {
+        session_id: String,
+        paired_client: String,
+        envelope_kind: String,
+    },
+    /// The server-side WebRTC peer rejected a state-changing call. The
+    /// `reason` field is the typed-error user message, never tokens or
+    /// raw SDP/ICE bytes.
+    WebRtcPeerRejected {
+        session_id: String,
+        paired_client: String,
+        reason: String,
+    },
     ConfigLoaded {
         path: PathBuf,
     },
@@ -1861,6 +1894,56 @@ fn format_event(event: &ServerEvent) -> String {
                 "event=signaling_backlog_full session_id={} paired_client={} current_depth={current_depth}",
                 event_field_value(session_id),
                 event_field_value(paired_client),
+            )
+        }
+        ServerEvent::WebRtcPeerStarted {
+            session_id,
+            stream_id,
+            role,
+            paired_client,
+        } => {
+            format!(
+                "event=webrtc_peer_started session_id={} stream_id={} role={} paired_client={}",
+                event_field_value(session_id),
+                event_field_value(stream_id),
+                event_field_value(role),
+                event_field_value(paired_client),
+            )
+        }
+        ServerEvent::WebRtcPeerStopped {
+            session_id,
+            stream_id,
+            paired_client,
+        } => {
+            format!(
+                "event=webrtc_peer_stopped session_id={} stream_id={} paired_client={}",
+                event_field_value(session_id),
+                event_field_value(stream_id),
+                event_field_value(paired_client),
+            )
+        }
+        ServerEvent::WebRtcPeerSignalingConsumed {
+            session_id,
+            paired_client,
+            envelope_kind,
+        } => {
+            format!(
+                "event=webrtc_peer_signaling_consumed session_id={} paired_client={} envelope_kind={}",
+                event_field_value(session_id),
+                event_field_value(paired_client),
+                event_field_value(envelope_kind),
+            )
+        }
+        ServerEvent::WebRtcPeerRejected {
+            session_id,
+            paired_client,
+            reason,
+        } => {
+            format!(
+                "event=webrtc_peer_rejected session_id={} paired_client={} reason={}",
+                event_field_value(session_id),
+                event_field_value(paired_client),
+                event_field_value(reason),
             )
         }
         ServerEvent::ConfigLoaded { path } => {
