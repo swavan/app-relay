@@ -139,12 +139,6 @@
     try {
       sessionMessage = "";
       if (!hasPermission(app)) {
-        const granted = window.confirm(`Allow AppRelay to open ${app.name}?`);
-        if (!granted) {
-          sessionMessage = `Permission denied for ${app.name}`;
-          return;
-        }
-
         await permissionService.save({ applicationId: app.id, label: app.name });
         permissions = await permissionService.list();
       }
