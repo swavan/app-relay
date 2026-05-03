@@ -3005,31 +3005,36 @@ mod tests {
 
     #[cfg(feature = "webrtc-peer")]
     #[test]
-    fn webrtc_peer_feature_swaps_in_str0m_scaffold() {
+    fn webrtc_peer_feature_swaps_in_str0m_peer() {
         let services = ServerServices::for_current_platform();
         let mut peer = services
             .webrtc_peer
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let err = peer
-            .start(
-                "session-1",
-                "stream-1",
-                apprelay_protocol::WebRtcPeerRole::Offerer,
-            )
-            .expect_err("Phase D.0 scaffold returns ServiceUnavailable from start");
-        match err {
-            apprelay_protocol::AppRelayError::ServiceUnavailable(message) => {
-                assert!(
-                    message.contains("Phase D.1"),
-                    "scaffold should advertise Phase D.1 pending: {message}"
-                );
+        peer.start(
+            "session-1",
+            "stream-1",
+            apprelay_protocol::WebRtcPeerRole::Offerer,
+        )
+        .expect("str0m peer accepts start as offerer");
+        // The Phase D.1.0 offerer queues a real local SDP offer for the
+        // caller to forward; the in-memory peer never produces one. This
+        // is the observable signal that the swap landed the str0m peer.
+        let outbound = peer.take_outbound_signaling("session-1");
+        assert_eq!(
+            outbound.len(),
+            1,
+            "expected exactly one local offer envelope"
+        );
+        match &outbound[0] {
+            apprelay_protocol::SignalingEnvelope::SdpOffer { sdp, role } => {
+                assert!(sdp.starts_with("v=0"), "expected real SDP, got: {sdp}");
+                assert_eq!(*role, apprelay_protocol::SdpRole::Offerer);
             }
-            other => panic!("expected ServiceUnavailable, got {other:?}"),
+            other => panic!("expected SdpOffer envelope, got {other:?}"),
         }
-        // stop is documented as idempotent in the scaffold, so it must still succeed.
         peer.stop("session-1", "stream-1")
-            .expect("Phase D.0 scaffold stop is idempotent");
+            .expect("str0m peer stop succeeds");
     }
 
     #[test]
