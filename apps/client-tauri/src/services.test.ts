@@ -226,7 +226,7 @@ class FakeRemoteService implements RemoteService {
         },
         launch: {
           kind: "desktopCommand" as const,
-          value: "gnome-terminal"
+          command: "gnome-terminal"
         }
       }
     ];
@@ -267,7 +267,7 @@ class FakeRemoteService implements RemoteService {
         applicationId,
         launch: {
           kind: "desktopCommand" as const,
-          value: "gnome-terminal"
+          command: "gnome-terminal"
         },
         status: "recorded" as const
       },
@@ -809,7 +809,7 @@ describe("RemoteService contract", () => {
         },
         launch: {
           kind: "desktopCommand",
-          value: "gnome-terminal"
+          command: "gnome-terminal"
         }
       }
     ]);

@@ -18,6 +18,7 @@ macos-videotoolbox = ["dep:core-foundation"]
 [dependencies]
 apprelay-protocol = { path = "../protocol" }
 plist = { version = "1", default-features = false }
+serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = { version = "0.3", optional = true }

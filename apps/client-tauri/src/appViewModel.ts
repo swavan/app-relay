@@ -110,7 +110,7 @@ function buildLaunchLabel(app: AppSummary): string {
     return "Launch macOS app";
   }
 
-  return `Launch ${commandName(app.launch.value)}`;
+  return `Launch ${commandName(app.launch.command)}`;
 }
 
 function buildAppIconView(app: AppSummary): AppIconView {

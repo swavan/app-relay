@@ -31,10 +31,9 @@ export type AppSummary = {
     dataUrl?: string;
     source?: string;
   };
-  launch?: {
-    kind: "desktopCommand" | "macosBundle";
-    value: string;
-  };
+  launch?:
+    | { kind: "desktopCommand"; command: string }
+    | { kind: "macosBundle"; bundlePath: string };
 };
 
 export type ViewportSize = {
@@ -54,10 +53,9 @@ export type ApplicationSession = {
   launchIntent?: {
     sessionId: string;
     applicationId: string;
-    launch?: {
-      kind: "desktopCommand" | "macosBundle";
-      value: string;
-    };
+    launch?:
+      | { kind: "desktopCommand"; command: string }
+      | { kind: "macosBundle"; bundlePath: string };
     status: "recorded" | "attached" | "unsupported";
   };
   viewport: ViewportSize;
