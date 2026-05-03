@@ -669,14 +669,49 @@ unaffected):
     `stop` idempotent. Explicit non-goals for D.0: no real SDP/ICE/RTP
     integration, no `str0m` dependency, and no peer wiring into the stream
     lifecycle yet.
-  - Phase D.1 (pending): real `str0m` (sans-IO) integration consuming Phase C
-    signaling envelopes, packetizing the Phase B Annex-B H.264 payloads into
-    RTP, and driving the peer state machine. The `dependency-audit-policy.md`
-    update for the new crypto/SCTP/SRTP/ICE crates lands in the same change
-    as the integration. `ServerEvent` variants for peer lifecycle
-    (`WebRtcPeerStarted`, `WebRtcPeerStopped`, `WebRtcPeerSignalingConsumed`,
-    `WebRtcPeerOutboundFrame`, `WebRtcPeerRejected`) will be reintroduced
-    alongside their actual emit sites.
+  - Phase D.1.0 (complete): replaced the placeholder `Str0mWebRtcPeer`
+    bodies with a real `str0m` 0.8 (sans-IO) implementation behind the
+    `webrtc-peer` cargo feature. Each `start(session_id, stream_id, role)`
+    builds an `Rtc` configured to negotiate H.264 only
+    (`clear_codecs().enable_h264(true)`), attaches a deterministic loopback
+    host candidate, and — for the `Offerer` role — runs the SDP API
+    (`sdp_api().add_media(MediaKind::Video, Direction::SendOnly, …).apply()`)
+    so the local offer SDP is queued for `take_outbound_signaling`.
+    `consume_signaling` feeds remote `SdpOffer`/`SdpAnswer`/`IceCandidate`
+    envelopes into the matching `str0m` entry point and produces the answer
+    envelope on the answerer side; offers arriving on an offerer-role peer,
+    answers without a stored pending offer, and unknown sessions return
+    typed `AppRelayError::InvalidRequest` / `NotFound`. `push_encoded_frame`
+    refuses with `ServiceUnavailable` until the negotiated video `Mid` and
+    H.264 `PayloadType` are known, then forwards the Annex-B payload through
+    `Rtc::writer(mid).write(...)` at the 90 kHz video clock derived from
+    `EncodedVideoFrame::timestamp_ms`. `take_outbound_rtp` advances time
+    via `Rtc::handle_input(Input::Timeout)` and drains every
+    `Output::Transmit { destination, contents }` into `RtpPacketBatch`.
+    `dependency-audit-policy.md` is updated in the same change to record
+    `str0m` and its transitive crypto/SCTP/SRTP crates as production
+    dependencies of any beta artifact that enables the feature. The peer
+    is still NOT wired into the server stream lifecycle and there is no
+    UDP transport — those land in D.1.1 / D.1.2. The Phase D.0 server
+    inline test that asserted the `ServiceUnavailable("Phase D.1 pending")`
+    behaviour was rewritten to assert the swap delivers a real local SDP
+    offer envelope. `str0m`'s `Event` enum does not surface locally
+    discovered ICE candidates as a public variant in 0.8.0, so D.1.0 only
+    emits the local SDP envelope; the host candidate is encoded into the
+    SDP via the registered `Candidate::host` and an explicit
+    `EndOfCandidates` consumed signal is a documented no-op. ICE-lite is
+    enabled only on the answerer (server topology) because str0m rejects
+    SDP exchanges where both peers are ICE-lite.
+  - Phase D.1.1 (pending): wire the peer into `ServerControlPlane` so a
+    video-stream start invokes `peer.start`, signaling submissions forward
+    to `peer.consume_signaling`, and encoded frames from the capture/encode
+    pipeline flow through `peer.push_encoded_frame`. Reintroduce the
+    `WebRtcPeerStarted`, `WebRtcPeerStopped`,
+    `WebRtcPeerSignalingConsumed`, `WebRtcPeerOutboundFrame`, and
+    `WebRtcPeerRejected` `ServerEvent` variants alongside their emit sites.
+  - Phase D.1.2 (pending): UDP socket runtime that actually transmits the
+    `RtpPacketBatch`es `take_outbound_rtp` produces and feeds inbound
+    datagrams back into `Rtc::handle_input(Input::Receive(...))`.
 - Phase E — Tauri client `RTCPeerConnection` and `<video>` decode in WKWebView
   (pending). Updates Tauri capability/CSP files for WebRTC media.
 - Phase F — Mac-to-Mac end-to-end demo (pending).

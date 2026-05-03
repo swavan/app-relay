@@ -14,20 +14,20 @@ macos-screencapturekit = ["dep:screencapturekit", "dep:core-foundation", "dep:co
 # the encoder and the resulting H.264 payload flows through
 # `EncodedVideoFrame.payload`.
 macos-videotoolbox = ["dep:core-foundation"]
-# Opt-in server-side WebRTC peer scaffold (Phase D.0). The feature is
-# currently a gate with no payload — no `str0m` or other crypto/SCTP/
-# SRTP/ICE crate is pulled in yet. Phase D.1 will expand the
-# `[dependencies]` block in the same change as the real integration
-# and update `dependency-audit-policy.md` accordingly. With the
-# feature enabled, `Str0mWebRtcPeer` (a placeholder that returns
-# `ServiceUnavailable("Phase D.1 pending: ...")` from every
-# state-changing operation) replaces the in-memory no-op default.
-webrtc-peer = []
+# Opt-in server-side WebRTC peer (Phase D.1.0). With the feature on,
+# `Str0mWebRtcPeer` swaps in a real `str0m` (sans-IO) peer that drives
+# SDP/ICE negotiation through Phase C `SignalingEnvelope`s, packetizes
+# encoded H.264 payloads into RTP, and surfaces outbound datagrams via
+# `take_outbound_rtp`. The peer is still NOT wired into the server
+# stream lifecycle (Phase D.1.1) and there is no UDP transport yet
+# (Phase D.1.2); default builds remain on the in-memory no-op peer.
+webrtc-peer = ["dep:str0m"]
 
 [dependencies]
 apprelay-protocol = { path = "../protocol" }
 plist = { version = "1", default-features = false }
 serde = { version = "1", features = ["derive"] }
+str0m = { version = "0.8", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = { version = "0.3", optional = true }

@@ -195,15 +195,20 @@ Currently in this category:
   `libc`, etc.) under the same rules as the rest of the production set; the
   Apple system frameworks themselves are not crate-managed and are out of scope
   for `cargo-audit`.
-- `apprelay-core` feature `webrtc-peer` (used by Phase D.0 of the real-media
-  implementation roadmap) is currently a gate with no extra crate
-  dependencies; the `Str0mWebRtcPeer` scaffold returns
-  `ServiceUnavailable("Phase D.1 pending: …")` from every state-changing
-  method. Phase D.1 will pull in `str0m` (sans-IO) plus its transitive
-  crypto/SCTP/SRTP/ICE crates, and that dependency change must be recorded in
-  this policy in the same change as the integration. Beta artifacts that ship
-  Phase D.1's real WebRTC peer must record advisory triage for the new crates
-  under the same rules as the rest of the production set.
+- `apprelay-core` feature `webrtc-peer` (used by Phase D.1.0 of the real-media
+  implementation roadmap) pulls in `str0m` (sans-IO WebRTC) plus its
+  transitive crypto/SCTP/SRTP/ICE dependency surface. The crates currently
+  added to the artifact graph when the feature is enabled include `str0m`,
+  `sctp-proto`, `openssl` and `openssl-sys` (DTLS/SRTP backend), `combine`
+  (SDP parser), `crc`/`crc-catalog`, `fxhash`, `hmac`, `sha1`/`sha1-asm`,
+  `rand`/`rand_chacha`/`rand_core`/`getrandom`, `thiserror`, and `tracing`/
+  `tracing-core`/`tracing-attributes`. Beta artifacts that ship the WebRTC
+  peer (Phase D.1.x) must record advisory triage for `str0m` and every one
+  of these transitive crates under the same rules as the rest of the
+  production set. Phase D.1.1 (peer wired into the server stream lifecycle)
+  and Phase D.1.2 (UDP transport) do not add new crate dependencies; if a
+  later phase swaps the DTLS backend (e.g. `aws-lc-rs` instead of OpenSSL),
+  this section must be updated in the same change.
 - `apprelay-core` feature `pipewire-capture` is reserved for the Linux capture
   adapter and currently has no extra crate dependencies; the same opt-in rule
   will apply once it does.
