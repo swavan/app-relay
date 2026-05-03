@@ -8,6 +8,7 @@ mod audio_stream;
 mod input;
 mod signaling;
 mod video_stream;
+mod webrtc_peer;
 
 pub use audio_stream::{
     AudioBackendContract, AudioBackendFailure, AudioBackendFailureKind, AudioBackendKind,
@@ -39,6 +40,7 @@ pub use video_stream::{
     VideoStreamSignalingKind, VideoStreamState, VideoStreamStats, WebRtcIceCandidate,
     WebRtcSdpType, WebRtcSessionDescription,
 };
+pub use webrtc_peer::{RtpPacketBatch, WebRtcPeerRole};
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

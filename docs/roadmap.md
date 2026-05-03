@@ -648,10 +648,35 @@ unaffected):
   `SignalingEnvelope`, `SignalingMessage`, `SignalingPoll`, and
   `SignalingSubmitAck` types. No real WebRTC peer is wired yet — Phase D will
   consume these envelopes.
-- Phase D — Server-side WebRTC peer (pending). Planned dependency: `str0m`
-  (sans-IO) over `webrtc-rs` for smaller transitive surface; `dependency-audit-
-  policy.md` will be updated in the same change because this lands real
-  crypto/SCTP/SRTP/ICE crates.
+- Phase D — Server-side WebRTC peer
+  - Phase D.0 (complete): registered the `webrtc-peer` cargo feature on
+    `apprelay-core` (forwarded by `apprelay-server`), `default = false`, and
+    currently carries no new crate dependencies. The protocol crate gained
+    transport-neutral `WebRtcPeerRole` and `RtpPacketBatch` value types.
+    `apprelay-core` gained a sans-IO `WebRtcPeer` trait plus an always-on
+    `InMemoryWebRtcPeer` no-op default so the rest of the codebase can hold a
+    `Box<dyn WebRtcPeer>` against the trait without any feature enabled.
+    Behind the new feature, `Str0mWebRtcPeer` is a scaffold (also in
+    `apprelay-core`) that returns
+    `AppRelayError::ServiceUnavailable("Phase D.1 pending: …")` from every
+    state-changing method, so enabling the feature is never a silent no-op.
+    `ServerServices` holds a `Mutex<Box<dyn WebRtcPeer>>` and
+    `for_current_platform` swaps the in-memory peer for the scaffold when the
+    feature is on; default builds and CI are unaffected. Inline tests in
+    `crates/server/src/lib.rs` prove the default field accepts
+    `start`/`stop`/drains, and a feature-gated test proves the scaffold
+    returns `Phase D.1` `ServiceUnavailable` from `start` while keeping
+    `stop` idempotent. Explicit non-goals for D.0: no real SDP/ICE/RTP
+    integration, no `str0m` dependency, and no peer wiring into the stream
+    lifecycle yet.
+  - Phase D.1 (pending): real `str0m` (sans-IO) integration consuming Phase C
+    signaling envelopes, packetizing the Phase B Annex-B H.264 payloads into
+    RTP, and driving the peer state machine. The `dependency-audit-policy.md`
+    update for the new crypto/SCTP/SRTP/ICE crates lands in the same change
+    as the integration. `ServerEvent` variants for peer lifecycle
+    (`WebRtcPeerStarted`, `WebRtcPeerStopped`, `WebRtcPeerSignalingConsumed`,
+    `WebRtcPeerOutboundFrame`, `WebRtcPeerRejected`) will be reintroduced
+    alongside their actual emit sites.
 - Phase E — Tauri client `RTCPeerConnection` and `<video>` decode in WKWebView
   (pending). Updates Tauri capability/CSP files for WebRTC media.
 - Phase F — Mac-to-Mac end-to-end demo (pending).

@@ -195,6 +195,15 @@ Currently in this category:
   `libc`, etc.) under the same rules as the rest of the production set; the
   Apple system frameworks themselves are not crate-managed and are out of scope
   for `cargo-audit`.
+- `apprelay-core` feature `webrtc-peer` (used by Phase D.0 of the real-media
+  implementation roadmap) is currently a gate with no extra crate
+  dependencies; the `Str0mWebRtcPeer` scaffold returns
+  `ServiceUnavailable("Phase D.1 pending: …")` from every state-changing
+  method. Phase D.1 will pull in `str0m` (sans-IO) plus its transitive
+  crypto/SCTP/SRTP/ICE crates, and that dependency change must be recorded in
+  this policy in the same change as the integration. Beta artifacts that ship
+  Phase D.1's real WebRTC peer must record advisory triage for the new crates
+  under the same rules as the rest of the production set.
 - `apprelay-core` feature `pipewire-capture` is reserved for the Linux capture
   adapter and currently has no extra crate dependencies; the same opt-in rule
   will apply once it does.
