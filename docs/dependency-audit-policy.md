@@ -165,6 +165,32 @@ Evidence must not include auth tokens, signing material, private registry
 credentials, or unpublished security exploit details beyond advisory ids and
 package/version metadata.
 
+## Opt-In Platform-Adapter Dependencies
+
+Some platform adapters land behind `default = false` cargo features so that
+default Linux/macOS/Windows builds continue to ship without the underlying
+native crates. These dependencies are still treated as **production**
+dependencies of any beta artifact that enables the feature, even though they
+do not enter the dependency graph of the default workspace build.
+
+Currently in this category:
+
+- `apprelay-core` feature `macos-screencapturekit` (used by Phase A.1 of the
+  real-media implementation roadmap) pulls in `screencapturekit`,
+  `core-foundation`, and `core-graphics` under
+  `target.'cfg(target_os = "macos")'.dependencies`. Beta artifacts that ship
+  ScreenCaptureKit-backed window capture must record advisory triage for these
+  crates and their transitive dependencies (`core-media-rs`, `core-video-rs`,
+  `objc`, `objc2`, `block2`, `dispatch`, `io-surface`, etc.) under the same
+  rules as the rest of the production set.
+- `apprelay-core` feature `pipewire-capture` is reserved for the Linux capture
+  adapter and currently has no extra crate dependencies; the same opt-in rule
+  will apply once it does.
+
+When a release run does not enable any of these features, the affected crates
+are not part of the artifact graph and the existing audit evidence is
+sufficient.
+
 ## Known Gaps
 
 - `npm audit --audit-level=high` relies on npm advisory data at run time and

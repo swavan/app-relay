@@ -74,7 +74,18 @@ impl ServerServices {
     }
 
     pub fn for_current_platform() -> Self {
-        Self::new(Platform::current(), env!("CARGO_PKG_VERSION"))
+        #[cfg_attr(
+            not(all(feature = "macos-screencapturekit", target_os = "macos")),
+            allow(unused_mut)
+        )]
+        let mut services = Self::new(Platform::current(), env!("CARGO_PKG_VERSION"));
+        #[cfg(all(feature = "macos-screencapturekit", target_os = "macos"))]
+        {
+            services.video_stream = VideoStreamControl::for_macos_runtime(Arc::new(
+                apprelay_core::ScreenCaptureKitWindowRuntime::new(),
+            ));
+        }
+        services
     }
 
     #[doc(hidden)]
