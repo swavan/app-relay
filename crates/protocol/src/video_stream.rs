@@ -152,6 +152,16 @@ pub struct EncodedVideoFrame {
     pub timestamp_ms: u64,
     pub byte_length: u32,
     pub keyframe: bool,
+    /// Encoded H.264 bitstream bytes for this frame, in Annex-B framing.
+    ///
+    /// This field is additive: the in-memory encoding pipeline used by
+    /// existing tests still produces empty payloads, so deserialising
+    /// previously-emitted JSON without this field keeps working through
+    /// `#[serde(default)]`. Real-media adapters (e.g. the macOS
+    /// VideoToolbox encoder behind the `macos-videotoolbox` cargo
+    /// feature) populate this field with the encoded bitstream.
+    #[serde(default)]
+    pub payload: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

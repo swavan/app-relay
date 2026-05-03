@@ -8,6 +8,12 @@ repository.workspace = true
 default = []
 pipewire-capture = []
 macos-screencapturekit = ["dep:screencapturekit", "dep:core-foundation", "dep:core-graphics"]
+# Opt-in macOS hardware H.264 encoder backed by VideoToolbox.framework.
+# Default builds and CI never enable this; when both this feature and
+# `macos-screencapturekit` are enabled, captured `CMSampleBuffer`s feed
+# the encoder and the resulting H.264 payload flows through
+# `EncodedVideoFrame.payload`.
+macos-videotoolbox = ["dep:core-foundation"]
 
 [dependencies]
 apprelay-protocol = { path = "../protocol" }

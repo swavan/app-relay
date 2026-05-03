@@ -587,9 +587,33 @@ unaffected):
     test in `crates/core/tests/macos_screencapturekit.rs` exercises a
     real capture end-to-end and is `#[ignore]` because it requires
     Screen Recording permission.
-- Phase B — VideoToolbox H.264 hardware encode (pending). Adds an additive
-  `payload: Vec<u8>` field to `EncodedVideoFrame` so existing in-memory tests
-  remain unchanged.
+- Phase B (complete) — opt-in macOS VideoToolbox H.264 hardware encode.
+  Registers the `macos-videotoolbox` cargo feature on `apprelay-core` and
+  forwards it through `apprelay-server`. With the feature enabled,
+  `VideoToolboxH264Encoder` wraps `VTCompressionSession` directly via a thin
+  `extern "C"` surface (six VideoToolbox functions plus a few CFString
+  property keys) and produces an H.264 elementary stream in Annex-B framing,
+  inlining the SPS/PPS on every keyframe so a freshly joined subscriber can
+  decode without an out-of-band parameter set. When both
+  `macos-screencapturekit` and `macos-videotoolbox` are enabled,
+  `VideoToolboxScreenCaptureKitBridge` plugs into
+  `WindowCaptureBackendService::MacosSelectedWindow` so every
+  `CMSampleBuffer` ScreenCaptureKit (Phase A.1) delivers is fed straight
+  into a per-stream encoder; the resulting Annex-B payload is staged on the
+  capture backend and surfaced through the additive
+  `EncodedVideoFrame.payload` field (gated by `#[serde(default)]` so older
+  payload-free clients still parse). VideoToolbox status codes are mapped
+  to typed `AppRelayError::ServiceUnavailable` (encoder unavailable,
+  malfunction, invalid session) and `AppRelayError::InvalidRequest`
+  (rejected property, parameter error); the encoder never silently
+  no-ops. Default Linux/Windows/macOS builds and CI are unaffected — the
+  feature is off by default, the FFI block is target-gated to
+  `cfg(target_os = "macos")`, and the additive protocol field defaults to
+  an empty vector. An integration test in
+  `crates/core/tests/macos_videotoolbox.rs` drives a real
+  `VTCompressionSession` end-to-end with a synthetic `CVPixelBuffer` and
+  is `#[ignore]` because it requires the cargo feature and a macOS host
+  (no Screen Recording permission needed).
 - Phase C — Real SDP/ICE signaling over the existing line-based control plane
   (pending). Base64-encodes SDP/ICE to keep the wire framing intact and adds
   trickle-ICE operations.

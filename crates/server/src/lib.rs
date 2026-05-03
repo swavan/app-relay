@@ -79,7 +79,27 @@ impl ServerServices {
             allow(unused_mut)
         )]
         let mut services = Self::new(Platform::current(), env!("CARGO_PKG_VERSION"));
-        #[cfg(all(feature = "macos-screencapturekit", target_os = "macos"))]
+        // When both opt-in macOS features are enabled, prefer the
+        // ScreenCaptureKit + VideoToolbox bridge so captured sample
+        // buffers flow through the hardware H.264 encoder. When only
+        // ScreenCaptureKit is enabled we install the capture-only
+        // runtime that emits payload-free `EncodedVideoFrame`s, matching
+        // the previous Phase A.1 behaviour.
+        #[cfg(all(
+            feature = "macos-screencapturekit",
+            feature = "macos-videotoolbox",
+            target_os = "macos"
+        ))]
+        {
+            services.video_stream = VideoStreamControl::for_macos_runtime(Arc::new(
+                apprelay_core::VideoToolboxScreenCaptureKitBridge::new(),
+            ));
+        }
+        #[cfg(all(
+            feature = "macos-screencapturekit",
+            not(feature = "macos-videotoolbox"),
+            target_os = "macos"
+        ))]
         {
             services.video_stream = VideoStreamControl::for_macos_runtime(Arc::new(
                 apprelay_core::ScreenCaptureKitWindowRuntime::new(),
