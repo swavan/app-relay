@@ -643,7 +643,8 @@ pub trait ClientAuthorizationService {
     fn pending_pairings(&self) -> Vec<PendingPairing>;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuthorizedClient {
     pub id: String,
     pub label: String,
@@ -789,7 +790,8 @@ impl SessionPolicy {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApplicationPermission {
     pub application_id: String,
     pub label: String,
@@ -847,7 +849,8 @@ impl From<PermissionValidationError> for PermissionStoreError {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConnectionProfile {
     pub id: String,
     pub label: String,
@@ -2986,13 +2989,9 @@ fn parse_desktop_entry(path: &Path) -> Option<ApplicationSummary> {
     Some(ApplicationSummary {
         id,
         name,
-        icon: icon
-            .filter(|value| !value.is_empty())
-            .map(|source| AppIcon {
-                mime_type: "application/x-icon-theme-name".to_string(),
-                bytes: Vec::new(),
-                source: Some(source),
-            }),
+        icon: icon.filter(|value| !value.is_empty()).map(|source| {
+            AppIcon::from_bytes("application/x-icon-theme-name", Vec::new(), Some(source))
+        }),
         launch: exec
             .filter(|value| !value.is_empty())
             .map(|command| ApplicationLaunch::DesktopCommand { command }),
@@ -3345,14 +3344,14 @@ fn macos_bundle_icon(path: &Path, icon_file: &str) -> Option<AppIcon> {
     let full_path = path.join(&resource_path);
     let bytes = read_regular_file_bytes(&full_path)?;
 
-    Some(AppIcon {
-        mime_type: "image/icns".to_string(),
+    Some(AppIcon::from_bytes(
+        "image/icns",
         bytes,
-        source: Some(format!(
+        Some(format!(
             "Contents/Resources/{}",
             resource_name.to_string_lossy()
         )),
-    })
+    ))
 }
 
 fn read_regular_file_bytes(path: &Path) -> Option<Vec<u8>> {
@@ -5140,11 +5139,11 @@ event=input_focus_enabled session_id=session%201 client_id=client-1 selected_win
             vec![ApplicationSummary {
                 id: "visible".to_string(),
                 name: "Visible App".to_string(),
-                icon: Some(AppIcon {
-                    mime_type: "application/x-icon-theme-name".to_string(),
-                    bytes: Vec::new(),
-                    source: Some("visible-icon".to_string()),
-                }),
+                icon: Some(AppIcon::from_bytes(
+                    "application/x-icon-theme-name",
+                    Vec::new(),
+                    Some("visible-icon".to_string()),
+                )),
                 launch: Some(ApplicationLaunch::DesktopCommand {
                     command: "visible --new-window".to_string(),
                 }),
@@ -5271,11 +5270,11 @@ event=input_focus_enabled session_id=session%201 client_id=client-1 selected_win
             vec![ApplicationSummary {
                 id: "dev.apprelay.visible".to_string(),
                 name: "Visible Mac App".to_string(),
-                icon: Some(AppIcon {
-                    mime_type: "image/icns".to_string(),
-                    bytes: b"visible icon bytes".to_vec(),
-                    source: Some("Contents/Resources/VisibleIcon.icns".to_string()),
-                }),
+                icon: Some(AppIcon::from_bytes(
+                    "image/icns",
+                    b"visible icon bytes".to_vec(),
+                    Some("Contents/Resources/VisibleIcon.icns".to_string()),
+                )),
                 launch: Some(ApplicationLaunch::MacosBundle {
                     bundle_path: root.join("Visible.app").display().to_string(),
                 }),
@@ -6183,11 +6182,11 @@ event=input_focus_enabled session_id=session%201 client_id=client-1 selected_win
             vec![ApplicationSummary {
                 id: "dev.apprelay.binary".to_string(),
                 name: "Binary Mac App".to_string(),
-                icon: Some(AppIcon {
-                    mime_type: "image/icns".to_string(),
-                    bytes: b"binary icon bytes".to_vec(),
-                    source: Some("Contents/Resources/BinaryIcon.icns".to_string()),
-                }),
+                icon: Some(AppIcon::from_bytes(
+                    "image/icns",
+                    b"binary icon bytes".to_vec(),
+                    Some("Contents/Resources/BinaryIcon.icns".to_string()),
+                )),
                 launch: Some(ApplicationLaunch::MacosBundle {
                     bundle_path: root.join("Binary.app").display().to_string(),
                 }),
@@ -6234,11 +6233,11 @@ event=input_focus_enabled session_id=session%201 client_id=client-1 selected_win
             vec![ApplicationSummary {
                 id: "dev.apprelay.icon-extension".to_string(),
                 name: "Icon Extension App".to_string(),
-                icon: Some(AppIcon {
-                    mime_type: "image/icns".to_string(),
-                    bytes: b"provided icon bytes".to_vec(),
-                    source: Some("Contents/Resources/Provided.icns".to_string()),
-                }),
+                icon: Some(AppIcon::from_bytes(
+                    "image/icns",
+                    b"provided icon bytes".to_vec(),
+                    Some("Contents/Resources/Provided.icns".to_string()),
+                )),
                 launch: Some(ApplicationLaunch::MacosBundle {
                     bundle_path: root.join("IconExtension.app").display().to_string(),
                 }),
@@ -6470,11 +6469,11 @@ event=input_focus_enabled session_id=session%201 client_id=client-1 selected_win
             vec![ApplicationSummary {
                 id: "dev.apprelay.traversal".to_string(),
                 name: "Traversal App".to_string(),
-                icon: Some(AppIcon {
-                    mime_type: "image/icns".to_string(),
-                    bytes: b"resource icon bytes".to_vec(),
-                    source: Some("Contents/Resources/Escape.icns".to_string()),
-                }),
+                icon: Some(AppIcon::from_bytes(
+                    "image/icns",
+                    b"resource icon bytes".to_vec(),
+                    Some("Contents/Resources/Escape.icns".to_string()),
+                )),
                 launch: Some(ApplicationLaunch::MacosBundle {
                     bundle_path: root.join("Traversal.app").display().to_string(),
                 }),

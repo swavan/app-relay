@@ -67,7 +67,7 @@ describe("buildAppViewModel", () => {
           name: "Terminal",
           launch: {
             kind: "desktopCommand",
-            value: "/usr/bin/gnome-terminal --new-window",
+            command: "/usr/bin/gnome-terminal --new-window",
           },
         },
       ],
@@ -114,7 +114,7 @@ describe("buildAppViewModel", () => {
         name: "Terminal",
         launch: {
           kind: "desktopCommand",
-          value: "/usr/bin/gnome-terminal --new-window",
+          command: "/usr/bin/gnome-terminal --new-window",
         },
         launchLabel: "Launch gnome-terminal",
         iconView: {
@@ -326,7 +326,7 @@ describe("buildAppViewModel", () => {
           name: "Terminal",
           launch: {
             kind: "macosBundle",
-            value: "/Applications/Terminal.app",
+            bundlePath: "/Applications/Terminal.app",
           },
         },
       ],

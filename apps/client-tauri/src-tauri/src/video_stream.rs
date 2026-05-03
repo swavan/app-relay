@@ -1,9 +1,9 @@
 use apprelay_protocol::{
-    ControlAuth, NegotiateVideoStreamRequest, ReconnectVideoStreamRequest, StartVideoStreamRequest,
+    NegotiateVideoStreamRequest, ReconnectVideoStreamRequest, StartVideoStreamRequest,
     StopVideoStreamRequest, VideoStreamSession,
 };
 
-use crate::{with_control_plane, with_control_plane_events};
+use crate::{paired_auth, with_control_plane, with_control_plane_events};
 
 #[tauri::command]
 pub fn active_video_streams(
@@ -80,8 +80,4 @@ pub fn video_stream_status(
     with_control_plane(|control_plane| {
         control_plane.video_stream_status(&paired_auth(auth_token, client_id), &stream_id)
     })
-}
-
-fn paired_auth(auth_token: String, client_id: String) -> ControlAuth {
-    ControlAuth::with_client_id(auth_token, client_id)
 }

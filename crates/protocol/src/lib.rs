@@ -40,7 +40,8 @@ pub use video_stream::{
     WebRtcSdpType, WebRtcSessionDescription,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HealthStatus {
     pub service: String,
     pub healthy: bool,
@@ -96,7 +97,8 @@ impl HealthStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Platform {
     Android,
     Ios,
@@ -135,7 +137,8 @@ impl Platform {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Feature {
     AppDiscovery,
     ApplicationLaunch,
@@ -162,7 +165,8 @@ impl Feature {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlatformCapability {
     pub platform: Platform,
     pub feature: Feature,
@@ -203,7 +207,8 @@ impl PlatformCapability {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApplicationSummary {
     pub id: String,
     pub name: String,
@@ -211,14 +216,134 @@ pub struct ApplicationSummary {
     pub launch: Option<ApplicationLaunch>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Wire-shaped application icon. The on-the-wire representation is
+/// `{ mimeType, dataUrl, source }`; the raw `bytes` are kept private to the
+/// protocol crate because they only exist to be encoded into the data URL.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppIcon {
     pub mime_type: String,
-    pub bytes: Vec<u8>,
+    pub data_url: Option<String>,
     pub source: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl AppIcon {
+    /// Build an [`AppIcon`] from raw image bytes, performing the same
+    /// `bytes → data URL` conversion (including ICNS → embedded PNG
+    /// extraction) that the Tauri shell used to apply at the wire boundary.
+    /// Empty `bytes` produces an icon whose `data_url` is `None` (e.g. for
+    /// XDG icon-theme name references).
+    pub fn from_bytes(
+        mime_type: impl Into<String>,
+        bytes: Vec<u8>,
+        source: Option<String>,
+    ) -> Self {
+        let mime_type = mime_type.into();
+        let (mime_type, data_url) = encode_icon(&mime_type, &bytes);
+        Self {
+            mime_type,
+            data_url,
+            source,
+        }
+    }
+}
+
+fn encode_icon(mime_type: &str, bytes: &[u8]) -> (String, Option<String>) {
+    if bytes.is_empty() {
+        return (mime_type.to_string(), None);
+    }
+
+    if mime_type.eq_ignore_ascii_case("image/icns") {
+        if let Some(png_bytes) = extract_icns_png_payload(bytes) {
+            return (
+                "image/png".to_string(),
+                Some(format!(
+                    "data:image/png;base64,{}",
+                    base64_encode(png_bytes)
+                )),
+            );
+        }
+    }
+
+    (
+        mime_type.to_string(),
+        Some(format!(
+            "data:{};base64,{}",
+            mime_type,
+            base64_encode(bytes)
+        )),
+    )
+}
+
+fn extract_icns_png_payload(bytes: &[u8]) -> Option<&[u8]> {
+    const ICNS_HEADER_LEN: usize = 8;
+    const CHUNK_HEADER_LEN: usize = 8;
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+
+    if bytes.len() < ICNS_HEADER_LEN || &bytes[..4] != b"icns" {
+        return None;
+    }
+
+    let declared_len = u32::from_be_bytes(bytes[4..8].try_into().ok()?) as usize;
+    if declared_len < ICNS_HEADER_LEN || declared_len > bytes.len() {
+        return None;
+    }
+
+    let mut png_payload = None;
+    let mut offset = ICNS_HEADER_LEN;
+    while offset < declared_len {
+        if declared_len - offset < CHUNK_HEADER_LEN {
+            return None;
+        }
+
+        let chunk_len = u32::from_be_bytes(bytes[offset + 4..offset + 8].try_into().ok()?) as usize;
+        let chunk_end = offset.checked_add(chunk_len)?;
+        if chunk_len < CHUNK_HEADER_LEN || chunk_end > declared_len {
+            return None;
+        }
+
+        let payload_start = offset.checked_add(CHUNK_HEADER_LEN)?;
+        let payload = &bytes[payload_start..chunk_end];
+        if png_payload.is_none() && payload.starts_with(PNG_SIGNATURE) {
+            png_payload = Some(payload);
+        }
+
+        offset = chunk_end;
+    }
+
+    png_payload
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+
+        encoded.push(ALPHABET[(first >> 2) as usize] as char);
+        encoded.push(ALPHABET[(((first & 0b0000_0011) << 4) | (second >> 4)) as usize] as char);
+
+        if chunk.len() > 1 {
+            encoded.push(ALPHABET[(((second & 0b0000_1111) << 2) | (third >> 6)) as usize] as char);
+        } else {
+            encoded.push('=');
+        }
+
+        if chunk.len() > 2 {
+            encoded.push(ALPHABET[(third & 0b0011_1111) as usize] as char);
+        } else {
+            encoded.push('=');
+        }
+    }
+
+    encoded
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
 pub enum ApplicationLaunch {
     DesktopCommand { command: String },
     MacosBundle { bundle_path: String },
@@ -237,19 +362,22 @@ impl ViewportSize {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateSessionRequest {
     pub application_id: String,
     pub viewport: ViewportSize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResizeSessionRequest {
     pub session_id: String,
     pub viewport: ViewportSize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WindowResizeIntent {
     pub session_id: String,
     pub selected_window_id: String,
@@ -257,14 +385,16 @@ pub struct WindowResizeIntent {
     pub status: ResizeIntentStatus,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ResizeIntentStatus {
     Recorded,
     Applied,
     Unsupported,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApplicationSession {
     pub id: String,
     pub application_id: String,
@@ -275,7 +405,8 @@ pub struct ApplicationSession {
     pub state: SessionState,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApplicationLaunchIntent {
     pub session_id: String,
     pub application_id: String,
@@ -283,14 +414,16 @@ pub struct ApplicationLaunchIntent {
     pub status: LaunchIntentStatus,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum LaunchIntentStatus {
     Recorded,
     Attached,
     Unsupported,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SelectedWindow {
     pub id: String,
     pub application_id: String,
@@ -298,7 +431,8 @@ pub struct SelectedWindow {
     pub selection_method: WindowSelectionMethod,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum WindowSelectionMethod {
     LaunchIntent,
     ExistingWindow,
@@ -306,7 +440,8 @@ pub enum WindowSelectionMethod {
     Synthetic,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SessionState {
     Starting,
     Ready,
@@ -533,6 +668,85 @@ mod tests {
                 height: 720,
             }
         );
+    }
+
+    #[test]
+    fn app_icon_from_bytes_encodes_png_payload_inline() {
+        let icon = AppIcon::from_bytes("image/png", vec![0x89, 0x50, 0x4e, 0x47], None);
+
+        assert_eq!(icon.mime_type, "image/png");
+        assert_eq!(
+            icon.data_url.as_deref(),
+            Some("data:image/png;base64,iVBORw==")
+        );
+    }
+
+    #[test]
+    fn app_icon_from_bytes_extracts_png_from_icns_payload() {
+        let png_bytes = b"\x89PNG\r\n\x1a\npng payload";
+        let mut icns_bytes = Vec::new();
+        icns_bytes.extend_from_slice(b"icns");
+        icns_bytes.extend_from_slice(&((8 + 8 + png_bytes.len()) as u32).to_be_bytes());
+        icns_bytes.extend_from_slice(b"ic10");
+        icns_bytes.extend_from_slice(&((8 + png_bytes.len()) as u32).to_be_bytes());
+        icns_bytes.extend_from_slice(png_bytes);
+
+        let icon = AppIcon::from_bytes("image/icns", icns_bytes, None);
+
+        assert_eq!(icon.mime_type, "image/png");
+        assert_eq!(
+            icon.data_url,
+            Some(format!(
+                "data:image/png;base64,{}",
+                base64_encode(png_bytes)
+            ))
+        );
+    }
+
+    #[test]
+    fn app_icon_from_bytes_falls_back_to_icns_for_malformed_or_no_png_payload() {
+        let malformed = AppIcon::from_bytes("image/icns", b"icns\0\0\0\x20bad".to_vec(), None);
+        assert_eq!(malformed.mime_type, "image/icns");
+        assert_eq!(
+            malformed.data_url,
+            Some("data:image/icns;base64,aWNucwAAACBiYWQ=".to_string())
+        );
+
+        let no_png_bytes = b"icns\0\0\0\x10TOC \0\0\0\x08".to_vec();
+        let no_png = AppIcon::from_bytes("image/icns", no_png_bytes.clone(), None);
+        assert_eq!(no_png.mime_type, "image/icns");
+        assert_eq!(
+            no_png.data_url,
+            Some(format!(
+                "data:image/icns;base64,{}",
+                base64_encode(&no_png_bytes)
+            ))
+        );
+    }
+
+    #[test]
+    fn app_icon_from_bytes_falls_back_to_icns_when_chunk_length_overflows() {
+        let bytes = b"icns\0\0\0\x10ic10\xff\xff\xff\xff".to_vec();
+        let icon = AppIcon::from_bytes("image/icns", bytes.clone(), None);
+
+        assert_eq!(icon.mime_type, "image/icns");
+        assert_eq!(
+            icon.data_url,
+            Some(format!("data:image/icns;base64,{}", base64_encode(&bytes)))
+        );
+    }
+
+    #[test]
+    fn app_icon_from_bytes_omits_data_url_for_empty_bytes() {
+        let icon = AppIcon::from_bytes(
+            "application/x-icon-theme-name",
+            Vec::new(),
+            Some("utilities-terminal".to_string()),
+        );
+
+        assert_eq!(icon.data_url, None);
+        assert_eq!(icon.mime_type, "application/x-icon-theme-name");
+        assert_eq!(icon.source.as_deref(), Some("utilities-terminal"));
     }
 
     #[test]
