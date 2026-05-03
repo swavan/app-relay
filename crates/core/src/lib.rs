@@ -7,8 +7,11 @@ mod macos_screencapturekit;
 #[cfg(all(feature = "macos-videotoolbox", target_os = "macos"))]
 mod macos_videotoolbox;
 mod signaling;
+#[cfg(feature = "webrtc-peer")]
+mod str0m_webrtc_peer;
 mod video_encoder;
 mod video_stream;
+mod webrtc_peer;
 
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 pub use audio_stream::PipeWireCaptureCommandConfig;
@@ -34,6 +37,8 @@ pub use signaling::{
     InMemorySignalingService, SignalingService, MAX_ENVELOPES_PER_SESSION,
     SIGNALING_BACKLOG_FULL_MESSAGE_PREFIX,
 };
+#[cfg(feature = "webrtc-peer")]
+pub use str0m_webrtc_peer::Str0mWebRtcPeer;
 pub use video_encoder::{
     EncodedH264Frame, H264EncoderConfig, H264VideoEncoder, InMemoryH264VideoEncoder,
 };
@@ -42,6 +47,7 @@ pub use video_stream::{
     MacosWindowCaptureRuntime, MacosWindowCaptureRuntimeCalls, MacosWindowCaptureStartRequest,
     VideoStreamService, WindowCaptureBackend, WindowCaptureBackendService,
 };
+pub use webrtc_peer::{InMemoryWebRtcPeer, WebRtcPeer};
 
 use std::collections::HashSet;
 use std::fs;

@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -54,6 +54,13 @@ pub struct ServerServices {
     video_stream: VideoStreamControl,
     audio_stream: AudioStreamControl,
     signaling: SignalingControl,
+    /// Server-side WebRTC peer. Default: `InMemoryWebRtcPeer` no-op.
+    /// With the `webrtc-peer` feature on, swapped for the
+    /// `Str0mWebRtcPeer` scaffold (Phase D.0). Phase D.1 will expand
+    /// the scaffold into a real `str0m` integration that reads from
+    /// here, which is why the field is allowed to be currently unread.
+    #[allow(dead_code)]
+    webrtc_peer: Mutex<Box<dyn apprelay_core::WebRtcPeer>>,
     platform: Platform,
     version: String,
 }
@@ -78,6 +85,7 @@ impl ServerServices {
             video_stream: VideoStreamControl::for_platform(platform),
             audio_stream: AudioStreamControl::for_platform(platform),
             signaling: SignalingControl::new(),
+            webrtc_peer: Mutex::new(Box::new(apprelay_core::InMemoryWebRtcPeer::new())),
             platform,
             version,
         }
@@ -114,6 +122,16 @@ impl ServerServices {
             services.video_stream = VideoStreamControl::for_macos_runtime(Arc::new(
                 apprelay_core::ScreenCaptureKitWindowRuntime::new(),
             ));
+        }
+        // Phase D.0: when the `webrtc-peer` feature is enabled, swap the
+        // in-memory no-op peer for the `Str0mWebRtcPeer` scaffold. The
+        // scaffold returns `ServiceUnavailable("Phase D.1 pending: …")`
+        // from every state-changing method, so enabling the feature is
+        // never a silent no-op — Phase D.1 will replace the bodies with
+        // real `str0m` integration.
+        #[cfg(feature = "webrtc-peer")]
+        {
+            services.webrtc_peer = Mutex::new(Box::new(apprelay_core::Str0mWebRtcPeer::new()));
         }
         services
     }
@@ -2963,6 +2981,55 @@ mod tests {
             services.health(),
             HealthStatus::healthy("apprelay-server", "test")
         );
+    }
+
+    #[cfg(not(feature = "webrtc-peer"))]
+    #[test]
+    fn webrtc_peer_default_uses_in_memory_no_op() {
+        let services = ServerServices::for_current_platform();
+        let mut peer = services
+            .webrtc_peer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        peer.start(
+            "session-1",
+            "stream-1",
+            apprelay_protocol::WebRtcPeerRole::Offerer,
+        )
+        .expect("in-memory peer accepts start in default builds");
+        peer.stop("session-1", "stream-1")
+            .expect("in-memory peer accepts stop");
+        assert!(peer.take_outbound_signaling("session-1").is_empty());
+        assert!(peer.take_outbound_rtp().is_empty());
+    }
+
+    #[cfg(feature = "webrtc-peer")]
+    #[test]
+    fn webrtc_peer_feature_swaps_in_str0m_scaffold() {
+        let services = ServerServices::for_current_platform();
+        let mut peer = services
+            .webrtc_peer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let err = peer
+            .start(
+                "session-1",
+                "stream-1",
+                apprelay_protocol::WebRtcPeerRole::Offerer,
+            )
+            .expect_err("Phase D.0 scaffold returns ServiceUnavailable from start");
+        match err {
+            apprelay_protocol::AppRelayError::ServiceUnavailable(message) => {
+                assert!(
+                    message.contains("Phase D.1"),
+                    "scaffold should advertise Phase D.1 pending: {message}"
+                );
+            }
+            other => panic!("expected ServiceUnavailable, got {other:?}"),
+        }
+        // stop is documented as idempotent in the scaffold, so it must still succeed.
+        peer.stop("session-1", "stream-1")
+            .expect("Phase D.0 scaffold stop is idempotent");
     }
 
     #[test]
