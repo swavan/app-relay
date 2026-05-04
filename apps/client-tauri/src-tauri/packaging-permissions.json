@@ -4,7 +4,14 @@
   "tauri": {
     "usesPluginPermissions": false,
     "allowedPluginPermissions": [],
-    "nativeCommandSurface": "Tauri commands only; no Tauri filesystem, shell, clipboard, notification, updater, process, or HTTP plugin permissions are packaged."
+    "nativeCommandSurface": "Tauri commands only; no Tauri filesystem, shell, clipboard, notification, updater, process, or HTTP plugin permissions are packaged.",
+    "defaultCapability": {
+      "description": "Default capability file declared so the packaging-check script can verify it matches a known-minimal shape. Only the main window holds Tauri's core IPC permissions; no plugin or filesystem permissions are granted. Any deviation from this declaration must update both this file and src-tauri/capabilities/default.json in the same change.",
+      "file": "src-tauri/capabilities/default.json",
+      "identifier": "default",
+      "windows": ["main"],
+      "permissions": ["core:default"]
+    }
   },
   "platforms": {
     "linux": {
