@@ -866,7 +866,30 @@ unaffected):
     signaling envelope flow are now end-to-end live in the Tauri
     desktop client.
 - Phase E complete. Real-media implementation roadmap remaining:
-- Phase F — Mac-to-Mac end-to-end demo (pending).
+- Phase F (complete): mac-to-mac end-to-end demo runbook. The full
+  server↔client WebRTC pipeline is gated by Screen Recording permission,
+  real UDP sockets, and a WKWebView host — none of which run in CI.
+  [`mac-to-mac-demo.md`](mac-to-mac-demo.md) captures the manual
+  release-runner steps for verifying that the D.0–E.1 stack is wired
+  end to end on a single Mac (loopback) or two Macs on the same LAN:
+  prerequisites, the deterministic preflight commands, the server
+  build flags (`webrtc-peer` + `macos-screencapturekit` +
+  `macos-videotoolbox`), `webrtc_udp_bind_address` configuration, the
+  demo flow with the expected `WebRtcPeerStarted` /
+  `WebRtcPeerSignalingConsumed` / `SignalingEnvelopeSubmitted` /
+  `WebRtcPeerOutboundFrame` / `WebRtcPeerStopped` audit-event sequence,
+  the verification points for real `<video>` pixels and the cascade
+  events on session close, failure-triage notes for ICE convergence,
+  capture failure, and the placeholder `Phase D.1 pending` regression
+  signal, and the explicit known gaps for beta (single-stream/session,
+  no audio over WebRTC yet, no TURN/STUN, no perf benchmark, no
+  packaged-build coverage). The doc closes the real-media
+  implementation arc; further phases (multi-stream, audio over WebRTC,
+  cross-platform server real-media, packaged-build delivery) are
+  follow-on work not gated by this checklist.
+
+The real-media implementation roadmap (Phases A through F) is now
+complete.
 
 ## Release Rules
 
