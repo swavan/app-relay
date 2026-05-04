@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const expect = (condition, message) => {
@@ -107,10 +107,50 @@ expect(
   !/\btauri-plugin-[A-Za-z0-9_-]+\b/.test(cargoToml),
   "src-tauri/Cargo.toml must not declare Tauri plugin crates without updating packaging-permissions.json",
 );
-expect(
-  !existsSync("src-tauri/capabilities"),
-  "src-tauri/capabilities must not be introduced without updating packaging-permissions.json",
-);
+const declaredDefaultCapability = permissionIntent.tauri?.defaultCapability;
+if (declaredDefaultCapability) {
+  // The file path is declared so the gate keeps both sides honest: the
+  // packaging-permissions.json declaration must match the on-disk
+  // capability file exactly. Any other capability file is forbidden so
+  // additional permissions cannot sneak in without updating this file.
+  expect(
+    declaredDefaultCapability.file === "src-tauri/capabilities/default.json",
+    "tauri.defaultCapability.file must point at src-tauri/capabilities/default.json",
+  );
+  expectFile(
+    declaredDefaultCapability.file,
+    "declared default capability file is missing on disk",
+  );
+  const onDisk = JSON.parse(readFileSync(declaredDefaultCapability.file, "utf8"));
+  expect(
+    onDisk.identifier === declaredDefaultCapability.identifier,
+    `${declaredDefaultCapability.file} identifier must match packaging-permissions.json (expected ${JSON.stringify(declaredDefaultCapability.identifier)}, got ${JSON.stringify(onDisk.identifier)})`,
+  );
+  expectExactArray(
+    onDisk.windows,
+    declaredDefaultCapability.windows,
+    `${declaredDefaultCapability.file} windows must match packaging-permissions.json`,
+  );
+  expectExactArray(
+    onDisk.permissions,
+    declaredDefaultCapability.permissions,
+    `${declaredDefaultCapability.file} permissions must match packaging-permissions.json`,
+  );
+  // No other capability files are allowed; any additional file would
+  // ship permissions the gate has not reviewed.
+  const otherCapabilityFiles = readdirSync("src-tauri/capabilities").filter(
+    (entry) => entry !== "default.json",
+  );
+  expect(
+    otherCapabilityFiles.length === 0,
+    `src-tauri/capabilities must contain only default.json (found extras: ${JSON.stringify(otherCapabilityFiles)})`,
+  );
+} else {
+  expect(
+    !existsSync("src-tauri/capabilities"),
+    "src-tauri/capabilities must not be introduced without updating packaging-permissions.json",
+  );
+}
 expect(
   !existsSync("src-tauri/permissions"),
   "src-tauri/permissions must not be introduced without updating packaging-permissions.json",
