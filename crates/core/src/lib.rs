@@ -12,6 +12,8 @@ mod str0m_webrtc_peer;
 mod video_encoder;
 mod video_stream;
 mod webrtc_peer;
+#[cfg(feature = "webrtc-peer")]
+mod webrtc_transport;
 
 #[cfg(all(feature = "pipewire-capture", target_os = "linux"))]
 pub use audio_stream::PipeWireCaptureCommandConfig;
@@ -48,11 +50,13 @@ pub use video_stream::{
     VideoStreamService, WindowCaptureBackend, WindowCaptureBackendService,
 };
 pub use webrtc_peer::{InMemoryWebRtcPeer, WebRtcPeer};
+#[cfg(feature = "webrtc-peer")]
+pub use webrtc_transport::{StdUdpTransport, WebRtcUdpTransport, DEFAULT_READ_TIMEOUT};
 
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -1200,6 +1204,13 @@ pub struct ServerConfig {
     pub heartbeat_interval_millis: u64,
     pub ssh_tunnel: SshTunnelConfig,
     pub authorized_clients: Vec<AuthorizedClient>,
+    /// UDP bind address for the server-side WebRTC peer's media
+    /// transport. Always present in the config (so the on-disk shape
+    /// is stable across feature configurations); only consumed at
+    /// runtime when the `webrtc-peer` cargo feature is on.
+    /// Format: any value parseable by `str::parse::<SocketAddr>` —
+    /// `127.0.0.1:0` (kernel-assigned port) is the default.
+    pub webrtc_udp_bind_address: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2375,6 +2386,7 @@ impl ServerConfig {
             heartbeat_interval_millis: 5_000,
             ssh_tunnel: SshTunnelConfig::localhost(),
             authorized_clients: Vec::new(),
+            webrtc_udp_bind_address: "127.0.0.1:0".to_string(),
         }
     }
 
@@ -2408,7 +2420,23 @@ impl ServerConfig {
             }
         }
 
+        if self.webrtc_udp_bind_address.trim() != self.webrtc_udp_bind_address
+            || self.webrtc_udp_bind_address.parse::<SocketAddr>().is_err()
+        {
+            return Err(ConfigError::InvalidWebRtcBindAddress);
+        }
+
         self.ssh_tunnel.validate()
+    }
+
+    /// Parse [`Self::webrtc_udp_bind_address`] as a `SocketAddr`.
+    /// Returns the typed config error rather than the raw parse
+    /// error so callers can surface it through the standard
+    /// `ConfigError` channel.
+    pub fn webrtc_udp_bind_socket_addr(&self) -> Result<SocketAddr, ConfigError> {
+        self.webrtc_udp_bind_address
+            .parse::<SocketAddr>()
+            .map_err(|_| ConfigError::InvalidWebRtcBindAddress)
     }
 }
 
@@ -2472,6 +2500,7 @@ pub enum ConfigError {
     MissingAuthorizedClientLabel,
     MissingAuthorizedClientApplicationId,
     DuplicateAuthorizedClientId,
+    InvalidWebRtcBindAddress,
 }
 
 #[derive(Debug)]
@@ -2596,6 +2625,10 @@ fn encode_server_config(config: &ServerConfig) -> String {
             "authorized_clients={}",
             encode_authorized_clients(&config.authorized_clients)
         ),
+        format!(
+            "webrtc_udp_bind_address={}",
+            encode_field(&config.webrtc_udp_bind_address)
+        ),
     ]
     .join("\n")
         + "\n"
@@ -2611,6 +2644,7 @@ fn decode_server_config(contents: &str) -> Result<ServerConfig, ConfigStoreError
     let mut ssh_local_port = None;
     let mut ssh_remote_port = None;
     let mut authorized_clients = Vec::new();
+    let mut webrtc_udp_bind_address = None;
 
     for line in contents
         .lines()
@@ -2633,6 +2667,9 @@ fn decode_server_config(contents: &str) -> Result<ServerConfig, ConfigStoreError
             "ssh_local_port" => ssh_local_port = Some(parse_config_number(value)?),
             "ssh_remote_port" => ssh_remote_port = Some(parse_config_number(value)?),
             "authorized_clients" => authorized_clients = decode_authorized_clients(value)?,
+            "webrtc_udp_bind_address" => {
+                webrtc_udp_bind_address = Some(decode_config_field(value)?)
+            }
             _ => return Err(ConfigStoreError::CorruptedStore),
         }
     }
@@ -2650,6 +2687,11 @@ fn decode_server_config(contents: &str) -> Result<ServerConfig, ConfigStoreError
             remote_port: ssh_remote_port.ok_or(ConfigStoreError::CorruptedStore)?,
         },
         authorized_clients,
+        // Backwards-compatible: legacy on-disk configs (written before
+        // Phase D.1.2) lack this key. Default to the kernel-assigned
+        // loopback so existing installs keep working.
+        webrtc_udp_bind_address: webrtc_udp_bind_address
+            .unwrap_or_else(|| "127.0.0.1:0".to_string()),
     })
 }
 
@@ -3895,6 +3937,85 @@ mod tests {
 
             assert_eq!(config.validate(), Ok(()), "{bind_address} must pass");
         }
+    }
+
+    #[test]
+    fn server_config_local_default_webrtc_bind_is_loopback_ephemeral() {
+        let config = ServerConfig::local("test-token");
+        assert_eq!(config.webrtc_udp_bind_address, "127.0.0.1:0");
+        let parsed = config
+            .webrtc_udp_bind_socket_addr()
+            .expect("default must parse as SocketAddr");
+        assert!(parsed.ip().is_loopback());
+        assert_eq!(parsed.port(), 0);
+    }
+
+    #[test]
+    fn server_config_rejects_unparseable_webrtc_bind_address() {
+        for bind_address in ["", "not-an-addr", "127.0.0.1", "127.0.0.1:", " 127.0.0.1:0"] {
+            let mut config = ServerConfig::local("test-token");
+            config.webrtc_udp_bind_address = bind_address.to_string();
+            assert_eq!(
+                config.validate(),
+                Err(ConfigError::InvalidWebRtcBindAddress),
+                "{bind_address} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn server_config_accepts_kernel_assigned_and_explicit_webrtc_bind_addresses() {
+        for bind_address in ["127.0.0.1:0", "0.0.0.0:8443", "[::1]:9000"] {
+            let mut config = ServerConfig::local("test-token");
+            config.webrtc_udp_bind_address = bind_address.to_string();
+            assert_eq!(
+                config.validate(),
+                Ok(()),
+                "{bind_address} must validate as a SocketAddr"
+            );
+        }
+    }
+
+    #[test]
+    fn file_server_config_repository_round_trips_webrtc_udp_bind_address() {
+        let root = unique_test_dir("server-config-webrtc-bind");
+        let repository = FileServerConfigRepository::new(root.join("server.conf"));
+        let mut config = ServerConfig::local("test-token");
+        config.webrtc_udp_bind_address = "127.0.0.1:8443".to_string();
+
+        repository.save(&config).expect("save server config");
+        assert_eq!(repository.load().expect("load server config"), config);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_server_config_repository_decodes_legacy_config_without_webrtc_bind() {
+        let root = unique_test_dir("server-config-legacy-no-webrtc-bind");
+        let path = root.join("server.conf");
+        fs::create_dir_all(&root).expect("create config store dir");
+        // No `webrtc_udp_bind_address=...` line — must default to
+        // `127.0.0.1:0` for backwards compatibility with on-disk
+        // configs from before Phase D.1.2.
+        fs::write(
+            &path,
+            "bind_address=127.0.0.1\n\
+control_port=7676\n\
+auth_token=test-token\n\
+heartbeat_interval_millis=5000\n\
+ssh_user=local\n\
+ssh_host=localhost\n\
+ssh_local_port=7676\n\
+ssh_remote_port=7676\n\
+authorized_clients=\n",
+        )
+        .expect("write legacy server config");
+
+        let repository = FileServerConfigRepository::new(path);
+        let loaded = repository.load().expect("load legacy server config");
+        assert_eq!(loaded.webrtc_udp_bind_address, "127.0.0.1:0");
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

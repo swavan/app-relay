@@ -769,9 +769,48 @@ unaffected):
     `negotiate_video_stream` / a foreground tick rather than only on
     `poll_signaling`. Not required to unblock D.1.2; skip until the
     UDP transport surfaces a real frame-rate gap.
-  - Phase D.1.2 (pending): UDP socket runtime that actually transmits the
-    `RtpPacketBatch`es `take_outbound_rtp` produces and feeds inbound
-    datagrams back into `Rtc::handle_input(Input::Receive(...))`.
+  - Phase D.1.2 (complete): real UDP socket runtime feeding the sans-IO
+    `Str0mWebRtcPeer`. `apprelay-core` gains a `WebRtcUdpTransport`
+    trait (with a `StdUdpTransport` impl wrapping `Arc<UdpSocket>` and
+    a 100 ms read timeout) plus a new `WebRtcPeer::handle_inbound_datagram`
+    method that, on `Str0mWebRtcPeer`, builds `str0m::net::Receive`,
+    iterates active sessions, demultiplexes via `Rtc::accepts`, and
+    feeds `Rtc::handle_input(Input::Receive)`. Returns `Ok(false)` when
+    no active session claims the datagram (normal during startup); maps
+    malformed bytes to typed `AppRelayError::InvalidRequest` and
+    `RtcError` to `AppRelayError::ServiceUnavailable`. `Str0mWebRtcPeer::with_local_socket`
+    now lets the constructor receive the actual bound `SocketAddr` so
+    the registered host candidate is the kernel-assigned port instead
+    of the loopback placeholder. `ServerConfig` gains
+    `webrtc_udp_bind_address: String` (defaults to `"127.0.0.1:0"`)
+    with parsing validation and a typed `ConfigError::InvalidWebRtcBindAddress`;
+    file-backed encode/decode round-trip the new field and the decoder
+    falls back to the default for legacy on-disk configs missing it.
+    `ServerServices::for_current_platform_with_config` (a sibling of
+    the existing `for_current_platform`) binds the socket via
+    `StdUdpTransport::bind` only when the `webrtc-peer` feature is on,
+    spawns a `WebRtcIoWorker` `std::thread::spawn` worker that owns
+    `Arc<dyn WebRtcUdpTransport>` plus `Arc<Mutex<Box<dyn WebRtcPeer>>>`
+    plus an `Arc<AtomicBool>` shutdown flag, and on every loop iteration
+    blocks `recv_from` for the read-timeout window, calls
+    `handle_inbound_datagram`, then drains `take_outbound_rtp` and
+    `send_to`s each batch to its destination. `Drop` on
+    `WebRtcIoWorker` flips the shutdown flag and `join`s; the read
+    timeout guarantees the loop wakes within ~100 ms. Default-feature
+    builds remain on the in-memory no-op peer with no worker, no
+    socket, no extra threads. The `webrtc_peer` field on
+    `ServerServices` is now `Arc<Mutex<Box<dyn WebRtcPeer>>>` so the
+    worker can share access; every existing `services.webrtc_peer.lock()`
+    call site has been updated. Tests cover the trait round-trip
+    through both an in-process channel-backed transport and a real
+    loopback `StdUdpTransport`; an `#[ignore]`-d integration test in
+    `crates/server/tests/webrtc_udp.rs` drives a full ICE binding-request
+    round-trip between two real loopback-bound peers and passes locally
+    in under half a second. Tauri shell + Svelte client unchanged; the
+    binary's `main.rs` maps a bind failure to a typed startup error so
+    a misconfigured `webrtc_udp_bind_address` fails fast instead of
+    silently disabling the feature.
+- Phase D.1.x complete. Real-media implementation roadmap remaining:
 - Phase E — Tauri client `RTCPeerConnection` and `<video>` decode in WKWebView
   (pending). Updates Tauri capability/CSP files for WebRTC media.
 - Phase F — Mac-to-Mac end-to-end demo (pending).
