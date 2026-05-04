@@ -812,7 +812,38 @@ unaffected):
     silently disabling the feature.
 - Phase D.1.x complete. Real-media implementation roadmap remaining:
 - Phase E — Tauri client `RTCPeerConnection` and `<video>` decode in WKWebView
-  (pending). Updates Tauri capability/CSP files for WebRTC media.
+  - Phase E.0 (complete): browser-side WebRTC orchestration class lands as
+    `apps/client-tauri/src/webrtcClient.ts`. `WebRtcClient` consumes the
+    existing typed `RemoteService` signaling surface (`submitSdpOffer`,
+    `submitIceCandidate`, `signalEndOfCandidates`, `pollSignaling`) and
+    drives the offerer half of the SDP exchange (server is the answerer
+    per Phase D.1.0). `connect(sessionId)`: builds a `PeerConnectionLike`
+    via an injected `PeerConnectionFactory`, adds a `recvonly` video
+    transceiver, creates the offer, submits it as
+    `direction = offerToAnswerer` with `role = offerer`, then spawns a
+    poll loop on `direction = answererToOfferer` that feeds remote SDP
+    answers and ICE candidates into `setRemoteDescription` /
+    `addIceCandidate`. Locally gathered ICE candidates are forwarded via
+    `submitIceCandidate`; final-null candidates trigger
+    `signalEndOfCandidates`; gathering candidates whose `sdpMid` /
+    `sdpMLineIndex` are null are silently skipped (server validator
+    requires both). The promise resolves with the `MediaStream` from
+    `ontrack` and rejects on `pollTimeoutMs` (default 30s).
+    `disconnect()` aborts the loop, closes the peer, and is idempotent.
+    `DefaultPeerConnectionFactory` wraps `new RTCPeerConnection({ iceServers: [] })`
+    via a single documented `as unknown as PeerConnectionLike` cast so
+    Vitest can swap a stub factory in tests. 10 new vitest cases in
+    `webrtcClient.test.ts` cover offer/answer/ICE flow, sequence
+    advancement, gathering-complete handling, poll timeout, and
+    idempotent disconnect — `npm run test:ci` is 13 files / 143 tests
+    green. No new deps. No Tauri command/capability/CSP changes (server
+    plumbing already exposes everything via `services.ts`). UI binding
+    and `<video>` rendering land in E.1.
+  - Phase E.1 (pending): wire `WebRtcClient` into `App.svelte` /
+    `VideoRenderer.svelte` so an active session renders the remote
+    `MediaStream` via a `<video srcObject>` element. Update Tauri
+    capability/CSP files only if WKWebView's defaults block the
+    loopback WebRTC datagrams or `MediaStream` autoplay.
 - Phase F — Mac-to-Mac end-to-end demo (pending).
 
 ## Release Rules
