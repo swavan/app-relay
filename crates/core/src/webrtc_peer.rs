@@ -66,6 +66,19 @@ pub trait WebRtcPeer: Send + Sync + std::fmt::Debug {
     /// session. Caller is responsible for actually writing each batch
     /// to its destination socket.
     fn take_outbound_rtp(&mut self) -> Vec<RtpPacketBatch>;
+
+    /// Feed an inbound UDP datagram to whichever active session's
+    /// `Rtc` accepts it (str0m demultiplexes by 5-tuple via
+    /// `Rtc::accepts`). Returns `Ok(true)` if some `Rtc` consumed the
+    /// datagram, `Ok(false)` if none claimed it (this is normal during
+    /// startup before remote candidates land), and `Err` only on an
+    /// unrecoverable error.
+    fn handle_inbound_datagram(
+        &mut self,
+        source: std::net::SocketAddr,
+        destination: std::net::SocketAddr,
+        contents: &[u8],
+    ) -> Result<bool, AppRelayError>;
 }
 
 /// Always-on no-op implementation. Wired into `ServerServices` by
@@ -86,6 +99,7 @@ struct InMemoryWebRtcPeerState {
     started_streams: HashMap<String, WebRtcPeerRole>,
     consumed_envelopes: u64,
     pushed_frames: u64,
+    consumed_inbound_datagrams: u64,
 }
 
 impl InMemoryWebRtcPeer {
@@ -109,6 +123,12 @@ impl InMemoryWebRtcPeer {
     /// `push_encoded_frame`.
     pub fn pushed_frame_count(&self) -> u64 {
         self.lock().pushed_frames
+    }
+
+    /// Test-friendly accessor: total inbound UDP datagrams accepted
+    /// via `handle_inbound_datagram`.
+    pub fn consumed_inbound_datagram_count(&self) -> u64 {
+        self.lock().consumed_inbound_datagrams
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, InMemoryWebRtcPeerState> {
@@ -165,6 +185,17 @@ impl WebRtcPeer for InMemoryWebRtcPeer {
     fn take_outbound_rtp(&mut self) -> Vec<RtpPacketBatch> {
         Vec::new()
     }
+
+    fn handle_inbound_datagram(
+        &mut self,
+        _source: std::net::SocketAddr,
+        _destination: std::net::SocketAddr,
+        _contents: &[u8],
+    ) -> Result<bool, AppRelayError> {
+        let mut state = self.lock();
+        state.consumed_inbound_datagrams = state.consumed_inbound_datagrams.saturating_add(1);
+        Ok(true)
+    }
 }
 
 fn stream_key(session_id: &str, stream_id: &str) -> String {
@@ -217,6 +248,21 @@ mod tests {
         peer.consume_signaling("session-1", SignalingEnvelope::EndOfCandidates)
             .expect("consume");
         assert_eq!(peer.consumed_envelope_count(), 2);
+    }
+
+    #[test]
+    fn in_memory_peer_handle_inbound_datagram_counts_calls() {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let mut peer = InMemoryWebRtcPeer::new();
+        let source = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4242);
+        let destination = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4243);
+        for _ in 0..3 {
+            let claimed = peer
+                .handle_inbound_datagram(source, destination, &[0u8; 8])
+                .expect("in-memory peer always claims");
+            assert!(claimed);
+        }
+        assert_eq!(peer.consumed_inbound_datagram_count(), 3);
     }
 
     #[test]

@@ -57,8 +57,18 @@ pub struct ServerServices {
     /// Server-side WebRTC peer. Default: `InMemoryWebRtcPeer` no-op.
     /// With the `webrtc-peer` feature on, swapped for the
     /// `Str0mWebRtcPeer` scaffold (Phase D.0). Phase D.1.1 wires it
-    /// into the start/stop/submit-signaling control-plane flows.
-    webrtc_peer: Mutex<Box<dyn apprelay_core::WebRtcPeer>>,
+    /// into the start/stop/submit-signaling control-plane flows;
+    /// Phase D.1.2 shares this `Arc<Mutex<...>>` with a background
+    /// `WebRtcIoWorker` thread that drives the UDP transport pump.
+    webrtc_peer: Arc<Mutex<Box<dyn apprelay_core::WebRtcPeer>>>,
+    /// Phase D.1.2 background I/O worker. Holds the UDP socket and a
+    /// `JoinHandle` for the pump thread that reads inbound datagrams
+    /// into the peer and writes the peer's outbound RTP queue back
+    /// out to the network. `None` in default builds (no `webrtc-peer`
+    /// feature) and in test fixtures that construct `ServerServices`
+    /// directly via `new`.
+    #[cfg(feature = "webrtc-peer")]
+    webrtc_io_worker: Option<WebRtcIoWorker>,
     platform: Platform,
     version: String,
 }
@@ -83,7 +93,11 @@ impl ServerServices {
             video_stream: VideoStreamControl::for_platform(platform),
             audio_stream: AudioStreamControl::for_platform(platform),
             signaling: SignalingControl::new(),
-            webrtc_peer: Mutex::new(Box::new(apprelay_core::InMemoryWebRtcPeer::new())),
+            webrtc_peer: Arc::new(Mutex::new(Box::new(
+                apprelay_core::InMemoryWebRtcPeer::new(),
+            ))),
+            #[cfg(feature = "webrtc-peer")]
+            webrtc_io_worker: None,
             platform,
             version,
         }
@@ -121,17 +135,65 @@ impl ServerServices {
                 apprelay_core::ScreenCaptureKitWindowRuntime::new(),
             ));
         }
-        // Phase D.0: when the `webrtc-peer` feature is enabled, swap the
-        // in-memory no-op peer for the `Str0mWebRtcPeer` scaffold. The
-        // scaffold returns `ServiceUnavailable("Phase D.1 pending: …")`
-        // from every state-changing method, so enabling the feature is
-        // never a silent no-op — Phase D.1 will replace the bodies with
-        // real `str0m` integration.
+        // Phase D.1.0–D.1.1: when the `webrtc-peer` feature is enabled,
+        // swap the in-memory no-op peer for the real `Str0mWebRtcPeer`.
+        // No UDP transport is bound here — that path requires a
+        // [`ServerConfig`] and is exposed via
+        // [`Self::for_current_platform_with_config`].
         #[cfg(feature = "webrtc-peer")]
         {
-            services.webrtc_peer = Mutex::new(Box::new(apprelay_core::Str0mWebRtcPeer::new()));
+            services.webrtc_peer =
+                Arc::new(Mutex::new(Box::new(apprelay_core::Str0mWebRtcPeer::new())));
         }
         services
+    }
+
+    /// Like [`Self::for_current_platform`] but also binds the
+    /// configured UDP transport and spawns the background I/O worker
+    /// when the `webrtc-peer` feature is on. Default builds simply
+    /// delegate to [`Self::for_current_platform`].
+    ///
+    /// Returns `Err(AppRelayError::ServiceUnavailable(...))` if the
+    /// UDP bind fails — the user explicitly opted into real-media
+    /// support, so a silent fallback to the no-op peer would violate
+    /// the project-wide invariant that unsupported configurations
+    /// surface a typed error.
+    pub fn for_current_platform_with_config(config: &ServerConfig) -> Result<Self, AppRelayError> {
+        #[cfg_attr(not(feature = "webrtc-peer"), allow(unused_mut))]
+        let mut services = Self::for_current_platform();
+        #[cfg(feature = "webrtc-peer")]
+        {
+            let bind_addr = config.webrtc_udp_bind_socket_addr().map_err(|err| {
+                AppRelayError::ServiceUnavailable(format!(
+                    "webrtc UDP bind address invalid: {err:?}"
+                ))
+            })?;
+            let transport: Arc<dyn apprelay_core::WebRtcUdpTransport> = Arc::new(
+                apprelay_core::StdUdpTransport::bind(bind_addr).map_err(|err| {
+                    AppRelayError::ServiceUnavailable(format!(
+                        "webrtc UDP bind {bind_addr} failed: {err}"
+                    ))
+                })?,
+            );
+            // Re-build the str0m peer so its host candidate matches the
+            // freshly-bound socket address. Without this the peer would
+            // advertise the loopback `127.0.0.1:0` placeholder set by
+            // `Str0mWebRtcPeer::new`, and remote peers could not route
+            // datagrams back to us.
+            services.webrtc_peer = Arc::new(Mutex::new(Box::new(
+                apprelay_core::Str0mWebRtcPeer::with_local_socket(transport.local_addr()),
+            )));
+            services.webrtc_io_worker = Some(WebRtcIoWorker::spawn(
+                Arc::clone(&services.webrtc_peer),
+                transport,
+            ));
+        }
+        // Suppress unused-variable lint when the feature is off.
+        #[cfg(not(feature = "webrtc-peer"))]
+        {
+            let _ = config;
+        }
+        Ok(services)
     }
 
     #[doc(hidden)]
@@ -494,6 +556,136 @@ fn input_backend_for_platform(platform: Platform) -> InputBackendService {
         | Platform::Android
         | Platform::Ios
         | Platform::Unknown => InputBackendService::RecordOnly,
+    }
+}
+
+/// Phase D.1.2 background I/O worker. Drives the sans-IO
+/// `Str0mWebRtcPeer` against a real UDP socket so DTLS/SRTP/ICE can
+/// progress while the rest of the server keeps its synchronous,
+/// `&mut self`-based control flow.
+///
+/// The worker owns a clone of the peer's `Arc<Mutex<...>>` and the
+/// shared `Arc<dyn WebRtcUdpTransport>`. Each loop iteration:
+///
+///  1. Calls `transport.recv_from(...)` with the transport's read
+///     timeout — usually 100 ms. On a real datagram, locks the peer
+///     and feeds the bytes through `handle_inbound_datagram`. On
+///     `WouldBlock`/`TimedOut`, falls through silently.
+///  2. Locks the peer and drains `take_outbound_rtp()`, writing each
+///     batch to the transport. `take_outbound_rtp` advances the str0m
+///     timeout internally, so the worker does not need to call
+///     `Input::Timeout` itself.
+///
+/// Shutdown: `Drop` flips the shared `AtomicBool` and calls
+/// `join` on the thread; if the join blocks for more than a short
+/// grace period we detach so we don't deadlock the server's main
+/// thread on a wedged worker.
+#[cfg(feature = "webrtc-peer")]
+pub struct WebRtcIoWorker {
+    shutdown: Arc<std::sync::atomic::AtomicBool>,
+    join_handle: Option<std::thread::JoinHandle<()>>,
+    transport: Arc<dyn apprelay_core::WebRtcUdpTransport>,
+}
+
+#[cfg(feature = "webrtc-peer")]
+impl std::fmt::Debug for WebRtcIoWorker {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WebRtcIoWorker")
+            .field("local_addr", &self.transport.local_addr())
+            .field(
+                "shutdown",
+                &self.shutdown.load(std::sync::atomic::Ordering::Relaxed),
+            )
+            .field("running", &self.join_handle.is_some())
+            .finish()
+    }
+}
+
+#[cfg(feature = "webrtc-peer")]
+impl WebRtcIoWorker {
+    /// Spawn the worker thread. `peer` must be the same
+    /// `Arc<Mutex<...>>` stored on `ServerServices`. `transport` is the
+    /// shared UDP socket whose `local_addr()` was already plumbed into
+    /// the peer's host candidate.
+    pub fn spawn(
+        peer: Arc<Mutex<Box<dyn apprelay_core::WebRtcPeer>>>,
+        transport: Arc<dyn apprelay_core::WebRtcUdpTransport>,
+    ) -> Self {
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_shutdown = Arc::clone(&shutdown);
+        let worker_transport = Arc::clone(&transport);
+        let join_handle = std::thread::Builder::new()
+            .name("apprelay-webrtc-io".to_string())
+            .spawn(move || {
+                let local_addr = worker_transport.local_addr();
+                let mut buf = [0u8; 2048];
+                while !worker_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                    match worker_transport.recv_from(&mut buf) {
+                        Ok((n, source)) => {
+                            let mut peer =
+                                peer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                            // Ignore both Ok(false) (no Rtc claimed
+                            // the datagram) and Err — the worker is a
+                            // best-effort pump; failed parses are
+                            // expected during startup.
+                            let _ = peer.handle_inbound_datagram(source, local_addr, &buf[..n]);
+                        }
+                        Err(err)
+                            if matches!(
+                                err.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) =>
+                        {
+                            // Idle tick — fall through to the outbound
+                            // drain.
+                        }
+                        Err(_) => {
+                            // Transient read error. Skip outbound for
+                            // this iteration to avoid spinning on a
+                            // broken socket; the next loop will retry.
+                            continue;
+                        }
+                    }
+
+                    let outbound = {
+                        let mut peer = peer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        peer.take_outbound_rtp()
+                    };
+                    for batch in outbound {
+                        let _ = worker_transport.send_to(&batch.payload, batch.destination);
+                    }
+                }
+            })
+            .ok();
+
+        Self {
+            shutdown,
+            join_handle,
+            transport,
+        }
+    }
+
+    /// Return the post-bind local address that the peer's host
+    /// candidate advertises. Useful for tests that need to send
+    /// datagrams at the worker without going through the peer.
+    pub fn local_addr(&self) -> std::net::SocketAddr {
+        self.transport.local_addr()
+    }
+}
+
+#[cfg(feature = "webrtc-peer")]
+impl Drop for WebRtcIoWorker {
+    fn drop(&mut self) {
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(handle) = self.join_handle.take() {
+            // Best-effort join: if the worker is wedged we don't want
+            // to block the server's shutdown forever. The transport
+            // socket itself drops with the `Arc<UdpSocket>` ref count
+            // hitting zero, so any in-flight `recv_from` will return.
+            let _ = handle.join();
+        }
     }
 }
 

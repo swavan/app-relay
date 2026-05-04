@@ -46,7 +46,7 @@ use apprelay_protocol::{
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::format::Codec;
 use str0m::media::{Direction, MediaKind, MediaTime, Mid, Pt};
-use str0m::net::Protocol;
+use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, Input, Output, Rtc};
 
 use crate::webrtc_peer::WebRtcPeer;
@@ -83,9 +83,15 @@ struct PeerState {
 /// a `Mutex<Box<dyn WebRtcPeer>>` in the server composition; trait
 /// methods take `&mut self`, so this type does not need any interior
 /// locking of its own.
+///
+/// The `local_socket_addr` is registered as the host candidate on every
+/// freshly-built `Rtc`. In production this is the post-bind address of
+/// the shared `StdUdpTransport`; tests that don't need a real socket
+/// can construct via [`Self::new`] and inherit the loopback default.
 pub struct Str0mWebRtcPeer {
     sessions: HashMap<String, PeerState>,
     stream_to_session: HashMap<String, String>,
+    local_socket_addr: SocketAddr,
 }
 
 impl std::fmt::Debug for Str0mWebRtcPeer {
@@ -105,26 +111,41 @@ impl Default for Str0mWebRtcPeer {
 }
 
 impl Str0mWebRtcPeer {
+    /// Build a peer that registers `127.0.0.1:0` as its host candidate.
+    /// Backwards-compatible test path; production code should call
+    /// [`Self::with_local_socket`] with the post-bind address of the
+    /// shared `StdUdpTransport` so the candidate advertises a real,
+    /// reachable socket.
     pub fn new() -> Self {
+        Self::with_local_socket(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+    }
+
+    /// Build a peer that registers `local_socket_addr` as its host
+    /// candidate. Use this in production after binding the shared UDP
+    /// transport — the address must match `transport.local_addr()` so
+    /// remote peers can route packets back to us.
+    pub fn with_local_socket(local_socket_addr: SocketAddr) -> Self {
         Self {
             sessions: HashMap::new(),
             stream_to_session: HashMap::new(),
+            local_socket_addr,
         }
     }
 
-    /// Build a fresh `Rtc` configured for H.264 video and a
-    /// deterministic loopback host candidate. `127.0.0.1:0` is a
-    /// placeholder valid socket address — D.1.2 will replace it with a
-    /// real bound UDP source.
+    /// Build a fresh `Rtc` configured for H.264 video. The host
+    /// candidate registered with `Rtc::add_local_candidate` is
+    /// `self.local_socket_addr`; in production this is the post-bind
+    /// `StdUdpTransport` address, in tests it falls back to the
+    /// `127.0.0.1:0` placeholder set by [`Self::new`].
     ///
     /// `ice_lite` is enabled only on the answering side. str0m 0.8.0
     /// rejects the offer/answer pairing when both peers advertise
     /// `a=ice-lite` (`RtcError::RemoteSdp("Both peers being ICE-Lite
     /// not supported")`); in our deployment the server is the side
-    /// that runs ICE-lite (no STUN/TURN gathering, fixed loopback
-    /// host candidate), but only for the role that consumes a remote
+    /// that runs ICE-lite (no STUN/TURN gathering, fixed host
+    /// candidate), but only for the role that consumes a remote
     /// offer. When this peer originates the offer, full ICE is used.
-    fn build_rtc(role: WebRtcPeerRole) -> Result<Rtc, AppRelayError> {
+    fn build_rtc(&self, role: WebRtcPeerRole) -> Result<Rtc, AppRelayError> {
         let ice_lite = matches!(role, WebRtcPeerRole::Answerer);
         let mut rtc = Rtc::builder()
             .clear_codecs()
@@ -132,8 +153,7 @@ impl Str0mWebRtcPeer {
             .set_ice_lite(ice_lite)
             .build();
 
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let candidate = Candidate::host(addr, Protocol::Udp).map_err(|err| {
+        let candidate = Candidate::host(self.local_socket_addr, Protocol::Udp).map_err(|err| {
             AppRelayError::ServiceUnavailable(format!(
                 "webrtc peer failed to build local host candidate: {err}"
             ))
@@ -220,7 +240,7 @@ impl WebRtcPeer for Str0mWebRtcPeer {
             )));
         }
 
-        let mut rtc = Self::build_rtc(role)?;
+        let mut rtc = self.build_rtc(role)?;
         let mut outbound = VecDeque::new();
         let mut pending_offer = None;
 
@@ -447,6 +467,43 @@ impl WebRtcPeer for Str0mWebRtcPeer {
 
         batches
     }
+
+    fn handle_inbound_datagram(
+        &mut self,
+        source: SocketAddr,
+        destination: SocketAddr,
+        contents: &[u8],
+    ) -> Result<bool, AppRelayError> {
+        // Parse the datagram once so the borrow on `contents` is local
+        // to this call. `Receive::new` returns `NetError` when the
+        // bytes do not look like STUN/DTLS/RTP/RTCP — that is normal
+        // for unsolicited traffic, surface it as a typed
+        // `InvalidRequest` so the caller can audit and skip.
+        let receive =
+            Receive::new(Protocol::Udp, source, destination, contents).map_err(|err| {
+                AppRelayError::InvalidRequest(format!(
+                    "webrtc peer received malformed UDP datagram: {err}"
+                ))
+            })?;
+        let now = Instant::now();
+        let input = Input::Receive(now, receive);
+
+        for state in self.sessions.values_mut() {
+            if state.rtc.accepts(&input) {
+                state.rtc.handle_input(input).map_err(|err| {
+                    AppRelayError::ServiceUnavailable(format!(
+                        "webrtc peer failed to ingest inbound datagram: {err}"
+                    ))
+                })?;
+                return Ok(true);
+            }
+        }
+
+        // No active `Rtc` matched the 5-tuple. Normal during startup
+        // before remote candidates land, or for stray packets after a
+        // peer is torn down. Caller decides whether to log.
+        Ok(false)
+    }
 }
 
 #[cfg(test)]
@@ -601,6 +658,65 @@ mod tests {
         // no transmits in str0m 0.8.0; we assert only the call is
         // panic-free and returns a Vec.
         let _ = peer.take_outbound_rtp();
+    }
+
+    #[test]
+    fn handle_inbound_datagram_returns_false_when_no_session_accepts() {
+        let mut peer = Str0mWebRtcPeer::new();
+        peer.start("session-1", "stream-1", WebRtcPeerRole::Offerer)
+            .expect("start offerer");
+        // Synthesise an STUN-shaped 20-byte buffer (first byte 0x00 →
+        // STUN class). str0m's `Receive::new` accepts it as STUN; the
+        // active `Rtc` will not claim it because the source/destination
+        // 5-tuple has never been advertised. Result: `Ok(false)`, not
+        // an error.
+        let mut buf = [0u8; 20];
+        // Magic cookie at bytes 4..8 makes the parser treat this as a
+        // STUN binding request.
+        buf[4] = 0x21;
+        buf[5] = 0x12;
+        buf[6] = 0xA4;
+        buf[7] = 0x42;
+        let source = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), 50_000);
+        let destination = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)), 50_001);
+        let claimed = peer
+            .handle_inbound_datagram(source, destination, &buf)
+            .expect("inbound STUN datagram does not error");
+        assert!(!claimed, "no session should claim a stray STUN packet");
+    }
+
+    #[test]
+    fn handle_inbound_datagram_rejects_garbage() {
+        let mut peer = Str0mWebRtcPeer::new();
+        peer.start("session-1", "stream-1", WebRtcPeerRole::Offerer)
+            .expect("start offerer");
+        // 4 bytes is too short to look like STUN/DTLS/RTP — `Receive::new`
+        // should fail and we surface the typed `InvalidRequest`.
+        let source = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), 50_000);
+        let destination = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)), 50_001);
+        let err = peer
+            .handle_inbound_datagram(source, destination, &[0u8; 4])
+            .expect_err("garbage must error");
+        assert!(matches!(err, AppRelayError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn with_local_socket_uses_provided_address() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 51_234);
+        let mut peer = Str0mWebRtcPeer::with_local_socket(addr);
+        peer.start("session-1", "stream-1", WebRtcPeerRole::Offerer)
+            .expect("start");
+        let outbound = peer.take_outbound_signaling("session-1");
+        let sdp = match outbound.into_iter().next() {
+            Some(SignalingEnvelope::SdpOffer { sdp, .. }) => sdp,
+            other => panic!("expected SdpOffer, got {other:?}"),
+        };
+        // The SDP must mention the configured port — that's the
+        // observable signal that `with_local_socket` plumbed through.
+        assert!(
+            sdp.contains("51234"),
+            "expected SDP to advertise port 51234, got: {sdp}"
+        );
     }
 
     #[test]

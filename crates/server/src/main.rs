@@ -57,17 +57,32 @@ fn run_foreground(args: &[String]) {
 
 fn build_foreground_server(args: &[String]) -> Result<ForegroundControlServer, ConfigStoreError> {
     let config_path = option_value(args, "--config").map(PathBuf::from);
-    let services = ServerServices::for_current_platform();
     let control_plane = match config_path {
         Some(config_path) => {
             let repository = FileServerConfigRepository::new(config_path);
             let config = load_config(&repository)?;
+            let services = build_services_for_config(&config)?;
             ServerControlPlane::with_config_repository(services, config, repository)
         }
-        None => ServerControlPlane::new(services, ServerConfig::local("local-dev-token")),
+        None => {
+            let config = ServerConfig::local("local-dev-token");
+            let services = build_services_for_config(&config)?;
+            ServerControlPlane::new(services, config)
+        }
     };
 
     Ok(ForegroundControlServer::new(control_plane))
+}
+
+/// Build [`ServerServices`] for `config`, mapping any peer/transport
+/// startup error onto the local `ConfigStoreError` channel so the
+/// binary's existing error path surfaces it.
+fn build_services_for_config(config: &ServerConfig) -> Result<ServerServices, ConfigStoreError> {
+    ServerServices::for_current_platform_with_config(config).map_err(|err| {
+        ConfigStoreError::Io(std::io::Error::other(format!(
+            "webrtc transport startup failed: {err:?}"
+        )))
+    })
 }
 
 fn run_once(server: &ForegroundControlServer, listener: TcpListener, events: &mut impl EventSink) {
