@@ -688,6 +688,29 @@ impl InMemoryVideoStreamService {
         id
     }
 
+    /// Test-only: drive the in-memory encoding pipeline forward by one
+    /// frame for `stream_id`, populating `encoding.output.last_frame`
+    /// with a fresh `EncodedVideoFrame`. Real builds advance this
+    /// pipeline through capture-runtime callbacks; this helper lets
+    /// tests exercise the encoded-frame pump deterministically without
+    /// reaching into private state. Returns the new sequence on
+    /// success, or `None` if the stream was not found.
+    #[doc(hidden)]
+    pub fn advance_encoded_frame_for_test(&mut self, stream_id: &str) -> Option<u64> {
+        let stream = self
+            .streams
+            .iter_mut()
+            .find(|stream| stream.id == stream_id)?;
+        InMemoryVideoEncodingPipeline::encode_next_frame(&mut stream.encoding);
+        stream.stats.frames_encoded = stream.encoding.output.frames_encoded;
+        stream
+            .encoding
+            .output
+            .last_frame
+            .as_ref()
+            .map(|frame| frame.sequence)
+    }
+
     fn accepts_resize_viewport(viewport: &apprelay_protocol::ViewportSize) -> bool {
         viewport.width >= Self::MIN_VIEWPORT_WIDTH
             && viewport.height >= Self::MIN_VIEWPORT_HEIGHT

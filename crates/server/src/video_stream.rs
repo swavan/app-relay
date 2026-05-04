@@ -95,6 +95,18 @@ impl VideoStreamControl {
     pub fn status(&mut self, stream_id: &str) -> Result<VideoStreamSession, AppRelayError> {
         self.stream_service.stream_status(stream_id)
     }
+
+    /// Test-only passthrough that advances the in-memory encoder for
+    /// `stream_id` by one frame. Returns the new
+    /// `EncodedVideoFrame.sequence` on success. Mirrors
+    /// [`InMemoryVideoStreamService::advance_encoded_frame_for_test`]
+    /// so server-crate tests can exercise the encoded-frame pump
+    /// without touching private state.
+    #[doc(hidden)]
+    pub fn advance_encoded_frame_for_test(&mut self, stream_id: &str) -> Option<u64> {
+        self.stream_service
+            .advance_encoded_frame_for_test(stream_id)
+    }
 }
 
 impl Default for VideoStreamControl {

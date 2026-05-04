@@ -341,6 +341,15 @@ impl ServerServices {
             .collect()
     }
 
+    /// Test-only: advance the in-memory video encoder for `stream_id`
+    /// so a fresh `EncodedVideoFrame` lands in `last_frame`. Used by
+    /// the encoded-frame pump tests; not part of the production
+    /// surface area.
+    #[doc(hidden)]
+    pub fn advance_encoded_frame_for_test(&mut self, stream_id: &str) -> Option<u64> {
+        self.video_stream.advance_encoded_frame_for_test(stream_id)
+    }
+
     pub fn start_audio_stream(
         &mut self,
         request: StartAudioStreamRequest,
@@ -526,12 +535,18 @@ pub struct ServerControlPlane {
     config_repository: Option<Arc<dyn ServerConfigRepository>>,
     heartbeat_sequence: AtomicU64,
     session_owners: HashMap<String, String>,
+    /// Highest `EncodedVideoFrame.sequence` already pushed into the
+    /// peer for each active video stream. Used by the encoded-frame
+    /// pump to dedupe so the same `last_frame` is not delivered twice
+    /// when the encoder hasn't advanced between polls. Cleared when a
+    /// stream stops or its owning session closes.
+    peer_pushed_sequences: HashMap<String, u64>,
 }
 
 /// Zero-cost [`EventSink`] used by the non-audit public control-plane
 /// entry points. Lets the inner methods always emit through a sink
 /// without forcing every caller to thread one through.
-struct NullEventSink;
+pub struct NullEventSink;
 
 impl EventSink for NullEventSink {
     fn record(&mut self, _event: ServerEvent) {}
@@ -547,6 +562,7 @@ impl std::fmt::Debug for ServerControlPlane {
             .field("config_repository", &self.config_repository.is_some())
             .field("heartbeat_sequence", &self.heartbeat_sequence)
             .field("session_owners", &self.session_owners)
+            .field("peer_pushed_sequences", &self.peer_pushed_sequences)
             .finish()
     }
 }
@@ -578,11 +594,22 @@ impl ServerControlPlane {
             config_repository,
             heartbeat_sequence: AtomicU64::new(0),
             session_owners: HashMap::new(),
+            peer_pushed_sequences: HashMap::new(),
         }
     }
 
     pub fn config(&self) -> &ServerConfig {
         &self.config
+    }
+
+    /// Test-only: advance the in-memory video encoder for `stream_id`
+    /// by one frame. Mirrors
+    /// [`ServerServices::advance_encoded_frame_for_test`] and is used
+    /// by the encoded-frame pump tests; not part of the production
+    /// surface area.
+    #[doc(hidden)]
+    pub fn advance_encoded_frame_for_test(&mut self, stream_id: &str) -> Option<u64> {
+        self.services.advance_encoded_frame_for_test(stream_id)
     }
 
     pub fn health(&self, auth: &ControlAuth) -> ControlResult<HealthStatus> {
@@ -687,8 +714,22 @@ impl ServerControlPlane {
         &mut self,
         request: RevokeClientRequest,
     ) -> ControlResult<apprelay_core::AuthorizedClient> {
-        self.locally_revoke_client_with_teardown(request)
+        self.locally_revoke_client_with_teardown(request, &mut NullEventSink)
             .map(|(client, _)| client)
+    }
+
+    /// Audit-aware sibling of [`Self::locally_revoke_client`]. Drives
+    /// the same teardown path but threads an [`EventSink`] through the
+    /// session-close cascade so callers see `WebRtcPeerStopped` (or
+    /// `WebRtcPeerRejected`) audit events for every owned video
+    /// stream. Returns the closed sessions for callers that want to
+    /// emit additional audit on top.
+    pub fn locally_revoke_client_with_audit(
+        &mut self,
+        request: RevokeClientRequest,
+        events: &mut impl EventSink,
+    ) -> ControlResult<(apprelay_core::AuthorizedClient, Vec<ApplicationSession>)> {
+        self.locally_revoke_client_with_teardown(request, events)
     }
 
     pub fn revoke_client(
@@ -704,21 +745,23 @@ impl ServerControlPlane {
         &mut self,
         auth: &ControlAuth,
         request: RevokeClientRequest,
+        events: &mut dyn EventSink,
     ) -> ControlResult<(apprelay_core::AuthorizedClient, Vec<ApplicationSession>)> {
         self.authorize(auth)?;
-        self.locally_revoke_client_with_teardown(request)
+        self.locally_revoke_client_with_teardown(request, events)
     }
 
     fn locally_revoke_client_with_teardown(
         &mut self,
         request: RevokeClientRequest,
+        events: &mut dyn EventSink,
     ) -> ControlResult<(apprelay_core::AuthorizedClient, Vec<ApplicationSession>)> {
         let mut next_authorization = self.client_authorization.clone();
         let client = next_authorization
             .revoke_client(request)
             .map_err(ControlError::Service)?;
         self.commit_authorization_change(next_authorization)?;
-        let closed_sessions = self.close_sessions_owned_by(&client.id);
+        let closed_sessions = self.close_sessions_owned_by(&client.id, events);
         Ok((client, closed_sessions))
     }
 
@@ -742,7 +785,11 @@ impl ServerControlPlane {
         Ok(())
     }
 
-    fn close_sessions_owned_by(&mut self, client_id: &str) -> Vec<ApplicationSession> {
+    fn close_sessions_owned_by(
+        &mut self,
+        client_id: &str,
+        events: &mut dyn EventSink,
+    ) -> Vec<ApplicationSession> {
         let session_ids = self
             .session_owners
             .iter()
@@ -752,13 +799,69 @@ impl ServerControlPlane {
         let mut closed_sessions = Vec::new();
 
         for session_id in session_ids {
+            // Capture the per-session video streams before tearing
+            // down so the peer cascade can fire `stop` for each one
+            // even after the service drops them from its active list.
+            let cascade_streams: Vec<String> = self
+                .services
+                .active_video_streams()
+                .into_iter()
+                .filter(|stream| {
+                    stream.session_id == session_id
+                        && stream.state != apprelay_protocol::VideoStreamState::Stopped
+                })
+                .map(|stream| stream.id)
+                .collect();
             if let Ok(session) = self.services.close_session(&session_id) {
                 closed_sessions.push(session);
             }
             self.session_owners.remove(&session_id);
+            self.cascade_peer_stop_for_streams(&session_id, client_id, &cascade_streams, events);
         }
 
         closed_sessions
+    }
+
+    /// Drive `peer.stop` for every captured stream and emit one
+    /// `WebRtcPeerStopped` (or `WebRtcPeerRejected` on error) event per
+    /// stream. The peer mutex is taken once per stream because the
+    /// trait method is non-batched; each call still completes before
+    /// the next event is emitted, so audit ordering matches the lock
+    /// order. Tracking state for the dedup pump is also cleared here.
+    fn cascade_peer_stop_for_streams(
+        &mut self,
+        session_id: &str,
+        paired_client: &str,
+        stream_ids: &[String],
+        events: &mut dyn EventSink,
+    ) {
+        for stream_id in stream_ids {
+            self.peer_pushed_sequences.remove(stream_id);
+            let peer_result = {
+                let mut peer = self
+                    .services
+                    .webrtc_peer
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                (**peer).stop(session_id, stream_id)
+            };
+            match peer_result {
+                Ok(()) => {
+                    events.record(ServerEvent::WebRtcPeerStopped {
+                        session_id: session_id.to_string(),
+                        stream_id: stream_id.clone(),
+                        paired_client: paired_client.to_string(),
+                    });
+                }
+                Err(error) => {
+                    events.record(ServerEvent::WebRtcPeerRejected {
+                        session_id: session_id.to_string(),
+                        paired_client: paired_client.to_string(),
+                        reason: error.user_message(),
+                    });
+                }
+            }
+        }
     }
 
     pub fn resize_session(
@@ -775,11 +878,44 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         session_id: &str,
     ) -> ControlResult<ApplicationSession> {
-        self.authorize_session_owner(auth, session_id)?;
+        self.close_session_inner(auth, session_id, &mut NullEventSink)
+    }
+
+    pub fn close_session_with_audit(
+        &mut self,
+        auth: &ControlAuth,
+        session_id: &str,
+        events: &mut dyn EventSink,
+    ) -> ControlResult<ApplicationSession> {
+        self.close_session_inner(auth, session_id, events)
+    }
+
+    fn close_session_inner(
+        &mut self,
+        auth: &ControlAuth,
+        session_id: &str,
+        events: &mut dyn EventSink,
+    ) -> ControlResult<ApplicationSession> {
+        let client = self.authorize_session_owner(auth, session_id)?;
+        // Snapshot the active streams owned by this session BEFORE
+        // closing so the cascade can target the peer with deterministic
+        // (session_id, stream_id) pairs even after the underlying
+        // service tears them down.
+        let cascade_streams: Vec<String> = self
+            .services
+            .active_video_streams()
+            .into_iter()
+            .filter(|stream| {
+                stream.session_id == session_id
+                    && stream.state != apprelay_protocol::VideoStreamState::Stopped
+            })
+            .map(|stream| stream.id)
+            .collect();
         let session = self
             .services
             .close_session(session_id)
             .map_err(ControlError::from)?;
+        self.cascade_peer_stop_for_streams(session_id, &client.id, &cascade_streams, events);
         Ok(session)
     }
 
@@ -941,6 +1077,9 @@ impl ServerControlPlane {
             .stop_video_stream(request)
             .map_err(ControlError::from)?;
         events.record(video_stream_stopped_event(&client.id, &stream));
+        // Drop any dedup tracker so a future re-start of the same id
+        // does not skip its very first encoded frame.
+        self.peer_pushed_sequences.remove(&stream.id);
 
         let peer_result = {
             let mut peer = self
@@ -1309,8 +1448,7 @@ impl ServerControlPlane {
         auth: &ControlAuth,
         request: PollSignalingRequest,
     ) -> ControlResult<SignalingPoll> {
-        self.poll_signaling_inner(auth, request)
-            .map(|(poll, _)| poll)
+        self.poll_signaling_inner(auth, request, &mut NullEventSink)
     }
 
     pub fn poll_signaling_with_audit(
@@ -1319,16 +1457,15 @@ impl ServerControlPlane {
         request: PollSignalingRequest,
         events: &mut impl EventSink,
     ) -> ControlResult<SignalingPoll> {
-        let (poll, event) = self.poll_signaling_inner(auth, request)?;
-        events.record(event);
-        Ok(poll)
+        self.poll_signaling_inner(auth, request, events)
     }
 
     fn poll_signaling_inner(
         &mut self,
         auth: &ControlAuth,
         request: PollSignalingRequest,
-    ) -> ControlResult<(SignalingPoll, ServerEvent)> {
+        events: &mut dyn EventSink,
+    ) -> ControlResult<SignalingPoll> {
         let client = self.authorize_existing_session_owner(auth, &request.session_id)?;
         let session_id = request.session_id.clone();
         let direction_label = request.direction.label().to_string();
@@ -1337,16 +1474,102 @@ impl ServerControlPlane {
             .services
             .poll_signaling(request)
             .map_err(ControlError::from)?;
+        // Drain any newly produced encoded frames into the peer before
+        // surfacing the SignalingPolled audit event so the audit log
+        // shows the pump activity in the same logical poll.
+        let client_id = client.id.clone();
+        self.pump_active_streams_for_client(&client_id, events);
         let message_count = u32::try_from(poll.messages.len()).unwrap_or(u32::MAX);
-        let event = ServerEvent::SignalingPolled {
+        events.record(ServerEvent::SignalingPolled {
             session_id,
-            client_id: client.id.clone(),
+            client_id,
             direction: direction_label,
             since_sequence,
             last_sequence: poll.last_sequence,
             message_count,
+        });
+        Ok(poll)
+    }
+
+    /// Push the latest encoded video frame for every active stream
+    /// owned by `paired_client` into the peer. Called from
+    /// [`Self::poll_signaling_inner`] so the pump piggy-backs on the
+    /// client's existing poll cadence — no extra clock or thread.
+    fn pump_active_streams_for_client(&mut self, paired_client: &str, events: &mut dyn EventSink) {
+        let active_streams: Vec<VideoStreamSession> = self
+            .services
+            .active_video_streams()
+            .into_iter()
+            .filter(|stream| self.client_owns_session(paired_client, &stream.session_id))
+            .collect();
+        for stream in active_streams {
+            self.pump_video_frame_into_peer(&stream, paired_client, events);
+        }
+    }
+
+    /// Try to deliver the latest encoded frame for `stream` to the
+    /// peer. Skips when the encoder has not advanced since the last
+    /// successful push (dedup), and silently swallows the
+    /// `negotiation`-pending error from the str0m peer so the same
+    /// frame is retried on the next poll once the SDP handshake
+    /// completes.
+    fn pump_video_frame_into_peer(
+        &mut self,
+        stream: &VideoStreamSession,
+        paired_client: &str,
+        events: &mut dyn EventSink,
+    ) {
+        let Some(frame) = stream.encoding.output.last_frame.as_ref() else {
+            return;
         };
-        Ok((poll, event))
+        let last_pushed = self
+            .peer_pushed_sequences
+            .get(&stream.id)
+            .copied()
+            .unwrap_or(0);
+        if frame.sequence <= last_pushed {
+            return;
+        }
+
+        let push_result = {
+            let mut peer = self
+                .services
+                .webrtc_peer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            (**peer).push_encoded_frame(&stream.id, frame)
+        };
+        match push_result {
+            Ok(()) => {
+                self.peer_pushed_sequences
+                    .insert(stream.id.clone(), frame.sequence);
+                events.record(ServerEvent::WebRtcPeerOutboundFrame {
+                    session_id: stream.session_id.clone(),
+                    stream_id: stream.id.clone(),
+                    paired_client: paired_client.to_string(),
+                    sequence: frame.sequence,
+                    byte_length: frame.byte_length,
+                    keyframe: frame.keyframe,
+                });
+            }
+            Err(error) => {
+                let message = error.user_message();
+                // The str0m peer returns `ServiceUnavailable` with a
+                // "negotiation"-prefixed message until the SDP
+                // handshake completes. That's the expected idle-state
+                // for an Answerer that has not yet seen a client offer
+                // — silently skip without advancing the dedup pointer
+                // so the same frame is retried next poll.
+                if message.to_ascii_lowercase().contains("negotiation") {
+                    return;
+                }
+                events.record(ServerEvent::WebRtcPeerRejected {
+                    session_id: stream.session_id.clone(),
+                    paired_client: paired_client.to_string(),
+                    reason: message,
+                });
+            }
+        }
     }
 
     pub fn heartbeat(&self, auth: &ControlAuth) -> ControlResult<HeartbeatStatus> {
@@ -1674,12 +1897,19 @@ impl ForegroundControlServer {
                 }
 
                 let client_id = client_id.to_string();
-                match self.control_plane.borrow_mut().revoke_client_with_teardown(
+                // Collect the cascade events (peer-stop / peer-rejected
+                // for each owned video stream) into a temporary sink so
+                // they can be returned alongside the existing
+                // ClientRevoked + SessionClosed audit events.
+                let mut cascade_sink = apprelay_core::InMemoryEventSink::default();
+                let revoke_result = self.control_plane.borrow_mut().revoke_client_with_teardown(
                     &auth,
                     RevokeClientRequest {
                         client_id: client_id.clone(),
                     },
-                ) {
+                    &mut cascade_sink,
+                );
+                match revoke_result {
                     Ok((client, closed_sessions)) => {
                         let mut audit_events = vec![ServerEvent::ClientRevoked {
                             client_id: client.id.clone(),
@@ -1689,6 +1919,7 @@ impl ForegroundControlServer {
                                 .iter()
                                 .map(|session| session_closed_event(&client.id, session)),
                         );
+                        audit_events.extend(cascade_sink.events().iter().cloned());
                         Ok((format_pairing_revoke_response(client), audit_events))
                     }
                     Err(ControlError::Service(error)) => {
@@ -1777,16 +2008,20 @@ impl ForegroundControlServer {
                 }
 
                 let client_id = client_id.to_string();
-                self.control_plane
-                    .borrow_mut()
-                    .close_session(
-                        &ControlAuth::with_client_id(auth.token(), &client_id),
-                        session_id,
-                    )
-                    .map(|session| {
-                        let event = session_closed_event(&client_id, &session);
-                        (format_close_session_response(session), vec![event])
-                    })
+                // Capture peer-cascade events (stop/rejected) into a
+                // temporary sink so they're surfaced in the audit log
+                // alongside the SessionClosed event.
+                let mut cascade_sink = apprelay_core::InMemoryEventSink::default();
+                let close_result = self.control_plane.borrow_mut().close_session_with_audit(
+                    &ControlAuth::with_client_id(auth.token(), &client_id),
+                    session_id,
+                    &mut cascade_sink,
+                );
+                close_result.map(|session| {
+                    let mut audit_events = vec![session_closed_event(&client_id, &session)];
+                    audit_events.extend(cascade_sink.events().iter().cloned());
+                    (format_close_session_response(session), audit_events)
+                })
             }
             "sessions" => {
                 let Some(client_id) = args.next() else {
@@ -5737,6 +5972,365 @@ mod tests {
                 .iter()
                 .any(|message| matches!(message.envelope, SignalingEnvelope::SdpAnswer { .. })),
             "expected at least one SdpAnswer in the answerer-to-offerer queue, got: {poll:?}"
+        );
+    }
+
+    #[test]
+    fn close_session_cascades_webrtc_peer_stopped_for_active_streams() {
+        let mut control_plane = webrtc_audit_control_plane();
+        let auth = paired_auth();
+        let session = webrtc_audit_session(&mut control_plane, &auth);
+        let stream = control_plane
+            .start_video_stream(
+                &auth,
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+            )
+            .expect("start video stream");
+
+        let mut events = InMemoryEventSink::default();
+        let closed = control_plane
+            .close_session_with_audit(&auth, &session.id, &mut events)
+            .expect("close session");
+        assert_eq!(closed.id, session.id);
+
+        let recorded = events.events();
+        assert!(
+            recorded.iter().any(|event| matches!(
+                event,
+                ServerEvent::WebRtcPeerStopped {
+                    session_id,
+                    stream_id,
+                    paired_client,
+                } if session_id == &session.id
+                    && stream_id == &stream.id
+                    && paired_client == "test-client"
+            )),
+            "expected WebRtcPeerStopped cascade event, got: {recorded:?}"
+        );
+    }
+
+    #[test]
+    fn revoke_client_cascades_webrtc_peer_stopped_for_owned_streams() {
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::new(Platform::Linux, "test"),
+            two_client_server_config(),
+        );
+        let auth_1 = ControlAuth::with_client_id("correct-token", "client-1");
+        let auth_2 = ControlAuth::with_client_id("correct-token", "client-2");
+        let session_1 = control_plane
+            .create_session(
+                &auth_1,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create client-1 session");
+        let session_2 = control_plane
+            .create_session(
+                &auth_2,
+                CreateSessionRequest {
+                    application_id: "browser".to_string(),
+                    viewport: ViewportSize::new(1024, 768),
+                },
+            )
+            .expect("create client-2 session");
+        let stream_1 = control_plane
+            .start_video_stream(
+                &auth_1,
+                StartVideoStreamRequest {
+                    session_id: session_1.id.clone(),
+                },
+            )
+            .expect("start client-1 stream");
+        let stream_2 = control_plane
+            .start_video_stream(
+                &auth_2,
+                StartVideoStreamRequest {
+                    session_id: session_2.id.clone(),
+                },
+            )
+            .expect("start client-2 stream");
+
+        let mut events = InMemoryEventSink::default();
+        let (revoked, closed_sessions) = control_plane
+            .locally_revoke_client_with_audit(
+                RevokeClientRequest {
+                    client_id: "client-1".to_string(),
+                },
+                &mut events,
+            )
+            .expect("revoke client-1 with audit");
+        assert_eq!(revoked.id, "client-1");
+        assert!(closed_sessions
+            .iter()
+            .any(|session| session.id == session_1.id));
+
+        let recorded = events.events();
+        assert!(
+            recorded.iter().any(|event| matches!(
+                event,
+                ServerEvent::WebRtcPeerStopped {
+                    session_id,
+                    stream_id,
+                    paired_client,
+                } if session_id == &session_1.id
+                    && stream_id == &stream_1.id
+                    && paired_client == "client-1"
+            )),
+            "expected WebRtcPeerStopped for client-1 stream, got: {recorded:?}"
+        );
+        assert!(
+            !recorded.iter().any(|event| matches!(
+                event,
+                ServerEvent::WebRtcPeerStopped { stream_id, .. }
+                    if stream_id == &stream_2.id
+            )),
+            "client-2 stream must NOT be stopped by client-1 revoke, got: {recorded:?}"
+        );
+    }
+
+    #[test]
+    fn poll_signaling_pumps_new_encoded_frame_into_peer() {
+        let mut control_plane = webrtc_audit_control_plane();
+        let auth = paired_auth();
+        let session = webrtc_audit_session(&mut control_plane, &auth);
+        let stream = control_plane
+            .start_video_stream(
+                &auth,
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+            )
+            .expect("start video stream");
+        let sequence = control_plane
+            .advance_encoded_frame_for_test(&stream.id)
+            .expect("advance encoded frame");
+
+        let mut events = InMemoryEventSink::default();
+        control_plane
+            .poll_signaling_with_audit(
+                &auth,
+                PollSignalingRequest {
+                    session_id: session.id.clone(),
+                    direction: SignalingDirection::AnswererToOfferer,
+                    since_sequence: 0,
+                },
+                &mut events,
+            )
+            .expect("poll signaling with audit");
+
+        let recorded = events.events();
+        let outbound: Vec<_> = recorded
+            .iter()
+            .filter_map(|event| match event {
+                ServerEvent::WebRtcPeerOutboundFrame {
+                    session_id,
+                    stream_id,
+                    paired_client,
+                    sequence,
+                    keyframe,
+                    ..
+                } if session_id == &session.id
+                    && stream_id == &stream.id
+                    && paired_client == "test-client" =>
+                {
+                    Some((*sequence, *keyframe))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            outbound,
+            vec![(sequence, true)],
+            "expected exactly one WebRtcPeerOutboundFrame event with the encoder's sequence, got: {recorded:?}"
+        );
+    }
+
+    #[test]
+    fn poll_signaling_pump_dedups_unchanged_frame_sequence() {
+        let mut control_plane = webrtc_audit_control_plane();
+        let auth = paired_auth();
+        let session = webrtc_audit_session(&mut control_plane, &auth);
+        let stream = control_plane
+            .start_video_stream(
+                &auth,
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+            )
+            .expect("start video stream");
+        control_plane
+            .advance_encoded_frame_for_test(&stream.id)
+            .expect("advance encoded frame");
+
+        let mut events = InMemoryEventSink::default();
+        for _ in 0..2 {
+            control_plane
+                .poll_signaling_with_audit(
+                    &auth,
+                    PollSignalingRequest {
+                        session_id: session.id.clone(),
+                        direction: SignalingDirection::AnswererToOfferer,
+                        since_sequence: 0,
+                    },
+                    &mut events,
+                )
+                .expect("poll signaling with audit");
+        }
+
+        let outbound_count = events
+            .events()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    ServerEvent::WebRtcPeerOutboundFrame { stream_id, .. }
+                        if stream_id == &stream.id
+                )
+            })
+            .count();
+        assert_eq!(
+            outbound_count,
+            1,
+            "pump must dedup unchanged sequence; got events: {:?}",
+            events.events()
+        );
+    }
+
+    #[test]
+    fn poll_signaling_pump_emits_again_when_sequence_advances() {
+        let mut control_plane = webrtc_audit_control_plane();
+        let auth = paired_auth();
+        let session = webrtc_audit_session(&mut control_plane, &auth);
+        let stream = control_plane
+            .start_video_stream(
+                &auth,
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+            )
+            .expect("start video stream");
+        let first_sequence = control_plane
+            .advance_encoded_frame_for_test(&stream.id)
+            .expect("advance encoded frame");
+
+        let mut events = InMemoryEventSink::default();
+        control_plane
+            .poll_signaling_with_audit(
+                &auth,
+                PollSignalingRequest {
+                    session_id: session.id.clone(),
+                    direction: SignalingDirection::AnswererToOfferer,
+                    since_sequence: 0,
+                },
+                &mut events,
+            )
+            .expect("first poll");
+
+        let second_sequence = control_plane
+            .advance_encoded_frame_for_test(&stream.id)
+            .expect("advance encoded frame again");
+        assert!(
+            second_sequence > first_sequence,
+            "encoder must advance sequence: first={first_sequence}, second={second_sequence}"
+        );
+
+        control_plane
+            .poll_signaling_with_audit(
+                &auth,
+                PollSignalingRequest {
+                    session_id: session.id.clone(),
+                    direction: SignalingDirection::AnswererToOfferer,
+                    since_sequence: 0,
+                },
+                &mut events,
+            )
+            .expect("second poll");
+
+        let outbound_sequences: Vec<u64> = events
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                ServerEvent::WebRtcPeerOutboundFrame {
+                    stream_id,
+                    sequence,
+                    ..
+                } if stream_id == &stream.id => Some(*sequence),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            outbound_sequences,
+            vec![first_sequence, second_sequence],
+            "expected two outbound-frame events with distinct sequences, got: {:?}",
+            events.events()
+        );
+    }
+
+    #[cfg(feature = "webrtc-peer")]
+    #[test]
+    fn poll_signaling_pump_silently_skips_when_str0m_negotiation_pending() {
+        // With the `webrtc-peer` feature on, the server-side peer is
+        // an `Str0mWebRtcPeer` Answerer. Without a client SDP offer,
+        // its `push_encoded_frame` returns a typed
+        // `ServiceUnavailable("negotiation pending: ...")` error. The
+        // pump must silently skip without emitting either an outbound
+        // or a rejected audit event so audit logs aren't flooded with
+        // expected-idle-state noise.
+        let mut control_plane = ServerControlPlane::new(
+            ServerServices::for_current_platform(),
+            paired_server_config(),
+        );
+        let auth = paired_auth();
+        let session = control_plane
+            .create_session(
+                &auth,
+                CreateSessionRequest {
+                    application_id: "terminal".to_string(),
+                    viewport: ViewportSize::new(1280, 720),
+                },
+            )
+            .expect("create session");
+        let stream = control_plane
+            .start_video_stream(
+                &auth,
+                StartVideoStreamRequest {
+                    session_id: session.id.clone(),
+                },
+            )
+            .expect("start video stream");
+        control_plane
+            .advance_encoded_frame_for_test(&stream.id)
+            .expect("advance encoded frame");
+
+        let mut events = InMemoryEventSink::default();
+        control_plane
+            .poll_signaling_with_audit(
+                &auth,
+                PollSignalingRequest {
+                    session_id: session.id.clone(),
+                    direction: SignalingDirection::AnswererToOfferer,
+                    since_sequence: 0,
+                },
+                &mut events,
+            )
+            .expect("poll signaling with audit");
+
+        let recorded = events.events();
+        assert!(
+            !recorded
+                .iter()
+                .any(|event| matches!(event, ServerEvent::WebRtcPeerOutboundFrame { .. })),
+            "negotiation-pending peer must not produce outbound-frame events; got: {recorded:?}"
+        );
+        assert!(
+            !recorded
+                .iter()
+                .any(|event| matches!(event, ServerEvent::WebRtcPeerRejected { .. })),
+            "negotiation-pending error must be silently skipped, not surfaced as a rejection; got: {recorded:?}"
         );
     }
 }
