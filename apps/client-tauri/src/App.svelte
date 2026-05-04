@@ -29,10 +29,16 @@
   } from "./inputForwarding";
   import type { AudioStreamSession } from "./audioStreams";
   import type { VideoStreamSession } from "./videoStreams";
+  import {
+    WebRtcVideoSession,
+    type WebRtcVideoSessionState
+  } from "./webrtcVideoSession";
 
   const profilesService = new TauriConnectionProfileService();
   const permissionService = new UIApplicationPermissionService();
   let remote = new TauriRemoteService();
+  let webrtcSession: WebRtcVideoSession | null = null;
+  let webrtcState: WebRtcVideoSessionState = { kind: "idle" };
 
   let health: HealthStatus | null = null;
   let capabilities: Capability[] = [];
@@ -80,6 +86,30 @@
     loading
   });
 
+  $: if (webrtcSession) {
+    if (activeStream) {
+      webrtcSession.attach(activeStream);
+    } else {
+      webrtcSession.detach();
+    }
+  }
+
+  $: if (webrtcState.kind === "failed") {
+    streamMessage = webrtcState.error;
+  }
+
+  function rebuildWebrtcSession() {
+    if (webrtcSession) {
+      webrtcSession.detach();
+    }
+    webrtcSession = new WebRtcVideoSession({
+      services: remote,
+      onStateChange: (state) => {
+        webrtcState = state;
+      }
+    });
+  }
+
   onMount(async () => {
     try {
       loading = true;
@@ -88,6 +118,7 @@
       selectedProfile = profiles[0] ?? null;
 
       remote = new TauriRemoteService(selectedProfile?.authToken, selectedProfile?.id);
+      rebuildWebrtcSession();
       health = await remote.health();
       capabilities = await remote.capabilities();
       apps = await remote.applications();
@@ -596,7 +627,11 @@
   {/if}
 
   {#if activeSession}
-    <VideoRenderer stream={activeStream} requestedViewport={requestedViewport} />
+    <VideoRenderer
+      stream={activeStream}
+      requestedViewport={requestedViewport}
+      mediaStream={webrtcState.kind === "connected" ? webrtcState.mediaStream : null}
+    />
   {/if}
 
   {#if sessionMessage}
