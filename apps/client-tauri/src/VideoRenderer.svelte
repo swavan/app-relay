@@ -5,8 +5,14 @@
 
   export let stream: VideoStreamSession | null = null;
   export let requestedViewport: ViewportSize | null = null;
+  export let mediaStream: MediaStream | null = null;
+
+  let videoEl: HTMLVideoElement | null = null;
 
   $: renderer = buildVideoRendererView(stream, requestedViewport);
+  $: if (videoEl && mediaStream) {
+    videoEl.srcObject = mediaStream;
+  }
 </script>
 
 <section class={`video-renderer ${renderer.state}`} aria-label="Video stream renderer">
@@ -17,7 +23,17 @@
     </div>
 
     <div class="viewport-center">
-      {#if renderer.hasEncodedFrame}
+      {#if mediaStream}
+        <video
+          class="webrtc-video"
+          autoplay
+          muted
+          playsinline
+          bind:this={videoEl}
+        >
+          <track kind="captions" />
+        </video>
+      {:else if renderer.hasEncodedFrame}
         <strong>{renderer.windowTitle}</strong>
         <span>{renderer.lastFrameLabel}</span>
       {:else}
@@ -180,6 +196,12 @@
   .viewport-center span {
     color: #93c5fd;
     overflow-wrap: anywhere;
+  }
+
+  .webrtc-video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
   }
 
   .metadata {

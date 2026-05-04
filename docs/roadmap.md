@@ -839,11 +839,33 @@ unaffected):
     green. No new deps. No Tauri command/capability/CSP changes (server
     plumbing already exposes everything via `services.ts`). UI binding
     and `<video>` rendering land in E.1.
-  - Phase E.1 (pending): wire `WebRtcClient` into `App.svelte` /
-    `VideoRenderer.svelte` so an active session renders the remote
-    `MediaStream` via a `<video srcObject>` element. Update Tauri
-    capability/CSP files only if WKWebView's defaults block the
-    loopback WebRTC datagrams or `MediaStream` autoplay.
+  - Phase E.1 (complete): wired `WebRtcClient` into the Svelte UI
+    via a small `WebRtcVideoSession` lifecycle helper
+    (`apps/client-tauri/src/webrtcVideoSession.ts`). The helper owns
+    a single in-flight `WebRtcClient`, exposes a typed state union
+    (`idle` / `connecting` / `connected` / `failed`) through an
+    `onStateChange` callback, and discards late `MediaStream`
+    arrivals when `detach()` was called between `connect()` and the
+    promise resolving. `App.svelte` constructs the helper after the
+    profile-aware `TauriRemoteService` is set up; a single reactive
+    block calls `attach(activeStream)` when a video stream is active
+    and `detach()` when it isn't. `VideoRenderer.svelte` accepts a
+    new `mediaStream: MediaStream | null` prop and, when non-null,
+    swaps the metadata-placeholder viewport for an
+    `autoplay muted playsinline` `<video>` element whose
+    `srcObject` is bound to the live MediaStream; the metadata
+    sidebar stays alongside, unchanged. 6 new vitest cases in
+    `webrtcVideoSession.test.ts` cover the connect/disconnect dance,
+    no-op re-attach for the same stream id, swap-on-different-stream,
+    idempotent detach, late-result discard, and rejection-to-failed
+    transitions. `npm run test:ci` is 14 files / 149 tests green;
+    `npm run build` produces a clean ~77 KB bundle. No new deps,
+    no Tauri command changes, no Tauri capability/CSP changes
+    (loopback WebRTC works through WKWebView's defaults; the
+    project sets no CSP). `WebRtcClient` and its services-mediated
+    signaling envelope flow are now end-to-end live in the Tauri
+    desktop client.
+- Phase E complete. Real-media implementation roadmap remaining:
 - Phase F — Mac-to-Mac end-to-end demo (pending).
 
 ## Release Rules
