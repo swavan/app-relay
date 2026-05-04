@@ -734,12 +734,41 @@ unaffected):
     (D.1.1.1), session-close cascading peer.stop is not yet wired
     (D.1.1.1), and `WebRtcPeerOutboundFrame` is intentionally not added
     until its emit site exists.
-  - Phase D.1.1.1 (pending): wire the encoded-frame pipeline so frames
-    produced by the capture + encoder bridge flow through
-    `peer.push_encoded_frame`, and add the matching
-    `WebRtcPeerOutboundFrame` `ServerEvent` variant. Cascade `peer.stop`
-    when `close_session` / `close_sessions_owned_by` tears down active
-    streams.
+  - Phase D.1.1.1 (complete): wired the encoded-frame pipeline through
+    the peer and cascaded `peer.stop` on session close. `ServerEvent`
+    gains a fifth `WebRtcPeerOutboundFrame { session_id, stream_id,
+    paired_client, sequence, byte_length, keyframe }` variant (no raw
+    H.264 bytes — only structural metadata) with a matching
+    `format_event` arm. `ServerControlPlane` now carries a per-stream
+    `peer_pushed_sequences` dedup map and a `pump_active_streams_for_client`
+    helper that the new `poll_signaling_inner` calls before recording
+    its `SignalingPolled` event; the pump pushes
+    `stream.encoding.output.last_frame` into `peer.push_encoded_frame`,
+    advances the dedup pointer, and emits `WebRtcPeerOutboundFrame` on
+    success. Pre-negotiation `ServiceUnavailable` errors from the str0m
+    peer (message contains `"negotiation"`) are silently skipped so
+    every poll does not produce noise; other typed errors emit
+    `WebRtcPeerRejected`. `close_session` becomes a thin
+    `NullEventSink`-backed wrapper around a new
+    `close_session_with_audit(... &mut dyn EventSink)` so the foreground
+    `close-session` handler can capture the cascade events into its
+    audit log; `close_sessions_owned_by` (used by `revoke_client`)
+    similarly takes an `EventSink`. Both cascades snapshot the active
+    `(session_id, stream_id)` pairs **before** the underlying service
+    tears the streams down, then call `peer.stop` for each, emitting
+    `WebRtcPeerStopped` per stream and removing the matching dedup
+    pointer; peer errors during cascade emit `WebRtcPeerRejected` and
+    do not short-circuit. Default builds (in-memory peer) and
+    `webrtc-peer`-feature builds (str0m peer) both pass; a
+    feature-gated test asserts the str0m peer's
+    pre-negotiation pump is silently swallowed. Tauri shell signature
+    is preserved (`close_session(auth, session_id)`) so the shell stays
+    one-line thin and unchanged.
+  - Phase D.1.1.2 (deferred / optional): treat the pump as a true
+    "pump everywhere" by also running it from `submit_signaling` /
+    `negotiate_video_stream` / a foreground tick rather than only on
+    `poll_signaling`. Not required to unblock D.1.2; skip until the
+    UDP transport surfaces a real frame-rate gap.
   - Phase D.1.2 (pending): UDP socket runtime that actually transmits the
     `RtpPacketBatch`es `take_outbound_rtp` produces and feeds inbound
     datagrams back into `Rtc::handle_input(Input::Receive(...))`.

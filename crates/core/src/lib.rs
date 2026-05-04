@@ -1543,6 +1543,17 @@ pub enum ServerEvent {
         paired_client: String,
         reason: String,
     },
+    /// The server-side WebRTC peer accepted an encoded video frame for
+    /// outbound delivery. Carries only structural metadata; the H.264
+    /// payload bytes are not included.
+    WebRtcPeerOutboundFrame {
+        session_id: String,
+        stream_id: String,
+        paired_client: String,
+        sequence: u64,
+        byte_length: u32,
+        keyframe: bool,
+    },
     ConfigLoaded {
         path: PathBuf,
     },
@@ -1944,6 +1955,21 @@ fn format_event(event: &ServerEvent) -> String {
                 event_field_value(session_id),
                 event_field_value(paired_client),
                 event_field_value(reason),
+            )
+        }
+        ServerEvent::WebRtcPeerOutboundFrame {
+            session_id,
+            stream_id,
+            paired_client,
+            sequence,
+            byte_length,
+            keyframe,
+        } => {
+            format!(
+                "event=webrtc_peer_outbound_frame session_id={} stream_id={} paired_client={} sequence={sequence} byte_length={byte_length} keyframe={keyframe}",
+                event_field_value(session_id),
+                event_field_value(stream_id),
+                event_field_value(paired_client),
             )
         }
         ServerEvent::ConfigLoaded { path } => {
